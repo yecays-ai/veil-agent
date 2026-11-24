@@ -214,14 +214,16 @@ def _known_resident(private, port):
             and _pid_alive(state.get('server_pid')) and _lock_held(private / 'ombre.lock'))
 
 
-def _environment(root, cfg, vault, private, config_path, token, port, api_key_overrides=None):
+def _environment(root, cfg, vault, private, config_path, token, port, api_key_overrides=None,
+                 env_root=None):
     from dotenv import dotenv_values
 
     api_key_overrides = api_key_overrides or {}
     if {'OMBRE_EMBED_API_KEY', 'OMBRE_COMPRESS_API_KEY'} <= api_key_overrides.keys():
         raw = {}
     else:
-        raw = dotenv_values(Path(root) / '.env', interpolate=False, encoding='utf-8-sig')
+        raw = dotenv_values(Path(env_root if env_root is not None else root) / '.env',
+                            interpolate=False, encoding='utf-8-sig')
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE'}}
     temp = private / 'tmp'
@@ -391,7 +393,7 @@ class ResidentProcess:
 
 
 def start_or_connect(root, cfg, *, data_root=None, api_key_overrides=None,
-                     startup_wait=STARTUP_WAIT):
+                     env_root=None, startup_wait=STARTUP_WAIT):
     """Return (port, token, owned_process), starting Ombre only when needed."""
     root = Path(root).resolve()
     vault = (Path(data_root) if data_root is not None else root / 'data') / cfg.id / 'memory'
@@ -428,7 +430,8 @@ def start_or_connect(root, cfg, *, data_root=None, api_key_overrides=None,
         token = secrets.token_urlsafe(48)
         token_path.write_text(token, encoding='ascii')
     start_args = {'root': root, 'cfg': cfg, 'data_root': data_root,
-                  'api_key_overrides': api_key_overrides, 'startup_wait': 30}
+                  'api_key_overrides': api_key_overrides, 'env_root': env_root,
+                  'startup_wait': 30}
     if _health(port):
         if not _known_resident(private, port):
             raise ResidentError('port_identity')
@@ -445,7 +448,7 @@ def start_or_connect(root, cfg, *, data_root=None, api_key_overrides=None,
     config_temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
     os.replace(config_temp, config_path)
     env = _environment(root, cfg, vault, private, config_path, token, port,
-                       api_key_overrides=api_key_overrides)
+                       api_key_overrides=api_key_overrides, env_root=env_root)
 
     owned = None
     log_path = private / 'process.log'

@@ -358,10 +358,11 @@ def ombre_model_tokens(content, *, worst_case=False):
 
 
 @contextmanager
-def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
+def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None, env_root=None):
     from dotenv import dotenv_values
     from ombre_resident import mark_ready, start_or_connect
     root = Path(root)
+    env_root = Path(env_root) if env_root is not None else root
     resident = None
     backend = None
     try:
@@ -378,7 +379,7 @@ def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
         needs_local_model = (ombre_model_on(cfg)
                              and 'OMBRE_COMPRESS_API_KEY' not in api_key_overrides)
         if needs_local_embed or needs_local_model:
-            local_keys = dotenv_values(root / '.env', interpolate=False,
+            local_keys = dotenv_values(env_root / '.env', interpolate=False,
                                        encoding='utf-8-sig')
         if settings.get('embedding_enabled', True):
             key = api_key_overrides.get('OMBRE_EMBED_API_KEY',
@@ -397,7 +398,8 @@ def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
             if not model_key or not model_key.strip():
                 raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
         port, token, resident = start_or_connect(
-            root, cfg, data_root=data_root, api_key_overrides=api_key_overrides)
+            root, cfg, data_root=data_root, api_key_overrides=api_key_overrides,
+            env_root=env_root)
     except UserError:
         raise
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
@@ -1341,7 +1343,9 @@ class Memory:
         if getattr(self, '_embedder', None) is None:
             from dotenv import dotenv_values
             from recall_relevance import QueryEmbedder
-            key = dotenv_values(Path(__file__).resolve().parent / '.env', interpolate=False,
+            from runtime_env import env_file
+            # P2-B: read this instance's config root, never the production .env beside the code.
+            key = dotenv_values(env_file(getattr(self, 'cfg', None)), interpolate=False,
                                 encoding='utf-8-sig').get('EMBED_API_KEY')
             if not key or not key.strip():
                 raise UserError('missing EMBED_API_KEY')

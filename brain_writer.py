@@ -40,6 +40,21 @@ def ensure_schema(connection):
     connection.commit()
 
 
+def refresh_digest(connection):
+    """Keep the stored whole-db digest current after an authority write.
+
+    check_db()/the cutover snapshot compare meta.digest with the actual rows; a live authority
+    database must not look "corrupt" merely because a memory was saved after the import.
+    """
+    try:
+        from veil_brain import canonical_digest
+        connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('digest', ?)",
+                           (canonical_digest(connection),))
+        connection.commit()
+    except Exception:
+        pass
+
+
 def new_id(connection):
     for _ in range(20):
         memory_id = uuid.uuid4().hex[:12]
@@ -117,6 +132,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
                 (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)), now(), _sha(body)))
         _journal(connection, 'create', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -164,6 +180,7 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
             connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
         _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -203,6 +220,7 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
                                                    'archived': archived, 'deleted': deleted,
                                                    'reason_hash': _sha(reason)[:16]}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -210,10 +228,12 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
 
 
 def _sidecar(connection, memory_id, kind, raw=None):
+    payload = {'memory_id': memory_id, 'kind': kind}
+    if isinstance(raw, dict):
+        payload.update(raw)
     connection.execute('INSERT INTO sidecar_events(memory_id,kind,time,raw_json) VALUES(?,?,?,?)',
                        (memory_id, kind, now(),
-                        json.dumps(raw or {'memory_id': memory_id, 'kind': kind},
-                                   ensure_ascii=False, sort_keys=True)))
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True)))
 
 
 def hard_delete(connection, memory_id, reason=''):
@@ -258,6 +278,7 @@ def hard_delete(connection, memory_id, reason=''):
                            'VALUES(?,?,?)', (memory_id, now(), _sha(reason)[:16]))
         _journal(connection, 'hard_delete', memory_id, {'reason_hash': _sha(reason)[:16]}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -283,11 +304,16 @@ def merge_into(connection, source_id, target_id, reason=''):
     try:
         connection.execute('BEGIN IMMEDIATE')
         connection.execute("UPDATE memories SET bucket='archive',type='archived' WHERE id=?", (source_id,))
+        connection.execute(
+            "INSERT INTO sidecar_state(memory_id,locked,links_json,sources_json,merged_into) "
+            "VALUES(?,0,'[]','[]',?) ON CONFLICT(memory_id) DO UPDATE SET merged_into=excluded.merged_into",
+            (source_id, target_id))
         _sidecar(connection, source_id, 'merged', raw={'memory_id': source_id, 'kind': 'merged',
                                                        'merged_into': target_id,
                                                        'reason_hash': _sha(reason)[:16]})
         _journal(connection, 'merge', source_id, {'target': target_id}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -313,6 +339,8 @@ def retry_pending_vectors(connection, embedder):
             saved += 1
         except Exception:
             continue
+    if saved:
+        refresh_digest(connection)
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}
 
 
@@ -345,3 +373,4 @@ def link(connection, memory_id, target_id):
     _sidecar(connection, memory_id, 'link', raw={'memory_id': memory_id, 'kind': 'link',
                                                 'to': target_id})
     connection.commit()
+    refresh_digest(connection)

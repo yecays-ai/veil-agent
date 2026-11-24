@@ -72,6 +72,27 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertEqual(row[0], 'saved through authority')
         self.assertEqual(row[1], 'ready')
 
+    def test_archive_page_reads_brain_not_stale_vault(self):
+        """P2-B: after the switch the vault archive is an old Ombre copy; the page must read Brain."""
+        from memory_native import NativeMemoryTools
+        connection = sqlite3.connect(str(self.db))
+        try:
+            created = brain_writer.create_memory(
+                connection, {'body': 'archived through brain', 'title': 'Archived Brain',
+                             'bucket': 'archive', 'type': 'archived'}, embedder=None)
+        finally:
+            connection.close()
+        stale = self.store.root / 'fake' / 'memory' / 'archive'
+        stale.mkdir(parents=True)
+        (stale / 'old.md').write_text('---\nid: stale\n---\nstale ombre row\n', encoding='utf-8')
+        self.memory.backend = SimpleNamespace()
+        rows = NativeMemoryTools(self.memory).panel_archived()
+        ids = [row['memory_id'] for row in rows]
+        self.assertIn(created['memory_id'], ids)
+        self.assertNotIn('stale', ids)
+        self.assertEqual(next(row for row in rows if row['memory_id'] == created['memory_id'])['body'],
+                         'archived through brain')
+
 
 if __name__ == '__main__':
     unittest.main()

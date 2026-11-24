@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 from brain_lock import write_lock
@@ -23,15 +24,28 @@ class BrainAuthority:
             raise FileNotFoundError(str(self.db_path))
         self.mutex = threading.Lock()
         self.freeze_path = Path(store.root) / cfg.id / 'brain-write-freeze'
+        self._last_pending_retry = 0.0
+        self._pending_retry_seconds = 60.0
 
     def _connect(self):
         connection = sqlite3.connect(str(self.db_path), timeout=30)
         brain_writer.ensure_schema(connection)
         return connection
 
+    @staticmethod
+    def _embed_callable(embedder):
+        """The writer takes a plain function; retrieval takes an object with .embed().
+
+        Keep the caller's object intact here and convert only where the callee needs it. Converting
+        once in call() used to hand a bound function to brain_retrieval, which calls embedder.embed()
+        and silently fell back to Ombre (P2-B active recall path).
+        """
+        if embedder is None:
+            return None
+        method = getattr(embedder, 'embed', None)
+        return method if callable(method) else embedder
+
     def call(self, name, args, embedder=None):
-        if embedder is not None and hasattr(embedder, 'embed'):
-            embedder = embedder.embed
         if name in ('hold', 'trace'):
             with write_lock(self.store, self.cfg.id):
                 if self.freeze_path.exists():
@@ -47,26 +61,48 @@ class BrainAuthority:
         raise ValueError('unsupported authority tool: %s' % name)
 
     def _write(self, name, args, embedder):
+        embed = self._embed_callable(embedder)
         with self.mutex:
             connection = self._connect()
             try:
                 if name == 'hold':
-                    return self._hold(connection, args, embedder)
-                if name == 'trace':
-                    return self._trace(connection, args, embedder)
-                raise ValueError('unsupported authority tool: %s' % name)
+                    result = self._hold(connection, args, embed)
+                elif name == 'trace':
+                    result = self._trace(connection, args, embed)
+                else:
+                    raise ValueError('unsupported authority tool: %s' % name)
             finally:
                 connection.close()
+        if embed is not None:
+            # P2-A: a save whose embedding failed is queued as vector_state='pending'. Retry it
+            # when an embedder is available again instead of leaving recall blind forever.
+            self._retry_pending(embed)
+        return result
+
+    def _retry_pending(self, embed):
+        now = time.monotonic()
+        if now - self._last_pending_retry < self._pending_retry_seconds:
+            return
+        self._last_pending_retry = now
+        connection = self._connect()
+        try:
+            brain_writer.retry_pending_vectors(connection, embed)
+        except Exception:
+            pass
+        finally:
+            connection.close()
 
     def _hold(self, connection, args, embedder):
         content = args.get('content') or ''
         target_id = args.get('target_id')
+        status = 'saved'
         if not isinstance(content, str) or not content.strip():
             raise ValueError('empty memory content')
         if target_id:
             result = brain_writer.update_memory(
                 connection, target_id, {'body': content, 'title': args.get('title')},
                 embedder=embedder, operation_reason='hold target_id')
+            status = result['status']
             memory_id = result['memory_id']
             for merged in args.get('merge_ids') or []:
                 if isinstance(merged, str) and merged != memory_id:
@@ -83,17 +119,29 @@ class BrainAuthority:
                       'domain': [],
                       'tags': []}
             result = brain_writer.create_memory(connection, record, embedder=embedder)
+            status = result['status']
             memory_id = result['memory_id']
         link_to = args.get('link_to')
         if isinstance(link_to, str) and link_to and link_to != memory_id:
             brain_writer.link(connection, memory_id, link_to)
         prefix = '新建' if not target_id else '合并'
-        return '%s→%s' % (prefix, memory_id)
+        return '%s→%s%s' % (prefix, memory_id, self._pending_notice(status))
+
+    @staticmethod
+    def _pending_notice(status):
+        """P2-A three-state feedback: never call a memory fully saved when its index is pending."""
+        return '（正文已保存，检索索引待重试）' if status == 'saved_index_pending' else ''
 
     def _trace(self, connection, args, embedder):
         memory_id = args.get('bucket_id')
         if not isinstance(memory_id, str) or not memory_id:
             raise ValueError('missing bucket_id')
+        status = 'saved'
+        merge_into = args.get('merge_into')
+        if isinstance(merge_into, str) and merge_into:
+            # P2-A merge: archive the duplicate copy, never treat it as a normal delete.
+            brain_writer.merge_into(connection, memory_id, merge_into, 'tool merge')
+            return '已归档→%s' % memory_id
         if args.get('delete'):
             brain_writer.set_state(connection, memory_id, deleted=True,
                                    reason=args.get('delete_reason') or '')
@@ -111,16 +159,17 @@ class BrainAuthority:
         if isinstance(args.get('title'), str):
             changes['title'] = args['title']
         if changes:
-            brain_writer.update_memory(connection, memory_id, changes, embedder=embedder,
-                                       operation_reason=args.get('edit_reason') or 'trace',
-                                       why_remembered=args.get('why_remembered') or '')
+            result = brain_writer.update_memory(connection, memory_id, changes, embedder=embedder,
+                                                operation_reason=args.get('edit_reason') or 'trace',
+                                                why_remembered=args.get('why_remembered') or '')
+            status = result['status']
         if args.get('dont_surface') in (1, True):
             brain_writer.set_state(connection, memory_id, hidden=True)
         if args.get('dont_surface') in (0, False) and 'dont_surface' in args:
             brain_writer.set_state(connection, memory_id, hidden=False)
         if args.get('restore') in (1, True):
             brain_writer.set_state(connection, memory_id, archived=False, hidden=False, deleted=False)
-        return '已更新→%s' % memory_id
+        return '已更新→%s%s' % (memory_id, self._pending_notice(status))
 
 
     def breath(self):

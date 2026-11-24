@@ -517,6 +517,23 @@ class NativeMemoryTools:
 
     def panel_archived(self):
         """Archived memories (merged copies and ones Ombre let fade), never ones Lan deleted."""
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            # P2-B: with Brain authoritative the vault archive is a stale Ombre copy. The list and
+            # the unarchive check must come from brain.db or the page shows old rows and refuses
+            # memories archived after the switch.
+            from brain_read import BrainRead
+            with BrainRead(self.memory.brain_authority.db_path) as reader:
+                rows = reader.archived(limit=10000)
+                titles = {into: reader.title(into) or into
+                          for into in {row['merged_into'] for row in rows} if into}
+            out = []
+            for row in rows:
+                into = row['merged_into']
+                out.append({'memory_id': row['memory_id'], 'title': row['title'],
+                            'created': row['created'] or '', 'body': (row['body'] or '').strip(),
+                            'merged_into': into,
+                            'merged_into_title': titles.get(into, '')})
+            return out
         vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         archive = vault_path / 'archive'
         try:
@@ -955,7 +972,12 @@ class NativeMemoryTools:
     def process_pending_deletions(self, approval):
         path = f'{self.memory.cfg.id}/delete-requests.jsonl'
         latest = {}
-        for row in self.memory.store.read(path):
+        try:
+            rows = self.memory.store.read(path)
+        except Exception:
+            # P2-B failure path: a temporarily unavailable Brain ledger must not stop the chat.
+            return []
+        for row in rows:
             latest[row.get('request_id')] = row
         notes = []
         for row in latest.values():
@@ -1217,6 +1239,9 @@ class NativeMemoryTools:
                 head = ('Continued the same experience' if saved.get('updated') else 'New experience')
                 note = ('' if saved.get('story_source') != 'composed'
                         else ' The story is the full stage text for now; the narrative is tidied on a later save.')
+                if saved.get('index_pending'):
+                    # P2-A three-state feedback must survive the event layer too.
+                    note += ' The text is saved, but its search index is pending and will be retried.'
                 return (head + ': 《' + str(saved['title']) + '》 (event ' + str(saved['event_id'])
                         + '). Later parts of the same thing update this one; use memory_timeline to read it '
                           'from the start.' + note), '成功', f"故事：{summary}"
@@ -1374,6 +1399,18 @@ class NativeMemoryTools:
 
     def _archive(self, memory_id, into, reason):
         """Move a memory to Ombre's archive (not deleted: Lan restores it on the memory page)."""
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            try:
+                self.memory.call('trace', {'bucket_id': memory_id, 'merge_into': into})
+            except Exception:
+                return False
+            self.memory.bucket_details_cache.pop(memory_id, None)
+            self.search_results.pop(memory_id, None)
+            try:
+                self.sidecar.merged_into(memory_id, into)
+            except Exception:
+                pass
+            return True
         old = self.memory.raw_content_for(memory_id)
         if old is None or not self._save_version(memory_id, {'archived': True}, old, operation_reason=reason):
             return False
