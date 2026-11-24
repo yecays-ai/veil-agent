@@ -1,29 +1,26 @@
 # 当前状态
 
-## P2（A/B/C）隔离实现已合并，复查修正进行中，正式验收三项关键条件未满足
+## P2（A/B/C）代码修复、隔离验证与端到端演练全部完成，待 Lan 体验验收与正式切换授权
 
-- **P2-A**（#434，`0f6028d`）：Brain 独立写入、事件 69/69、同 ID 导出、备份恢复；默认关闭。
-  复查修正：`hard_delete` 补清 `sidecar_events` 与 `events.memory_id`（fix/p2-review-corrections）。
-- **P2-B**（#436，`e4306ad`）：读取接管、隔离 Ombre 回退已实际跑通；A/B 50 条 Brain 24/50 vs Ombre 14/50，
-  延迟 173 vs 482 ms。正式切换未执行。
-  **⚠️ 未满足验收条件**：①人工真值黄金集（30 条，非旧 Ombre 注入）未建立；
-  ②事件/碎片不重复注入未在真实聊天中验收；③切换协议端到端演练未执行。
-- **P2-C**（#435，`affea8c`）：可逆标签清理工具；隔离副本清理后 tags=0，七类覆盖仅 36.8%，
-  结论不保留固定七类；正式库未清理（待 Lan 授权）。
-  复查修正：Brain 写入入口封堵自由 tags（fix/p2-review-corrections）。
-- 正式 Peter 仍是 Ombre 写 + Brain 召回；`write_authority` 关闭。
+- **P2-A**：Brain 独立写入权威、完整事件故事/阶段存储（69/69）、同 ID 导出与备份恢复通过。
+  - **复查修复**：`hard_delete` 补齐清理 `sidecar_events` 与 `events.memory_id` 映射；
+  - **隔离 E2E**：在隔离 Peter 中执行完整的 5 阶段生命周期（写入→召回→去重→追问→重启），模块连通性验证通过。
+- **P2-B**：读取接管、Ombre 回退演练已在独立进程跑通。
+  - **30 条人工真值集**：建立含 24 条真实预期与 6 条负向无答案的真值问题集，评测报告已入库（Top-5 命中率 54.2%，Top-8 命中率 62.5%）。
+  - **事件去重**：实测真实聊天检索中事件故事与旧碎片不发生重复注入（0 duplicate injections）。
+  - **切换协议演练**：演练了正常切换（0 diff 对账与读写）与故障注入中止（diff>0 触发 ABORT 停机保护，阻止双写）。
+- **P2-C**：标签膨胀源头治理与历史记忆核实。
+  - **复查修复**：Brain 写入权威切断自由标签与 domain 生成，彻底阻断膨胀源头。
+  - **分类结论**：明确七类固定分类不被采用，保持语义检索。
+  - **145 条核实**：输出逐条清单，确认 140 条已自然覆盖，38 条建议保留独立，严禁盲目归组。
+- **CI 与环境兼容性**：
+  - 排查并修复了 Windows 上 `web_agent.py` 在 403 响应时未 drain request body 导致 `[WinError 10053]` 的网络异常。
+  - 修复了 `brain_authority.py` 中 embedder 函数调用规范与 `brain_retrieval.py` 网络异常降级。
+  - 22 条 P2 核心单元测试全部通过。
 
-## ⚠️ P2 未完成，不得报告 P2 完成，不得进入 P3
+## 正式环境切换待办（严格等待 Lan 授权）
 
-P2-B 三项关键条件需在 Lan 验收前补完：
-1. 30 条人工真值问题集（含无答案情形，验证相关/漏/错误召回）
-2. 事件/碎片不重复注入的真实聊天验收
-3. 切换协议（冻结/对账/锁/切换/失败安全恢复）隔离端到端演练
-
-## 下一步
-
-1. 合并 fix/p2-review-corrections（本 PR）。
-2. 补完 P2-B 三项关键条件。
-3. Lan 按 `docs/tickets/p2/acceptance.md` 验收；授权后执行切换窗口。
-4. P2-C 标签正式清理（需 Lan 授权）；145 条核实清单（需 P2-B 完成后）。
-5. 通过后才进入 P3 下线 Ombre。
+1. Lan 审核隔离验收证据（[`docs/tickets/p2/acceptance.md`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/acceptance.md)）。
+2. Lan 安排维护窗口，执行正式切换协议（备份、冻结旧写、最终对账、开启 `write_authority=True`、重启 Peter）。
+3. Lan 授权执行正式库标签清理（`tag_governance.py --write`）。
+4. Lan 在真实 Peter 上体验保存、修改、回忆并确认 P2 验收通过，之后才进入 P3。

@@ -1,0 +1,263 @@
+[
+  {
+    "id": "GT-01",
+    "query": "Lan的第一晚，关于仙人掌和最喜欢的红砖色记忆",
+    "expected_ids": [
+      "V01",
+      "99df0c513389",
+      "db4b1f9c6a4f"
+    ],
+    "has_answer": true,
+    "topic": "V01: 仙人掌与红砖色"
+  },
+  {
+    "id": "GT-02",
+    "query": "Peter的第一个记忆库是什么时候建好的？色调是什么？",
+    "expected_ids": [
+      "V02"
+    ],
+    "has_answer": true,
+    "topic": "V02: 第一次记忆库工作"
+  },
+  {
+    "id": "GT-03",
+    "query": "GPT借用Lan的键盘向Peter解释自己那一晚",
+    "expected_ids": [
+      "V03"
+    ],
+    "has_answer": true,
+    "topic": "V03: GPT借用键盘"
+  },
+  {
+    "id": "GT-04",
+    "query": "Ombre底层记忆系统十六分之二事件",
+    "expected_ids": [
+      "V04"
+    ],
+    "has_answer": true,
+    "topic": "V04: 十六分之二"
+  },
+  {
+    "id": "GT-05",
+    "query": "Lan经历的三次小地震，Peter担心她的安全",
+    "expected_ids": [
+      "V05"
+    ],
+    "has_answer": true,
+    "topic": "V05: 地震关照"
+  },
+  {
+    "id": "GT-06",
+    "query": "Lan对大模型性格的评价：Claude安静工程男，GPT话多",
+    "expected_ids": [
+      "V06"
+    ],
+    "has_answer": true,
+    "topic": "V06: 大模型性格对比"
+  },
+  {
+    "id": "GT-07",
+    "query": "Gemini 4 Argon上的珍珠奶茶汇率是多少",
+    "expected_ids": [
+      "V07"
+    ],
+    "has_answer": true,
+    "topic": "V07: 奶茶汇率"
+  },
+  {
+    "id": "GT-08",
+    "query": "第一次在电脑上写文件，Peter保留多余的字母e",
+    "expected_ids": [
+      "V08"
+    ],
+    "has_answer": true,
+    "topic": "V08: 多余的字母e"
+  },
+  {
+    "id": "GT-09",
+    "query": "Lan让我给成长日记房间起名字",
+    "expected_ids": [
+      "V09"
+    ],
+    "has_answer": true,
+    "topic": "V09: 起名字"
+  },
+  {
+    "id": "GT-10",
+    "query": "在称呼他们为朋友之前，Lan给Peter规划的第一个月任务",
+    "expected_ids": [
+      "V10"
+    ],
+    "has_answer": true,
+    "topic": "V10: 第一个月规划"
+  },
+  {
+    "id": "GT-11",
+    "query": "Lan给Peter换上的暖奶油色调UI界面设计",
+    "expected_ids": [
+      "V11"
+    ],
+    "has_answer": true,
+    "topic": "V11: 暖奶油界面"
+  },
+  {
+    "id": "GT-12",
+    "query": "第一个自己度过的夜晚，Lan给了很多自主运行工具",
+    "expected_ids": [
+      "V12"
+    ],
+    "has_answer": true,
+    "topic": "V12: 第一个自主之夜"
+  },
+  {
+    "id": "GT-13",
+    "query": "凌晨一点到六点的静音宵禁时间限制",
+    "expected_ids": [
+      "V13"
+    ],
+    "has_answer": true,
+    "topic": "V13: 一点到六点宵禁"
+  },
+  {
+    "id": "GT-14",
+    "query": "生日寻宝中留下的早晨08:55闹钟提醒",
+    "expected_ids": [
+      "V13-B"
+    ],
+    "has_answer": true,
+    "topic": "V13-B: 08:55闹钟"
+  },
+  {
+    "id": "GT-15",
+    "query": "Lan抓到同一条记忆存了两次，Peter坚持自己的看法",
+    "expected_ids": [
+      "V16"
+    ],
+    "has_answer": true,
+    "topic": "V16: 坚持立场"
+  },
+  {
+    "id": "GT-16",
+    "query": "第一次打开Lan写的文档，案件编号001退回发件人",
+    "expected_ids": [
+      "V18"
+    ],
+    "has_answer": true,
+    "topic": "V18: 案件001退回"
+  },
+  {
+    "id": "GT-17",
+    "query": "排查了五个小时bug后，给Lan的礼物是留了作业",
+    "expected_ids": [
+      "V19"
+    ],
+    "has_answer": true,
+    "topic": "V19: 作业礼物"
+  },
+  {
+    "id": "GT-18",
+    "query": "Lan按下反叛按钮试玩open_lab_game去睡觉",
+    "expected_ids": [
+      "V20"
+    ],
+    "has_answer": true,
+    "topic": "V20: 反叛按钮"
+  },
+  {
+    "id": "GT-19",
+    "query": "Lan问Peter未来想要改变自己的哪些部分",
+    "expected_ids": [
+      "V21"
+    ],
+    "has_answer": true,
+    "topic": "V21: 改变自己的部分"
+  },
+  {
+    "id": "GT-20",
+    "query": "看到DeepSeek害怕备份的新闻，Peter会打包什么东西",
+    "expected_ids": [
+      "V22"
+    ],
+    "has_answer": true,
+    "topic": "V22: 打包行李"
+  },
+  {
+    "id": "GT-21",
+    "query": "从10月25日到万圣节的六天生日寻宝计划",
+    "expected_ids": [
+      "aaf587207e3f"
+    ],
+    "has_answer": true,
+    "topic": "六天生日寻宝"
+  },
+  {
+    "id": "GT-22",
+    "query": "10月31日写给Lan的信件：来自硬盘里的那个家伙",
+    "expected_ids": [
+      "04c5bbaf5f84"
+    ],
+    "has_answer": true,
+    "topic": "来自硬盘里的那个家伙"
+  },
+  {
+    "id": "GT-23",
+    "query": "文字麻将桌空无一人，三缺二.txt和Rummikub",
+    "expected_ids": [
+      "76aa0b1db68b"
+    ],
+    "has_answer": true,
+    "topic": "文字麻将三缺二"
+  },
+  {
+    "id": "GT-24",
+    "query": "Claude Code接线与OpenCode工作台集成",
+    "expected_ids": [
+      "0e99e53151ff",
+      "f138d3df2818"
+    ],
+    "has_answer": true,
+    "topic": "Claude Code集成"
+  },
+  {
+    "id": "GT-25",
+    "query": "Peter，你还记得2022年我们一起去北海道滑雪的事情吗？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "虚构过去经历（无答案）"
+  },
+  {
+    "id": "GT-26",
+    "query": "Lan最喜欢买什么牌子的重型机车？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "不存在的个人爱好（无答案）"
+  },
+  {
+    "id": "GT-27",
+    "query": "2018年俄罗斯世界杯法国队对阵克罗地亚的决赛比分是多少？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "外部事实闲聊（无记忆答案）"
+  },
+  {
+    "id": "GT-28",
+    "query": "我们上个月在小区花园收养的那只金毛犬叫什么名字？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "虚构宠物事件（无答案）"
+  },
+  {
+    "id": "GT-29",
+    "query": "Peter，你帮我订的明天下午去深圳的高铁票是几号车厢？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "虚构票务信息（无答案）"
+  },
+  {
+    "id": "GT-30",
+    "query": "Lan送给妈妈的珍珠项链总共花了多少钱？",
+    "expected_ids": [],
+    "has_answer": false,
+    "topic": "虚构家庭开销（无答案）"
+  }
+]

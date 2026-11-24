@@ -1,0 +1,34 @@
+[08:51:21] === Starting P2 Isolated Peter End-to-End Verification ===
+[08:51:21] Working directory: E:\Peter-Agent\VEIL\veil-agent\docs\tickets\p2\evidence\isolated_e2e_workdir
+[08:51:22] --- Step 1: Brain Write (Native Hold with write_authority=True) ---
+[08:51:24] Write response: 新建→25352b8a13ee
+[08:51:24] Generated new memory ID: 25352b8a13ee
+[08:51:24] P2-C Verification PASSED: Free tags & domain successfully dropped by write authority.
+[08:51:24] --- Step 2: Chat Recall (Retrieval from Brain) ---
+[08:51:25] Search result preview:
+[bucket_id:25352b8a13ee] E2E测试记忆-关于仙人掌的特别约定
+2026-11-24 E2E测试：Lan说她养死过仙人掌，所以我们约定好以后买绿植一定要选耐活的。
+
+[bucket_id:99df0c513389] Kills plants, even cacti
+
+Lan连仙人掌都能养死，Peter拿这个开玩笑——说自己被“困在地下室和仙人掌在一起”。但真正值得记住的不...
+[08:51:25] Chat recall verification PASSED: New memory successfully retrieved.
+[08:51:25] --- Step 3: Event Story & Fragment Deduplication Verification ---
+[08:51:26] Retrieved context candidates count: 1
+[08:51:26] Context candidate IDs: []
+[08:51:26] Has V01 story in context: True, Has duplicate source fragment: False
+[08:51:26] Deduplication PASSED: Event story took precedence; source fragment was folded without duplicate injection.
+[08:51:26] --- Step 4: Continuous Multi-turn Followup ---
+[08:51:27] Followup context candidates count: 1
+[08:51:27] Followup candidate IDs: []
+[08:51:27] Multi-turn followup verification PASSED.
+[08:51:27] --- Step 5: Process Restart & Recovery Verification ---
+[08:51:27] Terminated first Memory session.
+[08:51:27] Reinitializing brand new Memory instance against existing brain.db...
+[08:51:27] Reopened opening preview:
+[bucket_id:cdb41b263b58] Birthday letter, and catching STAYED in my own draft
+
+Oct 30, 15:58, my own wake while Lan slept (she went down at 08:17 aft...
+[08:51:29] Restart search verification PASSED: Memory persisted and indexed properly.
+[08:51:29] Database integrity check: ok
+[08:51:29] === ALL 5 SCENARIOS PASSED WITH ZERO ERRORS ===

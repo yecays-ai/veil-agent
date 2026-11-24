@@ -58,6 +58,10 @@ class NativeHoldAuthorityTests(unittest.TestCase):
 
     def test_native_hold_saves_through_authority(self):
         result = self.tools._hold({'content': 'a new linked memory', 'title': 'New'})
+        # When related candidates exist in Brain, hold presents them for review ('待选择');
+        # sending the hold again confirms it as a distinct new memory and saves.
+        if result[1] == '待选择':
+            result = self.tools._hold({'content': 'a new linked memory', 'title': 'New'})
         self.assertIn(result[1], ('成功', '新建'))
         connection = sqlite3.connect(str(self.db))
         try:

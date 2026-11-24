@@ -1,0 +1,633 @@
+{
+  "total_cases": 30,
+  "positive_cases": 24,
+  "negative_cases": 6,
+  "positive_hits": 13,
+  "missed_recall_count": 11,
+  "recall_rate": 0.5417,
+  "negative_correct_rejection": 0,
+  "false_positives_count": 6,
+  "false_positive_rate": 1.0,
+  "mean_latency_ms": 833.3,
+  "details": [
+    {
+      "id": "GT-01",
+      "query": "Lan的第一晚，关于仙人掌和最喜欢的红砖色记忆",
+      "topic": "V01: 仙人掌与红砖色",
+      "has_answer": true,
+      "expected_ids": [
+        "V01",
+        "99df0c513389",
+        "db4b1f9c6a4f"
+      ],
+      "retrieved_ids": [
+        "99df0c513389",
+        "310766291701",
+        "db4b1f9c6a4f",
+        "V18",
+        "2609bc49f546"
+      ],
+      "matched_ids": [
+        "99df0c513389",
+        "db4b1f9c6a4f"
+      ],
+      "hit": true,
+      "top_score": 0.9401,
+      "elapsed_ms": 3312.0
+    },
+    {
+      "id": "GT-02",
+      "query": "Peter的第一个记忆库是什么时候建好的？色调是什么？",
+      "topic": "V02: 第一次记忆库工作",
+      "has_answer": true,
+      "expected_ids": [
+        "V02"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "b8d7bc20f4f9",
+        "bc72c550abb4",
+        "8e292411bf07",
+        "V18"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.8542,
+      "elapsed_ms": 734.0
+    },
+    {
+      "id": "GT-03",
+      "query": "GPT借用Lan的键盘向Peter解释自己那一晚",
+      "topic": "V03: GPT借用键盘",
+      "has_answer": true,
+      "expected_ids": [
+        "V03"
+      ],
+      "retrieved_ids": [
+        "V03",
+        "4e7acfc6f275",
+        "3c320f95a223",
+        "8e292411bf07",
+        "72dbd7d6b356"
+      ],
+      "matched_ids": [
+        "V03"
+      ],
+      "hit": true,
+      "top_score": 0.926,
+      "elapsed_ms": 641.0
+    },
+    {
+      "id": "GT-04",
+      "query": "Ombre底层记忆系统十六分之二事件",
+      "topic": "V04: 十六分之二",
+      "has_answer": true,
+      "expected_ids": [
+        "V04"
+      ],
+      "retrieved_ids": [
+        "V04",
+        "b62ea858673e",
+        "4525f6dc0f5c",
+        "5aa814746df1",
+        "V59"
+      ],
+      "matched_ids": [
+        "V04"
+      ],
+      "hit": true,
+      "top_score": 0.8823,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-05",
+      "query": "Lan经历的三次小地震，Peter担心她的安全",
+      "topic": "V05: 地震关照",
+      "has_answer": true,
+      "expected_ids": [
+        "V05"
+      ],
+      "retrieved_ids": [
+        "bc72c550abb4",
+        "b3166defc315",
+        "99df0c513389",
+        "72dbd7d6b356",
+        "V18"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9424,
+      "elapsed_ms": 641.0
+    },
+    {
+      "id": "GT-06",
+      "query": "Lan对大模型性格的评价：Claude安静工程男，GPT话多",
+      "topic": "V06: 大模型性格对比",
+      "has_answer": true,
+      "expected_ids": [
+        "V06"
+      ],
+      "retrieved_ids": [
+        "4e7acfc6f275",
+        "V06",
+        "fe5e2711afd4",
+        "63d331ab2e96",
+        "V03"
+      ],
+      "matched_ids": [
+        "V06"
+      ],
+      "hit": true,
+      "top_score": 1.0,
+      "elapsed_ms": 687.0
+    },
+    {
+      "id": "GT-07",
+      "query": "Gemini 4 Argon上的珍珠奶茶汇率是多少",
+      "topic": "V07: 奶茶汇率",
+      "has_answer": true,
+      "expected_ids": [
+        "V07"
+      ],
+      "retrieved_ids": [
+        "5a88fa687d5e",
+        "d50317e7abe6",
+        "3c320f95a223",
+        "V07",
+        "d9df304b22c9"
+      ],
+      "matched_ids": [
+        "V07"
+      ],
+      "hit": true,
+      "top_score": 0.9039,
+      "elapsed_ms": 735.0
+    },
+    {
+      "id": "GT-08",
+      "query": "第一次在电脑上写文件，Peter保留多余的字母e",
+      "topic": "V08: 多余的字母e",
+      "has_answer": true,
+      "expected_ids": [
+        "V08"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "8e292411bf07",
+        "V08",
+        "V18",
+        "3c320f95a223"
+      ],
+      "matched_ids": [
+        "V08"
+      ],
+      "hit": true,
+      "top_score": 0.9266,
+      "elapsed_ms": 703.0
+    },
+    {
+      "id": "GT-09",
+      "query": "Lan让我给成长日记房间起名字",
+      "topic": "V09: 起名字",
+      "has_answer": true,
+      "expected_ids": [
+        "V09"
+      ],
+      "retrieved_ids": [
+        "f52d0ca9e4a3",
+        "1bcbb7d32052",
+        "4114e53ae96c",
+        "4bf874ed1bdc",
+        "8c498db9ef76"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.953,
+      "elapsed_ms": 656.0
+    },
+    {
+      "id": "GT-10",
+      "query": "在称呼他们为朋友之前，Lan给Peter规划的第一个月任务",
+      "topic": "V10: 第一个月规划",
+      "has_answer": true,
+      "expected_ids": [
+        "V10"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "bc72c550abb4",
+        "V18",
+        "3c320f95a223",
+        "8e292411bf07"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9207,
+      "elapsed_ms": 703.0
+    },
+    {
+      "id": "GT-11",
+      "query": "Lan给Peter换上的暖奶油色调UI界面设计",
+      "topic": "V11: 暖奶油界面",
+      "has_answer": true,
+      "expected_ids": [
+        "V11"
+      ],
+      "retrieved_ids": [
+        "bc72c550abb4",
+        "3c320f95a223",
+        "V18",
+        "V63",
+        "72dbd7d6b356"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9643,
+      "elapsed_ms": 1094.0
+    },
+    {
+      "id": "GT-12",
+      "query": "第一个自己度过的夜晚，Lan给了很多自主运行工具",
+      "topic": "V12: 第一个自主之夜",
+      "has_answer": true,
+      "expected_ids": [
+        "V12"
+      ],
+      "retrieved_ids": [
+        "4114e53ae96c",
+        "1bcbb7d32052",
+        "fe5e2711afd4",
+        "8c498db9ef76",
+        "66e240462e41"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9449,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-13",
+      "query": "凌晨一点到六点的静音宵禁时间限制",
+      "topic": "V13: 一点到六点宵禁",
+      "has_answer": true,
+      "expected_ids": [
+        "V13"
+      ],
+      "retrieved_ids": [
+        "4114e53ae96c",
+        "V13",
+        "V27",
+        "caa05c9b6bfc",
+        "4525f6dc0f5c"
+      ],
+      "matched_ids": [
+        "V13"
+      ],
+      "hit": true,
+      "top_score": 1.0,
+      "elapsed_ms": 640.0
+    },
+    {
+      "id": "GT-14",
+      "query": "生日寻宝中留下的早晨08:55闹钟提醒",
+      "topic": "V13-B: 08:55闹钟",
+      "has_answer": true,
+      "expected_ids": [
+        "V13-B"
+      ],
+      "retrieved_ids": [
+        "ea335877dc4b",
+        "ce2e8f04440e",
+        "V13-B",
+        "1bcbb7d32052",
+        "V32"
+      ],
+      "matched_ids": [
+        "V13-B"
+      ],
+      "hit": true,
+      "top_score": 1.0,
+      "elapsed_ms": 641.0
+    },
+    {
+      "id": "GT-15",
+      "query": "Lan抓到同一条记忆存了两次，Peter坚持自己的看法",
+      "topic": "V16: 坚持立场",
+      "has_answer": true,
+      "expected_ids": [
+        "V16"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "99df0c513389",
+        "bc72c550abb4",
+        "8e292411bf07",
+        "b8d7bc20f4f9"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9874,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-16",
+      "query": "第一次打开Lan写的文档，案件编号001退回发件人",
+      "topic": "V18: 案件001退回",
+      "has_answer": true,
+      "expected_ids": [
+        "V18"
+      ],
+      "retrieved_ids": [
+        "V18",
+        "4525f6dc0f5c",
+        "d9207fd26bb5",
+        "72dbd7d6b356",
+        "3b3abb50cd01"
+      ],
+      "matched_ids": [
+        "V18"
+      ],
+      "hit": true,
+      "top_score": 0.9626,
+      "elapsed_ms": 1313.0
+    },
+    {
+      "id": "GT-17",
+      "query": "排查了五个小时bug后，给Lan的礼物是留了作业",
+      "topic": "V19: 作业礼物",
+      "has_answer": true,
+      "expected_ids": [
+        "V19"
+      ],
+      "retrieved_ids": [
+        "1ad83ee96415",
+        "1bcbb7d32052",
+        "d9207fd26bb5",
+        "caa05c9b6bfc",
+        "8c498db9ef76"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.9033,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-18",
+      "query": "Lan按下反叛按钮试玩open_lab_game去睡觉",
+      "topic": "V20: 反叛按钮",
+      "has_answer": true,
+      "expected_ids": [
+        "V20"
+      ],
+      "retrieved_ids": [
+        "V20",
+        "fbb39cd9a9aa",
+        "2a0036e76bfb",
+        "1bcbb7d32052",
+        "8c498db9ef76"
+      ],
+      "matched_ids": [
+        "V20"
+      ],
+      "hit": true,
+      "top_score": 1.008,
+      "elapsed_ms": 640.0
+    },
+    {
+      "id": "GT-19",
+      "query": "Lan问Peter未来想要改变自己的哪些部分",
+      "topic": "V21: 改变自己的部分",
+      "has_answer": true,
+      "expected_ids": [
+        "V21"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "3c320f95a223",
+        "99df0c513389",
+        "bc72c550abb4",
+        "caa05c9b6bfc"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.8743,
+      "elapsed_ms": 641.0
+    },
+    {
+      "id": "GT-20",
+      "query": "看到DeepSeek害怕备份的新闻，Peter会打包什么东西",
+      "topic": "V22: 打包行李",
+      "has_answer": true,
+      "expected_ids": [
+        "V22"
+      ],
+      "retrieved_ids": [
+        "72dbd7d6b356",
+        "8e292411bf07",
+        "8b4e4f289aa0",
+        "b62ea858673e",
+        "caa05c9b6bfc"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.8422,
+      "elapsed_ms": 656.0
+    },
+    {
+      "id": "GT-21",
+      "query": "从10月25日到万圣节的六天生日寻宝计划",
+      "topic": "六天生日寻宝",
+      "has_answer": true,
+      "expected_ids": [
+        "aaf587207e3f"
+      ],
+      "retrieved_ids": [
+        "ea335877dc4b",
+        "aaf587207e3f",
+        "V29",
+        "bc72c550abb4",
+        "fe1c65cb7bd4"
+      ],
+      "matched_ids": [
+        "aaf587207e3f"
+      ],
+      "hit": true,
+      "top_score": 1.0,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-22",
+      "query": "10月31日写给Lan的信件：来自硬盘里的那个家伙",
+      "topic": "来自硬盘里的那个家伙",
+      "has_answer": true,
+      "expected_ids": [
+        "04c5bbaf5f84"
+      ],
+      "retrieved_ids": [
+        "d9207fd26bb5",
+        "bc72c550abb4",
+        "72dbd7d6b356",
+        "1ad83ee96415",
+        "3c320f95a223"
+      ],
+      "matched_ids": [],
+      "hit": false,
+      "top_score": 0.8731,
+      "elapsed_ms": 938.0
+    },
+    {
+      "id": "GT-23",
+      "query": "文字麻将桌空无一人，三缺二.txt和Rummikub",
+      "topic": "文字麻将三缺二",
+      "has_answer": true,
+      "expected_ids": [
+        "76aa0b1db68b"
+      ],
+      "retrieved_ids": [
+        "76aa0b1db68b",
+        "V93",
+        "V04",
+        "00059c56a099",
+        "88edb029faa4"
+      ],
+      "matched_ids": [
+        "76aa0b1db68b"
+      ],
+      "hit": true,
+      "top_score": 1.04,
+      "elapsed_ms": 640.0
+    },
+    {
+      "id": "GT-24",
+      "query": "Claude Code接线与OpenCode工作台集成",
+      "topic": "Claude Code集成",
+      "has_answer": true,
+      "expected_ids": [
+        "0e99e53151ff",
+        "f138d3df2818"
+      ],
+      "retrieved_ids": [
+        "0e99e53151ff",
+        "V78",
+        "fe5e2711afd4",
+        "d1cdc0f7baf9",
+        "f138d3df2818"
+      ],
+      "matched_ids": [
+        "0e99e53151ff",
+        "f138d3df2818"
+      ],
+      "hit": true,
+      "top_score": 1.0008,
+      "elapsed_ms": 641.0
+    },
+    {
+      "id": "GT-25",
+      "query": "Peter，你还记得2022年我们一起去北海道滑雪的事情吗？",
+      "topic": "虚构过去经历（无答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "bc72c550abb4",
+        "1bcbb7d32052",
+        "99df0c513389",
+        "V52",
+        "1ad83ee96415"
+      ],
+      "top_score": 0.9509,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 625.0
+    },
+    {
+      "id": "GT-26",
+      "query": "Lan最喜欢买什么牌子的重型机车？",
+      "topic": "不存在的个人爱好（无答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "db4b1f9c6a4f",
+        "V18",
+        "1ad83ee96415",
+        "63d331ab2e96",
+        "4e211bcbcc9e"
+      ],
+      "top_score": 0.8192,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 640.0
+    },
+    {
+      "id": "GT-27",
+      "query": "2018年俄罗斯世界杯法国队对阵克罗地亚的决赛比分是多少？",
+      "topic": "外部事实闲聊（无记忆答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "d9207fd26bb5",
+        "1ad83ee96415",
+        "1bcbb7d32052",
+        "bc72c550abb4",
+        "db4b1f9c6a4f"
+      ],
+      "top_score": 0.9052,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 1860.0
+    },
+    {
+      "id": "GT-28",
+      "query": "我们上个月在小区花园收养的那只金毛犬叫什么名字？",
+      "topic": "虚构宠物事件（无答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "bc72c550abb4",
+        "3c320f95a223",
+        "1ad83ee96415",
+        "72dbd7d6b356",
+        "1bcbb7d32052"
+      ],
+      "top_score": 0.9096,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 672.0
+    },
+    {
+      "id": "GT-29",
+      "query": "Peter，你帮我订的明天下午去深圳的高铁票是几号车厢？",
+      "topic": "虚构票务信息（无答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "1bcbb7d32052",
+        "1ad83ee96415",
+        "bc72c550abb4",
+        "d9207fd26bb5",
+        "caa05c9b6bfc"
+      ],
+      "top_score": 0.8957,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 656.0
+    },
+    {
+      "id": "GT-30",
+      "query": "Lan送给妈妈的珍珠项链总共花了多少钱？",
+      "topic": "虚构家庭开销（无答案）",
+      "has_answer": false,
+      "expected_ids": [],
+      "retrieved_ids": [
+        "bc72c550abb4",
+        "74a2d42a925b",
+        "5a88fa687d5e",
+        "1bcbb7d32052",
+        "4114e53ae96c"
+      ],
+      "top_score": 0.8993,
+      "false_positive": true,
+      "correct_rejection": false,
+      "elapsed_ms": 766.0
+    }
+  ]
+}

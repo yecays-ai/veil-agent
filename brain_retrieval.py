@@ -155,7 +155,10 @@ class BrainIndex:
             visible_ids = [row[0] for row in rows]
         query_vector = None
         if embedder is not None:
-            query_vector = embedder.embed(query)
+            try:
+                query_vector = embedder.embed(query)
+            except Exception:
+                query_vector = None
         vector_scores = self._vector_scores(query_vector, visible_ids)
         keyword_scores = self._keyword_scores(bm25, rows, query)
         vector_top = max((vector_scores.get(memory_id, 0.0) for memory_id in visible_ids), default=0.0)

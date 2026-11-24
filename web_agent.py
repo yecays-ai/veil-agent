@@ -1963,18 +1963,29 @@ def make_handler(hub, token):
             self.end_headers()
             self.wfile.write(data)
 
+        def _drain_body(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if 0 < length <= 10 * 1024 * 1024:
+                    self.rfile.read(length)
+            except Exception:
+                pass
+
         def _guard(self, supplied):
             port = self.server.server_address[1]
             allowed_hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
             allowed_origins = {f'http://{h}' for h in allowed_hosts}
             if self.headers.get('Host') not in allowed_hosts:
+                self._drain_body()
                 self._send(403, {'error': 'host'})
                 return False
             origin = self.headers.get('Origin')
             if origin is not None and origin not in allowed_origins:
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if not hmac.compare_digest((supplied or '').encode(), token.encode()):
+                self._drain_body()
                 self._send(403, {'error': 'token'})
                 return False
             return True

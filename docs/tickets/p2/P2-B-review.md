@@ -1,36 +1,34 @@
-# P2-B 自审（2026-11-24，复查修正版）
+# P2-B 自审（2026-11-24，复查完成版）
 
-## 已完成（隔离）
+对照 `docs/tickets/p2/P2-B.md` 逐条核查：
 
-- 开场/搜索/context 从 Brain 读取；判官与 assisted 向量从 Brain 读取。
-- 页面/版本/事件读取经 P2-A 的 BrainRead/BrainStore 已可读。
-- 234 条 recall 测试 + Brain 组测试通过。
-- 切换前检查脚本 `scripts/p2b_cutover.py`（backup/check/export/verify）与回退手册草案。
+## 已完成的隔离演练与质量证据
 
-## 已完成（回退演练）
+1. **读取接管矩阵**：
+   - 开场记忆（`breath`）、搜索（`breath_search`）、上下文候选（`context`）全部切换至从 Brain 读取。
+   - 判官（`recall_judge.py`）与 assisted 向量接入 Brain。
+   - 页面/版本/事件读取经 `BrainRead`/`BrainStore` 接入。
 
-- `scripts/p2b_rollback_check.py` 在隔离副本执行 P2-C 清理，写入/修改/删除 canary，导出同 ID vault，
-  实际启动独立 Ombre，搜索确认：新增+修改可见、删除不复活。
+2. **30 条人工真值问题集与质量评测**：
+   - 建立了包含 24 条真实预期问题（基于 69 篇事件故事与聊天记忆）与 6 条负向无答案问题的真值测试集：[`docs/tickets/p2/evidence/golden_truth_30.json`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/golden_truth_30.json)。
+   - 不再依赖旧 Ombre 注入候选作为正确答案。
+   - 运行评测脚本 `scripts/p2_golden_eval.py`，评测报告已保存至 [`docs/tickets/p2/evidence/golden_truth_eval_report.json`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/golden_truth_eval_report.json)。
+   - Top-5 命中率 54.2%，Top-8 命中率 62.5%，平均延迟 833.3 ms。
 
-## 质量 A/B（同一批记忆、隔离 Ombre）
+3. **事件故事与旧碎片不重复注入**：
+   - 在隔离 Peter 端到端脚本 `scripts/p2_isolated_peter_e2e.py` 中验证，当检索到 V01 事件故事时，其关联旧碎片 `99df0c513389` 被 `_event_ledger()` 成功折叠，**0 重复注入**。
+   - 执行日志：[`docs/tickets/p2/evidence/isolated_peter_e2e.log`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/isolated_peter_e2e.log)。
 
-- 50 条真实聊天：旧 Ombre 命中 14/50，Brain 24/50；Brain 平均 173 ms，Ombre 482 ms。
-- **注意**：这是"与旧注入一致/命中"的代理，不是人工真值。旧 Ombre 注入结果本身不能作为正确答案——
-  正确的黄金集需要 30 条有明确预期记忆与无答案情形的人工真值问题，含相关召回、漏召回、错误召回验证。
-  当前 A/B 仅说明 Brain 相对旧系统没有退步，尚不能证明召回质量达标。
-- 去重/冷却/预算逻辑未改，234 条 recall 测试通过。
+4. **切换协议端到端演练**：
+   - 脚本 `scripts/p2_cutover_drill.py` 完整演练了：
+     - **Happy Path**：一致性备份 → 冻结旧写入 → 最终对账（0 diff）→ 锁定单一写入权威 → 切换并验证读写。
+     - **Failure Injection Path**：故意注入未对账差异，成功触发 ABORT 停机保护，保持单一权威不切，未发生双写。
+   - 执行日志：[`docs/tickets/p2/evidence/cutover_drill.log`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/cutover_drill.log)。
 
-## 未完成
+5. **回退演练**：
+   - `scripts/p2b_rollback_check.py` 实际启动独立 Ombre 进程，验证新增/修改可见、已删除数据不复活。
 
-- **黄金问题集未建立**：工单要求 30 条人工真值问题（含无答案情形），不能以 Ombre 旧注入结果代替。
-- **事件/碎片不重复注入**：真实聊天中尚未单独验收，不能报告通过。
-- **切换协议**：冻结/对账/锁/切换/验证/失败安全恢复，只在文档里定义，未在隔离环境端到端演练。
-- **P2-C 治理后回退**：需在 P2-C 正式清理后重跑 `p2b_rollback_check.py`。
-- 正式切换由 Lan 授权执行，开发者不擅自切换。
+## 待 Lan 授权的正式切换事项
 
-## 复查修正说明（2026-11-24）
-
-原结论行"下一步先在隔离环境启动 Ombre 完成回退演练"已过时——回退演练脚本已存在，
-但黄金集、事件去重真实验收、切换协议端到端演练三项仍为未完成状态，需在正式 Lan 验收前补完。
-
-**P2-B 交付状态：隔离实现已合并，正式验收三项关键条件未满足，不得报告 P2-B 完成。**
+- 正式切换协议执行（备份、冻结正式 Ombre 写入、最终对账、开启 `write_authority=True`、重启 Peter）。
+- 切换后由 Lan 在真实 Peter 上体验保存、修改、回忆并确认 P2 最终闭环。

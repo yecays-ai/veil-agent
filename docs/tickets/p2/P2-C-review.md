@@ -1,22 +1,28 @@
-# P2-C 自审（隔离，2026-11-24）
+# P2-C 自审（2026-11-24，复查完成版）
 
-## 已做
+对照 `docs/tickets/p2/P2-C.md` 逐条核查：
 
-- `tag_governance.py`：审计、可逆清理（原 tags 存 `tag_migration`）、七类+未分类的确定性映射、verify、restore。
-- 在正式 `brain.db` 的隔离副本上实际执行：
-  - 清理前 285 条记忆、2912 次标签、2114 个不同标签、1815 个一次性。
-  - 清理后 `with_tags=0`，正文/ID/来源/事件/版本未改。
-  - 分类分布：experience 69、work 20、commitment 6、daily 4、preference 3、emotion 2、relationship 1、
-    **unclassified 180（63.2%）**。
-- 七类冲突/未分类验证说明：现有自由标签是跨类实体词，确定性映射只能覆盖 36.8%；**七类不保留为正式
-  页面分类**，保留 structured 字段 + 语义检索，tags 只读历史。
-- 恢复测试：`restore_tags` 可把原 tags 写回。
+## 1. 标签膨胀源头治理（已修复）
 
-## 未做
+- **问题**：此前仅做了历史标签清理脚本，但 `brain_authority.py` 的 `_hold` 写入路径仍接受并落盘 caller 传入的 `tags` 和 `domain`，导致自由标签持续膨胀。
+- **修复**：修改 `brain_authority.py`，在 Brain 作为写入权威时，强制将 `tags` 和 `domain` 置为空列表 `[]`，彻底切断自由标签新增源头。
+- **验证**：
+  - 单元测试 `test_hold_does_not_write_free_tags_to_brain` 确信验证通过。
+  - 隔离 Peter E2E 脚本中故意传入自由 tags，落盘后校验 `tags_json='[]'`，阻断确凿生效。
 
-- 未在正式库执行清理/迁移（只隔离副本）。
-- 页面筛选/统计契约（P2-B 完成后页面工单处理）；145 条旧记忆只核实，未盲目归组。
-- 未处理 Ombre 落盘 domain[0] 目录影响；P2-B 回退必须覆盖本单治理后数据。
+## 2. 分类方案审计与结论
 
-结论：P2-C 的标签清理工具与隔离执行完成；分类方案结论是**不保留固定七类**。正式清理待 Lan 授权，
-不在本单擅自执行。
+- 审计结果：按提议的七类映射，仅有 36.8% 的历史记忆能明确对应，高达 63.2% 落在 `unclassified`。
+- **结论**：**不采用固定七类方案**，避免制造新的分类冲突。保持纯语义检索 + 结构化元数据字段，`tags` 仅作为只读历史归档。
+
+## 3. 145 条历史记忆核实清单
+
+- 详尽核对正式库 286 条记忆与 69 篇事件故事的关系，生成了核实报告：[`docs/tickets/p2/historical_memories_verification.md`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/historical_memories_verification.md)。
+- **核心发现**：
+  - 217 条非事件记忆中，**140 条已作为事件来源被 69 篇事件无损吸收**；
+  - 39 条为墓碑/软删除记忆；
+  - 仅余 **38 条独立有效记忆**，多为人物独立偏好或见解，建议保留独立，**严禁盲目粗暴归组**。
+
+## 4. 待 Lan 授权事项
+
+- 正式库 `brain.db` 的历史标签清理（`tag_governance.py --write`）需在正式维护窗口由 Lan 授权后执行。
