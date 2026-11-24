@@ -1,12 +1,16 @@
 # HANDOFF
 
-## P2 收尾（2026-11-24，分支 `ticket/439-p2-followup`，PR #439）
+## P2 正式接管（2026-11-25）
 
-- 已完成：embedder 边界、config-root `.env` 隔离、事件迁移折叠/digest、只读读取降级、pending 三态与
-  重试、归档页读 Brain、合并/锁定/sidecar 修复；隔离完整验收（数据/桌面/备份/失败/连续性/旧机制/
-  黄金集/切换回退）均通过，矩阵见 `docs/tickets/p2/P2-acceptance-matrix.md`。
-- 实机证据：仓库外 `p2-439/iso/evidence/`；仓库只提交脱敏报告与逐条 ID 清单。
-- 未做：正式切换（需 Lan 授权）、正式库标签清理（需维护窗口）、Lan 正式体验验收。
-- 阻塞：正式 `.env` 的 `EMBED_API_KEY` 当前 401；页面隐藏按钮归 #431；黄金集 4/50 Ombre-only 待复核。
-- 下一步第一步：Lan 复审 PR #439；更新正式 EMBED key 后，按 `docs/tickets/p2/P2-B-runbook.md` 申请切换窗口。
-- 禁止：本 PR 不由 agent 合并；未完成正式体验验收前不得进入 P3。
+- 已执行：正式 Peter 停止 → 最终同步 → 一致性备份 + 恢复验证 → 事件完整数据迁移 → P2-C 标签治理 →
+  最终对账 → 启用 Brain 唯一读写权威 → 启动验证 → 重启验证 → Ombre 回退导出验证。
+- 正式运行状态：`write_authority=true`、`shadow=false`、`retrieval=brain`；Ombre 18011 仍运行，仅回退。
+- 数据：288 记忆 / 286 版本 / 249 向量 / 73 事件 / 74 阶段 / 171 sidecar；tags=0、pending=0；
+  原有 287 个 ID 无缺失；切换期新增 `66320d2a1f76`。
+- 备份：`VEIL-backups/P2-cutover-20261125T050617`（迁移前）、`P2-cutover-clean-20261125T050737`
+  （事件迁移后）、`P2-cutover-final-20261125T050822`（启用前，已恢复验证）、
+  `P2-authority-20261125T051444`（最终 brain/config/回退导出）。
+- 未做：P3、Ombre 卸载、正式库以外的新功能。
+- 下一步第一步：Lan 打开桌面体验报告第 7 节场景；确认前不要进入 P3。
+- 回退：按 `docs/tickets/p2/P2-formal-cutover-report.md` 第 6 节走“当前 Brain 同 ID 导出 → Ombre 读取”，
+  不要用旧备份直接覆盖当前 Brain。

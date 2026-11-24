@@ -32,5 +32,6 @@
 ## 当前状态
 
 - 隔离演练已通过（证据：仓库外 `p2-439/iso/evidence/cutover/cutover-rollback.json`）。
-- 正式切换未执行；正式库标签清理未执行；正式 `.env` 的 `EMBED_API_KEY` 当前 401，切换前必须更新。
-- 未完成 Lan 的真实体验验收前，不得用于正式切换。
+- **正式切换已于 2026-11-25 执行完成**：见 `P2-formal-cutover-report.md`；正式库标签已清理，
+  `EMBED_API_KEY` 已验证有效，Brain 为唯一读写权威，Ombre 18011 保留为回退。
+- 回退导出已生成并回导 0 problems；正式体验验收前不进入 P3，不卸载 Ombre。
