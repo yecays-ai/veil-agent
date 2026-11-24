@@ -83,3 +83,9 @@
 4. 锁定/隐藏/归档/恢复/删除各挑一条测试记忆，确认页面操作正常。
 5. 观察自主活动开关；确认没有异常费用、没有双份保存、没有“保存成功但检索 pending”的静默情况。
 6. 若出现异常，立即停止并告知；按第 6 节回退，不进入 P3。
+
+## 8. 配置持久化补充（P3-0，2026-11-25）
+
+- 本报告第 4 节的 `character.toml` 接管配置原先只改在工作区，`update-main` 会 stash + `reset --hard`，下一次更新会静默回到 HEAD 的 Ombre 影子配置。
+- P3-0 已把同一组过渡配置提交进 `main`，并由 `tests/test_brain_defaults.py` 防回退；P3-2 会删除 `[memory.brain]` 过渡开关，Brain 成为唯一记忆后端。
+- 详见图纸：`docs/tickets/p3/P3-0.md`、`docs/tickets/p3/P3-construction-plan.md`。
