@@ -197,7 +197,9 @@ class PeterWebClient:
                     if ev['kind'] == 'assistant':
                         assistant_replies.append(ev['text'])
                         if ev.get('memory_refs'):
-                            new_memory_refs.extend(ev['memory_refs'])
+                            for r in ev['memory_refs']:
+                                if r not in new_memory_refs:
+                                    new_memory_refs.append(r)
                         self.logger.log(f"Peter -> User: {ev['text']}")
                     elif ev['kind'] == 'notice':
                         self.logger.log(f"[Notice] {ev['text']}")

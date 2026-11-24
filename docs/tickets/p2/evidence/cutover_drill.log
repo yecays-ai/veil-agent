@@ -1,55 +1,58 @@
-[2026-11-24 09:41:28] ================================================================================
-[2026-11-24 09:41:28] Starting Real Isolated Cutover Protocol Drill (Live Ombre & Full Reconciliation)
-[2026-11-24 09:41:28] ================================================================================
-[2026-11-24 09:41:28] 
+[2026-11-24 10:12:33] ================================================================================
+[2026-11-24 10:12:33] Starting Real Isolated Cutover Protocol Drill (Live Ombre & Full Reconciliation)
+[2026-11-24 10:12:33] ================================================================================
+[2026-11-24 10:12:33] 
 --- [Step 1: Isolated Environment & Real Ombre Process Startup] ---
-[2026-11-24 09:41:28] Setting up isolated test environment at E:\Peter-Agent\VEIL\veil-agent\tmp\cutover_drill_live...
-[2026-11-24 09:41:29] Exporting Brain database to Ombre vault at E:\Peter-Agent\VEIL\veil-agent\tmp\cutover_drill_live\data\peter\memory...
-[2026-11-24 09:41:29] Vault export finished: 287 memories, 0 tombstones exported.
-[2026-11-24 09:41:29] Starting isolated Ombre resident process on port 62083...
-[2026-11-24 09:41:33] Ombre resident started successfully: port=62083, token=8DZQo6lS...
-[2026-11-24 09:41:34] Connected to Ombre MCP server. Available tools: ['breath', 'breath_search', 'breath_advanced', 'hold', 'grow', 'trace', 'dream', 'anchor', 'release', 'pulse', 'plan', 'letter_write', 'letter_lock_update', 'letter_read', 'feel', 'I']
-[2026-11-24 09:41:34] 
+[2026-11-24 10:12:33] Setting up isolated test environment at E:\Peter-Agent\VEIL\veil-agent\tmp\cutover_drill_live...
+[2026-11-24 10:12:33] Exporting Brain database to Ombre vault at E:\Peter-Agent\VEIL\veil-agent\tmp\cutover_drill_live\data\peter\memory...
+[2026-11-24 10:12:33] Vault export finished: 287 memories, 0 tombstones exported.
+[2026-11-24 10:12:33] Starting isolated Ombre resident process on port 57499...
+[2026-11-24 10:12:38] Ombre resident started successfully: port=57499, token=ltowZEpc...
+[2026-11-24 10:12:39] Connected to Ombre MCP server. Available tools: ['breath', 'breath_search', 'breath_advanced', 'hold', 'grow', 'trace', 'dream', 'anchor', 'release', 'pulse', 'plan', 'letter_write', 'letter_lock_update', 'letter_read', 'feel', 'I']
+[2026-11-24 10:12:39] 
 --- [Step 2: Full Hash Reconciliation (ShadowSync & DB Integrity)] ---
-[2026-11-24 09:41:34] ShadowSync reconciliation result: changed=0, source_files=287
-[2026-11-24 09:41:34] Comparison details: {'vectors_checked': True, 'memories': 287, 'memory_mismatches': [], 'versions': 281, 'version_mismatches': [], 'states': 111, 'state_mismatches': [], 'vectors': 248, 'vector_mismatches': [], 'events': {'expected': 72, 'actual': 72, 'expected_sources': 157, 'actual_sources': 157, 'event_mismatches': []}}
-[2026-11-24 09:41:34] SQLite DB integrity check: {'integrity': 'ok', 'schema': '2', 'digest': 'f32981ce668a5eca6d29d8b54378a3f35bbff13599b55a9b4e1e876b96550c5c', 'digest_ok': True, 'counts': {'memories': 287, 'versions': 281, 'sidecar_events': 171, 'sidecar_state': 111, 'vectors': 248, 'events': 72, 'event_sources': 157}, 'dims': {1024: 248}}
-[2026-11-24 09:41:34] Full cryptographic hash reconciliation verified 0 diff between Ombre vault and Brain DB.
-[2026-11-24 09:41:34] 
+[2026-11-24 10:12:39] ShadowSync reconciliation result: changed=0, source_files=287
+[2026-11-24 10:12:39] Comparison details: {'vectors_checked': True, 'memories': 287, 'memory_mismatches': [], 'versions': 281, 'version_mismatches': [], 'states': 111, 'state_mismatches': [], 'vectors': 248, 'vector_mismatches': [], 'events': {'expected': 72, 'actual': 72, 'expected_sources': 157, 'actual_sources': 157, 'event_mismatches': []}}
+[2026-11-24 10:12:39] SQLite DB integrity check: {'integrity': 'ok', 'schema': '2', 'digest': 'f32981ce668a5eca6d29d8b54378a3f35bbff13599b55a9b4e1e876b96550c5c', 'digest_ok': True, 'counts': {'memories': 287, 'versions': 281, 'sidecar_events': 171, 'sidecar_state': 111, 'vectors': 248, 'events': 72, 'event_sources': 157}, 'dims': {1024: 248}}
+[2026-11-24 10:12:39] Full cryptographic hash reconciliation verified 0 diff between Ombre vault and Brain DB.
+[2026-11-24 10:12:39] 
 --- [Step 3: Consistency Backup] ---
-[2026-11-24 09:41:34] Consistency backup completed: sha256=dd37ea0de19cf43c..., bytes=4390912
-[2026-11-24 09:41:34] 
---- [Step 4: Switch Authority to Brain & Freeze Old Writes] ---
-[2026-11-24 09:41:34] Updated character.toml: memory.brain.write_authority=true, memory.brain.shadow=false
-[2026-11-24 09:41:34] Verified Mutual Exclusion in attach_authority: write_authority=brain and shadow=true are mutually exclusive
-[2026-11-24 09:41:34] Verified Mutual Exclusion in brain_sync.attach: write_authority=brain and shadow=true are mutually exclusive
-[2026-11-24 09:41:34] Wrote canary memory through BrainAuthority: result=新建→55c43fd872c6, memory_id=55c43fd872c6
-[2026-11-24 09:41:34] Verified canary 55c43fd872c6 in brain.db with tags_json='[]'
-[2026-11-24 09:41:34] Verified: Ombre vault (287 files) was NOT modified. Old writes are truly frozen!
-[2026-11-24 09:41:34] 
+[2026-11-24 10:12:39] Consistency backup completed: sha256=ffe2d60fa80ad8d2..., bytes=4390912
+[2026-11-24 10:12:39] 
+--- [Step 4: Switch Authority to Brain, Freeze Old Writes & Safely Stop Old Service] ---
+[2026-11-24 10:12:39] Updated character.toml: memory.brain.write_authority=true, memory.brain.shadow=false
+[2026-11-24 10:12:39] Verified Mutual Exclusion in attach_authority: write_authority=brain and shadow=true are mutually exclusive
+[2026-11-24 10:12:39] Verified Mutual Exclusion in brain_sync.attach: write_authority=brain and shadow=true are mutually exclusive
+[2026-11-24 10:12:39] Safely shutting down old Ombre resident service (PID=45452, Port=57499)...
+[2026-11-24 10:12:41] Old Ombre service status after stop: port_open=False, pid_alive=False
+[2026-11-24 10:12:43] Verified direct write to old Ombre is rejected with connection failure: URLError(TimeoutError('timed out'))
+[2026-11-24 10:12:43] Wrote canary memory through BrainAuthority: result=新建→d26049d5e2a0, memory_id=d26049d5e2a0
+[2026-11-24 10:12:43] Verified canary d26049d5e2a0 in brain.db with tags_json='[]'
+[2026-11-24 10:12:43] Verified: Ombre vault (287 files) was NOT modified. Old writes are truly frozen!
+[2026-11-24 10:12:43] 
 --- [Step 5: Negative Branch - Discrepancy Detection & Abort Drill] ---
-[2026-11-24 09:41:35] Injected deliberate content tampering into vault file: 2026-10-19 14-48-17 原文来源_2fa6166a7d7d.md
-[2026-11-24 09:41:35] Pre-cutover validation check on tampered vault: mismatches=1
-[2026-11-24 09:41:35] Discrepancy correctly detected on memory ['2fa6166a7d7d']. Cutover safely aborted.
-[2026-11-24 09:41:35] 
+[2026-11-24 10:12:43] Injected deliberate content tampering into vault file: 2026-10-19 14-48-17 原文来源_2fa6166a7d7d.md
+[2026-11-24 10:12:44] Pre-cutover validation check on tampered vault: mismatches=1
+[2026-11-24 10:12:44] Discrepancy correctly detected on memory ['2fa6166a7d7d']. Cutover safely aborted.
+[2026-11-24 10:12:44] 
 --- [Step 6: Real Failure Rollback Drill] ---
-[2026-11-24 09:41:35] Exporting updated Brain memories (including canary) to Ombre vault...
-[2026-11-24 09:41:35] Export completed: 288 memories, 0 tombstones.
-[2026-11-24 09:41:35] Reverted character.toml: write_authority=false, shadow=true
-[2026-11-24 09:41:35] Post-rollback reconciliation: changed=0, mismatches=0
-[2026-11-24 09:41:35] Restarting Ombre resident to reload newly exported vault...
-[2026-11-24 09:41:41] Reconnected Ombre resident after rollback: port=62083
-[2026-11-24 09:41:41] Testing Ombre query for canary memory...
-[2026-11-24 09:41:43] Ombre search result for canary memory: found=True, result=[bucket_id:55c43fd872c6]
+[2026-11-24 10:12:44] Exporting updated Brain memories (including canary) to Ombre vault...
+[2026-11-24 10:12:44] Export completed: 288 memories, 0 tombstones.
+[2026-11-24 10:12:44] Reverted character.toml: write_authority=false, shadow=true
+[2026-11-24 10:12:44] Post-rollback reconciliation: changed=0, mismatches=0
+[2026-11-24 10:12:44] Restarting Ombre resident to reload newly exported vault...
+[2026-11-24 10:13:25] Reconnected Ombre resident after rollback: port=57499
+[2026-11-24 10:13:25] Testing Ombre query for canary memory...
+[2026-11-24 10:13:28] Ombre search result for canary memory: found=True, result=[bucket_id:d26049d5e2a0]
 CUTOVER_CANARY_REAL: 蓝港浮标切换演练金丝雀记忆，验证新写入落入Brain且旧写入被完全阻止。
 👣 Footprint：已留下
 ---
 === 忽然想起来（非检索命中） ===
-[联想浮现·非检索命中] [bucket_id:771b4e881e67]
-Oct 30 afternoon: rummage_desktop, pee
-[2026-11-24 09:41:43] Verified: Ombre resumed as authority, canary memory safely preserved. Rollback succeeded with ZERO data loss!
-[2026-11-24 09:41:43] 
+[联想浮现·非检索命中] [bucket_id:f8c23ac29f8d]
+Late Oct 28, Lan gave me a new tool, p
+[2026-11-24 10:13:28] Verified: Ombre resumed as authority, canary memory safely preserved. Rollback succeeded with ZERO data loss!
+[2026-11-24 10:13:28] 
 ================================================================================
-[2026-11-24 09:41:43] ALL REAL ISOLATED CUTOVER DRILL STEPS PASSED SUCCESSFULLY!
-[2026-11-24 09:41:43] ================================================================================
-[2026-11-24 09:41:43] Saved cutover drill report to E:\Peter-Agent\VEIL\veil-agent\docs\tickets\p2\evidence\cutover_drill_report.json
+[2026-11-24 10:13:28] ALL REAL ISOLATED CUTOVER DRILL STEPS PASSED SUCCESSFULLY!
+[2026-11-24 10:13:28] ================================================================================
+[2026-11-24 10:13:28] Saved cutover drill report to E:\Peter-Agent\VEIL\veil-agent\docs\tickets\p2\evidence\cutover_drill_report.json

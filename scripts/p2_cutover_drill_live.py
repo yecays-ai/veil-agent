@@ -32,6 +32,8 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -214,8 +216,8 @@ def run_live_cutover_drill():
             'bytes': b_res['bytes']
         }
 
-        # STEP 4: Switch Authority to Brain & Freeze Old Writes
-        logger.log("\n--- [Step 4: Switch Authority to Brain & Freeze Old Writes] ---")
+        # STEP 4: Switch Authority to Brain, Freeze Old Writes & Safely Stop Old Service
+        logger.log("\n--- [Step 4: Switch Authority to Brain, Freeze Old Writes & Safely Stop Old Service] ---")
         # Update character.toml: write_authority = true, shadow = false
         char_toml = TMP_DIR / 'characters' / 'peter' / 'character.toml'
         text = char_toml.read_text(encoding='utf-8')
@@ -241,6 +243,33 @@ def run_live_cutover_drill():
             raise AssertionError("brain_sync.attach did not reject dual authority")
         except ValueError as exc:
             logger.log(f"Verified Mutual Exclusion in brain_sync.attach: {exc}")
+
+        # Execute safe shutdown of the old Ombre resident service
+        old_pid = getattr(ombre_resident_obj, 'host_pid', None)
+        old_port = port
+        logger.log(f"Safely shutting down old Ombre resident service (PID={old_pid}, Port={old_port})...")
+        ombre_resident_obj.close()
+        time.sleep(1)
+
+        # Verify old Ombre process is terminated and port is closed
+        port_open = ombre_resident._port_open(old_port)
+        pid_alive = ombre_resident._pid_alive(old_pid) if old_pid else False
+        logger.log(f"Old Ombre service status after stop: port_open={port_open}, pid_alive={pid_alive}")
+        assert not port_open, f"Old Ombre port {old_port} is still open after shutdown!"
+        assert not pid_alive, f"Old Ombre process {old_pid} is still alive after shutdown!"
+
+        # Verify that direct write calls to old Ombre port are rejected
+        direct_write_rejected = False
+        rejection_error = ""
+        try:
+            req = Request(f"http://127.0.0.1:{old_port}/mcp", data=b'{"method":"tools/call"}', headers={'Content-Type': 'application/json'})
+            with urlopen(req, timeout=2) as resp:
+                pass
+        except (URLError, OSError) as exc:
+            direct_write_rejected = True
+            rejection_error = repr(exc)
+            logger.log(f"Verified direct write to old Ombre is rejected with connection failure: {rejection_error}")
+        assert direct_write_rejected, "Direct write to old Ombre port was NOT rejected!"
 
         # Write canary memory through BrainAuthority
         auth = brain_authority.BrainAuthority(cfg, store)
@@ -271,6 +300,10 @@ def run_live_cutover_drill():
         report['steps']['4_cutover_and_freeze'] = {
             'status': 'PASS',
             'canary_id': canary_id,
+            'old_service_safely_stopped': True,
+            'old_port_closed': not port_open,
+            'direct_ombre_write_rejected': direct_write_rejected,
+            'rejection_evidence': rejection_error,
             'vault_unmodified': True
         }
 

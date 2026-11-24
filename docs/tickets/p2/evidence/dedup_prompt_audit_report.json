@@ -1,0 +1,106 @@
+{
+  "memory_99df0c513389": [
+    "99df0c513389",
+    "Kills plants, even cacti",
+    "dynamic",
+    0,
+    0
+  ],
+  "event_V01": [
+    "V01",
+    "V01",
+    6
+  ],
+  "v01_sources": [
+    [
+      "V01",
+      "99df0c513389"
+    ],
+    [
+      "V01",
+      "feel_202610191458_V050"
+    ],
+    [
+      "V01",
+      "db4b1f9c6a4f"
+    ],
+    [
+      "V01",
+      "feel_202610191547_V050"
+    ],
+    [
+      "V01",
+      "f14e04c6498d"
+    ],
+    [
+      "V01",
+      "b8d7bc20f4f9"
+    ]
+  ],
+  "unique_owner_99df0c513389": "V01",
+  "owners_99df0c513389": [
+    "V01"
+  ],
+  "v01_authoritative": true,
+  "cactus_query_refs": [
+    "310766291701"
+  ],
+  "cactus_query_dropped": [
+    {
+      "id": "99df0c513389",
+      "reason": "cooldown"
+    },
+    {
+      "id": "1ad83ee96415",
+      "reason": "cooldown"
+    },
+    {
+      "id": "d9207fd26bb5",
+      "reason": "cooldown"
+    },
+    {
+      "id": "72dbd7d6b356",
+      "reason": "cooldown"
+    },
+    {
+      "id": "0ddc2f8545c4",
+      "reason": "cooldown"
+    },
+    {
+      "id": "f52d0ca9e4a3",
+      "reason": "cooldown"
+    },
+    {
+      "id": "2609bc49f546",
+      "reason": "cooldown"
+    }
+  ],
+  "v01_story_in_prompt": false,
+  "raw_fragment_in_prompt": false,
+  "co_occurrence_v01_first_drops_source": true,
+  "co_occurrence_source_first_drops_v01": true,
+  "multi_owned_count": 9,
+  "multi_owned_sample": {
+    "b62ea858673e": [
+      "V02",
+      "V50"
+    ],
+    "e06887bb8863": [
+      "V67",
+      "V13-B"
+    ],
+    "5f68143190b8": [
+      "V47-B",
+      "V71"
+    ],
+    "721f8c1682cd": [
+      "V47-B",
+      "V59"
+    ],
+    "bc72c550abb4": [
+      "V63",
+      "V52"
+    ]
+  },
+  "sample_shared_in_unique": false
+}

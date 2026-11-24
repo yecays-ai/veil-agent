@@ -1,10 +1,10 @@
 {
-  "drill_time": "2026-11-24 09:41:28",
+  "drill_time": "2026-11-24 10:12:33",
   "environment": "real isolated Ombre resident process, real socket port, real ShadowSync reconciliation",
   "steps": {
     "1_ombre_startup": {
       "status": "PASS",
-      "port": 62083,
+      "port": 57499,
       "tool_count": 16
     },
     "2_full_reconciliation": {
@@ -15,12 +15,16 @@
     },
     "3_consistency_backup": {
       "status": "PASS",
-      "backup_sha256": "dd37ea0de19cf43ce37d6582fd3da10e9ee842911a9da3b1fbcec047593d788a",
+      "backup_sha256": "ffe2d60fa80ad8d22ffcd6c9e6a9a3e8ef8fb9de7f3d8cbbc5a149b2fd0ff23f",
       "bytes": 4390912
     },
     "4_cutover_and_freeze": {
       "status": "PASS",
-      "canary_id": "55c43fd872c6",
+      "canary_id": "d26049d5e2a0",
+      "old_service_safely_stopped": true,
+      "old_port_closed": true,
+      "direct_ombre_write_rejected": true,
+      "rejection_evidence": "URLError(TimeoutError('timed out'))",
       "vault_unmodified": true
     },
     "5_discrepancy_abort": {
