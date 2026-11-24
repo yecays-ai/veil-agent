@@ -60,13 +60,16 @@ class BrainAuthority:
                 if isinstance(merged, str) and merged != memory_id:
                     brain_writer.merge_into(connection, merged, memory_id, 'hold merge')
         else:
+            # P2-C: Brain is the write authority; free tags are not generated here.
+            # domain/tags from callers are silently dropped so that Brain never accumulates
+            # free-text tags.  category defaults to 'unclassified'; governance runs separately.
             record = {'body': content, 'title': args.get('title') or '',
                       'type': args.get('type') or 'dynamic',
                       'importance': args.get('importance') or 5,
                       'why_remembered': args.get('why_remembered') or '',
                       'meaning': args.get('meaning') or '',
-                      'domain': _split(args.get('domain')),
-                      'tags': _split(args.get('tags'))}
+                      'domain': [],
+                      'tags': []}
             result = brain_writer.create_memory(connection, record, embedder=embedder)
             memory_id = result['memory_id']
         link_to = args.get('link_to')

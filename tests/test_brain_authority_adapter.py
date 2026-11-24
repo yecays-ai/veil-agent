@@ -56,5 +56,20 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+    def test_hold_does_not_write_free_tags_to_brain(self):
+        """P2-C review: Brain write authority must never persist caller-supplied free tags."""
+        text = self.authority.call('hold', {'content': 'body', 'title': 'T',
+                                            'tags': 'foo,bar', 'domain': 'work'}, embedder=None)
+        memory_id = text.split('→')[1]
+        connection = sqlite3.connect(self.db)
+        try:
+            row = connection.execute('SELECT tags_json,domain_json FROM memories WHERE id=?',
+                                     (memory_id,)).fetchone()
+            self.assertEqual(row[0], '[]', 'Brain must not store free tags supplied by caller')
+            self.assertEqual(row[1], '[]', 'Brain must not store domain tags supplied by caller')
+        finally:
+            connection.close()
+
+
 if __name__ == '__main__':
     unittest.main()

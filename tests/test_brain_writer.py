@@ -63,10 +63,18 @@ class WriterTests(unittest.TestCase):
         try:
             created = brain_writer.create_memory(connection, {'body': 'secret body', 'title': 'S'},
                                                  embedder=lambda _: vector())
+            # Trigger a state change so a sidecar_event row exists before hard delete.
+            brain_writer.set_state(connection, created['memory_id'], hidden=True)
+            self.assertGreater(
+                connection.execute('SELECT COUNT(*) FROM sidecar_events').fetchone()[0], 0)
             brain_writer.hard_delete(connection, created['memory_id'], 'test reason')
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM memories').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM vectors').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM versions').fetchone()[0], 0)
+            # P2-A review: sidecar_events must also be cleared.
+            self.assertEqual(
+                connection.execute('SELECT COUNT(*) FROM sidecar_events').fetchone()[0], 0,
+                'hard_delete must erase sidecar_events rows for the deleted memory')
             row = connection.execute('SELECT memory_id,deleted_at,reason_hash FROM tombstones').fetchone()
             self.assertEqual(row[0], created['memory_id'])
             self.assertNotIn('secret', json.dumps(row, ensure_ascii=False))

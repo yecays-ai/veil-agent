@@ -229,6 +229,15 @@ def hard_delete(connection, memory_id, reason=''):
         connection.execute('DELETE FROM sources WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM quotes WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM sidecar_state WHERE memory_id=?', (memory_id,))
+        # P2-A review: also clear sidecar event log and event-memory association so
+        # no sensitive content or linkage survives a hard delete.
+        connection.execute('DELETE FROM sidecar_events WHERE memory_id=?', (memory_id,))
+        try:
+            # events table may reference this memory; clear the mapping without touching
+            # the event story itself (which may link to other memories).
+            connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+        except Exception:
+            pass  # table absent in older schemas; skip silently
         connection.execute('DELETE FROM memories WHERE id=?', (memory_id,))
         connection.execute('INSERT OR REPLACE INTO tombstones(memory_id,deleted_at,reason_hash) '
                            'VALUES(?,?,?)', (memory_id, now(), _sha(reason)[:16]))
