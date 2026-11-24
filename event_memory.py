@@ -150,6 +150,7 @@ class EventMemory:
         self.cost_category = cost_category
         self.daily_cap = Decimal(str(daily_cap)) if daily_cap is not None else None
         self._model_budget_blocked = False
+        self._last_projection_pending = False
         raw = settings if isinstance(settings, dict) else {}
         self.settings = dict(DEFAULTS)
         for key, default in DEFAULTS.items():
@@ -603,7 +604,7 @@ class EventMemory:
         return {'event_id': event['event_id'], 'title': event.get('title') or title,
                 'memory_id': event.get('memory_id'), 'updated': updated, 'changed': changed,
                 'locked': locked, 'confidence': confidence, 'story_pending': story_pending,
-                'story_source': story_source,
+                'index_pending': self._last_projection_pending, 'story_source': story_source,
                 'at': stage['at'], 'at_known': stage['at_known'], 'saved_at': stage['saved_at'],
                 'source': stage.get('source'), 'stage_id': stage_id}
 
@@ -1217,6 +1218,7 @@ class EventMemory:
                     return None, False, False
             result = self.memory.call('hold', args, write_operation=operation) if operation else \
                 self.memory.call('hold', args)
+            self._last_projection_pending = '检索索引待重试' in str(result)
             new_id = self.memory.created_id(result)
             try:
                 self.memory.record_native(args, result)
@@ -1236,7 +1238,8 @@ class EventMemory:
                 'memory_id': memory_id, 'fields': ['content'],
                 'operation_reason': '事件故事重写', 'why_remembered': '', 'old_content': old})
         try:
-            self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
+            result = self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
+            self._last_projection_pending = '检索索引待重试' in str(result)
         except Exception:
             return memory_id, False, False
         try:

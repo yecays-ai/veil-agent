@@ -55,6 +55,15 @@ class ExportTests(unittest.TestCase):
         result = veil_brain.run_import(out, reimported)
         self.assertEqual(len(result.rows), 1)
         self.assertEqual(len(result.versions), 1)
+        source = sqlite3.connect(str(self.db))
+        copy = sqlite3.connect(str(reimported))
+        try:
+            left = source.execute('SELECT id,title,body,importance,type,body_sha256 FROM memories').fetchall()
+            right = copy.execute('SELECT id,title,body,importance,type,body_sha256 FROM memories').fetchall()
+        finally:
+            source.close()
+            copy.close()
+        self.assertEqual(left, right)
 
 
 if __name__ == '__main__':

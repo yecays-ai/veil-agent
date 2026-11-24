@@ -358,10 +358,11 @@ def ombre_model_tokens(content, *, worst_case=False):
 
 
 @contextmanager
-def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
+def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None, env_root=None):
     from dotenv import dotenv_values
     from ombre_resident import mark_ready, start_or_connect
     root = Path(root)
+    env_root = Path(env_root) if env_root is not None else root
     resident = None
     backend = None
     try:
@@ -378,7 +379,7 @@ def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
         needs_local_model = (ombre_model_on(cfg)
                              and 'OMBRE_COMPRESS_API_KEY' not in api_key_overrides)
         if needs_local_embed or needs_local_model:
-            local_keys = dotenv_values(root / '.env', interpolate=False,
+            local_keys = dotenv_values(env_root / '.env', interpolate=False,
                                        encoding='utf-8-sig')
         if settings.get('embedding_enabled', True):
             key = api_key_overrides.get('OMBRE_EMBED_API_KEY',
@@ -397,7 +398,8 @@ def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None):
             if not model_key or not model_key.strip():
                 raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
         port, token, resident = start_or_connect(
-            root, cfg, data_root=data_root, api_key_overrides=api_key_overrides)
+            root, cfg, data_root=data_root, api_key_overrides=api_key_overrides,
+            env_root=env_root)
     except UserError:
         raise
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
@@ -498,8 +500,9 @@ class Memory:
         self.shadow = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
-        budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
-                                    'memory-extraction'})
+        if budget is not None:
+            budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
+                                        'memory-extraction'})
         try:
             self.state = states[-1]['state'] if states else {'entries': {}, 'sources': {}}
             if not isinstance(self.state, dict):
@@ -559,7 +562,11 @@ class Memory:
         except Exception as exc:
             raise UserError('开场记忆读取失败，请保留记忆库后重开。') from exc
         self.persist()
-        erased = self.erase_deleted()
+        if (getattr(self, 'brain_authority', None) is not None
+                and self.brain_authority.freeze_path.exists()):
+            erased = []
+        else:
+            erased = self.erase_deleted()
         if erased:
             self.messages.put(f'已彻底抹掉 {len(erased)} 条之前删除的记忆。')
 
@@ -691,7 +698,7 @@ class Memory:
         self.finish_write(operation_id, status, error=exc)
         return status
 
-    def call(self, name, args, *, write_operation=None):
+    def call(self, name, args, *, write_operation=None, legacy=False):
         authority = getattr(self, 'brain_authority', None)
         reservation = None
         model_reservation = None
@@ -735,7 +742,7 @@ class Memory:
                 self.finish_write(write_operation, 'not_submitted')
             raise
         try:
-            if authority is not None and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
+            if authority is not None and not legacy and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
                 try:
                     embedder = self.embedder() if callable(getattr(self, 'embedder', None)) else None
                 except Exception:
@@ -1296,8 +1303,9 @@ class Memory:
             try:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
-                return bool(not row or row.get('is_hidden') or row.get('is_tombstone')
-                            or row.get('is_deleted') or row.get('type') == 'archived')
+                return bool(not row or row.get('is_hidden') or row.get('dont_surface')
+                            or row.get('is_tombstone') or row.get('is_deleted')
+                            or row.get('type') == 'archived')
             except Exception:
                 return True
         return memory_id in self.hidden_ids()
@@ -1335,7 +1343,9 @@ class Memory:
         if getattr(self, '_embedder', None) is None:
             from dotenv import dotenv_values
             from recall_relevance import QueryEmbedder
-            key = dotenv_values(Path(__file__).resolve().parent / '.env', interpolate=False,
+            from runtime_env import env_file
+            # P2-B: read this instance's config root, never the production .env beside the code.
+            key = dotenv_values(env_file(getattr(self, 'cfg', None)), interpolate=False,
                                 encoding='utf-8-sig').get('EMBED_API_KEY')
             if not key or not key.strip():
                 raise UserError('missing EMBED_API_KEY')
@@ -1362,9 +1372,10 @@ class Memory:
                 embedder = self.embedder()
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
-                reservation = self.budget.estimate(
-                    self.cfg.id, self.cfg.memory['model'], tokens, rate)
-                settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
+                if getattr(self, 'budget', None) is not None:
+                    reservation = self.budget.estimate(
+                        self.cfg.id, self.cfg.memory['model'], tokens, rate)
+                    settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
                 try:
                     text, meta = brain_retrieval_search(
                         brain_db, query, limit=asked, embedder=embedder,
@@ -1372,7 +1383,7 @@ class Memory:
                     reported = getattr(embedder, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
                         amount = Decimal(reported) * rate / Decimal(1_000_000)
-                        if amount <= reservation[1]:
+                        if reservation is not None and amount <= reservation[1]:
                             usage_tokens, settled_amount = reported, amount
                             accounting = 'embedding-usage'
                 finally:
@@ -1389,10 +1400,16 @@ class Memory:
                                                        'fallback': type(exc).__name__}
                 try:
                     self.store.append(self.diagnostics, {
-                        'time': self.budget.clock(), 'code': 'brain_retrieval_fallback',
+                        'time': self.budget.clock() if getattr(self, 'budget', None) else '',
+                        'code': 'brain_retrieval_fallback',
                         'error_type': type(exc).__name__})
                 except Exception:
                     pass
+        if getattr(self, 'brain_authority', None) is not None:
+            # Never route the fallback back into Brain; go straight to the legacy backend, but keep
+            # the same budget lifecycle as a normal breath_search (no unaccounted paid call).
+            return self.call('breath_search', {
+                'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked}, legacy=True)
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
 
@@ -2304,13 +2321,17 @@ class Memory:
         Only runs after Ombre confirmed the delete: a file still outside archive/
         means the delete did not land, so nothing is erased."""
         if getattr(self, 'brain_authority', None) is not None:
+            from brain_lock import write_lock
             import sqlite3
             import brain_writer
-            connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
-            try:
-                brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
-            finally:
-                connection.close()
+            with write_lock(self.store, self.cfg.id):
+                if self.brain_authority.freeze_path.exists():
+                    raise RuntimeError('memory writes are frozen for cutover')
+                connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
+                try:
+                    brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
+                finally:
+                    connection.close()
         else:
             files = list(self._bucket_files(memory_id))
             if any(not in_archive for _, in_archive in files):

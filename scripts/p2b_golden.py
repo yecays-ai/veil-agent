@@ -31,7 +31,7 @@ def main(argv=None):
     parser.add_argument('--db', required=True)
     parser.add_argument('--tools', required=True)
     parser.add_argument('--diagnostics', required=True)
-    parser.add_argument('--env-file', default=str(ROOT / '.env'))
+    parser.add_argument('--env-file', default=None)
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     old = {}
@@ -42,7 +42,7 @@ def main(argv=None):
     for row in read(args.tools):
         if row.get('tool') == 'breath_search' and row.get('state') == '成功' and row.get('request_id') in old:
             queries.setdefault(row['request_id'], row.get('path'))
-    values = dotenv_values(args.env_file, interpolate=False, encoding='utf-8-sig')
+    values = dotenv_values(args.env_file, interpolate=False, encoding='utf-8-sig') if args.env_file else {}
     key = (values.get('EMBED_API_KEY') or '').strip()
     embedder = QueryEmbedder('https://api.siliconflow.cn/v1', 'BAAI/bge-m3', key) if key else None
     items, hits = [], 0

@@ -96,6 +96,36 @@ class WriterTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_hard_delete_old_schema_without_event_tables(self):
+        connection = self.connect()
+        try:
+            created = brain_writer.create_memory(connection, {'body': 'old schema'}, embedder=None)
+            for table in ('sidecar_events', 'event_sources', 'event_stages', 'events'):
+                connection.execute('DROP TABLE IF EXISTS %s' % table)
+            connection.commit()
+            brain_writer.hard_delete(connection, created['memory_id'], 'old schema')
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM memories').fetchone()[0], 0)
+        finally:
+            connection.close()
+
+    def test_hard_delete_keeps_shared_event_and_updates_source_count(self):
+        connection = self.connect()
+        try:
+            first = brain_writer.create_memory(connection, {'body': 'one'}, embedder=None)
+            second = brain_writer.create_memory(connection, {'body': 'two'}, embedder=None)
+            connection.execute("INSERT INTO events(event_id,memory_id,source_count) VALUES('e1',?,2)",
+                               (first['memory_id'],))
+            connection.execute("INSERT INTO event_sources(event_id,ord,memory_id) VALUES('e1',0,?)",
+                               (first['memory_id'],))
+            connection.execute("INSERT INTO event_sources(event_id,ord,memory_id) VALUES('e1',1,?)",
+                               (second['memory_id'],))
+            connection.commit()
+            brain_writer.hard_delete(connection, first['memory_id'], 'shared')
+            self.assertEqual(connection.execute('SELECT source_count FROM events WHERE event_id="e1"').fetchone()[0], 1)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM event_sources WHERE event_id="e1"').fetchone()[0], 1)
+        finally:
+            connection.close()
+
     def test_pending_vector_retry_is_idempotent(self):
         connection = self.connect()
         try:

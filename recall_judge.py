@@ -178,7 +178,9 @@ class RecallJudge:
         from dotenv import dotenv_values
         from pathlib import Path
         from recall_relevance import QueryEmbedder
-        key = dotenv_values(Path(__file__).resolve().parent / '.env', interpolate=False,
+        from runtime_env import env_file
+        # P2-B: same instance-scoped key as Memory.embedder(); never the repository .env in a test instance.
+        key = dotenv_values(env_file(self.memory.cfg), interpolate=False,
                             encoding='utf-8-sig').get('EMBED_API_KEY')
         if not key or not key.strip():
             raise JudgeFailed('no_embedding_key')

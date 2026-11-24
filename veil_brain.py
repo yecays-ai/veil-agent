@@ -311,6 +311,10 @@ class BrainImport:
         if not path.exists():
             self.warnings.append('events.jsonl missing')
             return
+        # events.jsonl is append-only: later rows update an existing event. Fold by event_id
+        # (last row wins) before inserting, otherwise the live log's update rows break the
+        # legacy events primary key. brain_events.import_events already upserts the same way.
+        folded = {}
         for line in path.read_text(encoding='utf-8').splitlines():
             if not line.strip():
                 continue
@@ -330,10 +334,11 @@ class BrainImport:
                 except ValueError:
                     sources = []
             sources = [str(item) for item in sources] if isinstance(sources, list) else []
-            self.events += 1
-            self.event_sources += len(sources)
-            self.event_rows.append({'event_id': event_id, 'memory_id': row.get('memory_id'),
-                                    'sources': sources})
+            folded[event_id] = {'event_id': event_id, 'memory_id': row.get('memory_id'),
+                                'sources': list(dict.fromkeys(sources))}
+        self.event_rows = list(folded.values())
+        self.events = len(self.event_rows)
+        self.event_sources = sum(len(row['sources']) for row in self.event_rows)
 
     def read_vectors(self):
         path = self.source / 'memory' / 'embeddings.db'
@@ -494,7 +499,7 @@ class BrainImport:
     def _canonical_digest(connection):
         parts = []
         for table in ('memories', 'versions', 'sidecar_events', 'sidecar_state', 'relations',
-                      'sources', 'quotes', 'vectors', 'events', 'event_sources'):
+                      'sources', 'quotes', 'vectors', 'events', 'event_sources', 'event_stages'):
             columns = [row[1] for row in connection.execute('PRAGMA table_info(%s)' % table)]
             rows = connection.execute('SELECT * FROM %s ORDER BY %s' %
                                       (table, ', '.join(columns))).fetchall()
@@ -651,7 +656,7 @@ def canonical_digest(connection):
     """Deterministic fingerprint of every stored row; used by import and by check."""
     parts = []
     for table in ('memories', 'versions', 'sidecar_events', 'sidecar_state', 'relations',
-                  'sources', 'quotes', 'vectors', 'events', 'event_sources'):
+                  'sources', 'quotes', 'vectors', 'events', 'event_sources', 'event_stages'):
         columns = [row[1] for row in connection.execute('PRAGMA table_info(%s)' % table)]
         rows = connection.execute('SELECT * FROM %s ORDER BY %s' %
                                   (table, ', '.join(columns))).fetchall()
@@ -705,6 +710,12 @@ def run_import(source, db_path, snapshot=None, report=None):
             import brain_events
             brain_events.import_events(connection, events_path, stages_path)
         importer.verify(connection, before)
+        # P2-A: the digest must cover the full event payload/stages imported above, otherwise
+        # check_db reports digest_ok=false on a freshly migrated database and backups look corrupt.
+        importer.digest = canonical_digest(connection)
+        connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('digest', ?)",
+                           (importer.digest,))
+        connection.commit()
     finally:
         connection.close()
     importer.write_snapshot()

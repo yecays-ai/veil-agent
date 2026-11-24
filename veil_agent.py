@@ -721,6 +721,8 @@ class Character:
     persona_path: str = None
     # Ticket 394: Lan's own persona, separate from Peter's notes about her.
     user_persona: dict = None
+    # P2-B: the config/secret root of this instance; None means the repository root (normal launch).
+    root: str = None
 
 
 def positive_int(value):
@@ -1165,7 +1167,7 @@ def load_character(root, character_id):
                          background_provider=background_provider, models=models,
                          tool_aliases=tool_aliases, executor=executor,
                          context={'work_checkpoint': keep_checkpoint},
-                         user_persona=user_persona)
+                         user_persona=user_persona, root=str(root))
     except UserError:
         raise
     except SettingsError as exc:

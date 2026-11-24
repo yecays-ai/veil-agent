@@ -40,6 +40,21 @@ def ensure_schema(connection):
     connection.commit()
 
 
+def refresh_digest(connection):
+    """Keep the stored whole-db digest current after an authority write.
+
+    check_db()/the cutover snapshot compare meta.digest with the actual rows; a live authority
+    database must not look "corrupt" merely because a memory was saved after the import.
+    """
+    try:
+        from veil_brain import canonical_digest
+        connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('digest', ?)",
+                           (canonical_digest(connection),))
+        connection.commit()
+    except Exception:
+        pass
+
+
 def new_id(connection):
     for _ in range(20):
         memory_id = uuid.uuid4().hex[:12]
@@ -117,6 +132,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
                 (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)), now(), _sha(body)))
         _journal(connection, 'create', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -164,6 +180,7 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
             connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
         _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -203,6 +220,7 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
                                                    'archived': archived, 'deleted': deleted,
                                                    'reason_hash': _sha(reason)[:16]}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -210,10 +228,12 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
 
 
 def _sidecar(connection, memory_id, kind, raw=None):
+    payload = {'memory_id': memory_id, 'kind': kind}
+    if isinstance(raw, dict):
+        payload.update(raw)
     connection.execute('INSERT INTO sidecar_events(memory_id,kind,time,raw_json) VALUES(?,?,?,?)',
                        (memory_id, kind, now(),
-                        json.dumps(raw or {'memory_id': memory_id, 'kind': kind},
-                                   ensure_ascii=False, sort_keys=True)))
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True)))
 
 
 def hard_delete(connection, memory_id, reason=''):
@@ -223,21 +243,24 @@ def hard_delete(connection, memory_id, reason=''):
         return {'status': 'missing', 'memory_id': memory_id}
     try:
         connection.execute('BEGIN IMMEDIATE')
-        connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM versions WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM relations WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM sources WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM quotes WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM sidecar_state WHERE memory_id=?', (memory_id,))
-        # P2-A review: no sensitive content or linkage may survive a hard delete.
-        connection.execute('DELETE FROM sidecar_events WHERE memory_id=?', (memory_id,))
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in ('vectors', 'versions', 'relations', 'sources', 'quotes', 'sidecar_state',
+                      'sidecar_events'):
+            if table in tables:
+                connection.execute('DELETE FROM %s WHERE memory_id=?' % table, (memory_id,))
         if 'event_sources' in tables:
             affected = [row[0] for row in connection.execute(
                 'SELECT DISTINCT event_id FROM event_sources WHERE memory_id=?', (memory_id,))]
             connection.execute('DELETE FROM event_sources WHERE memory_id=?', (memory_id,))
-            connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+            if 'events' in tables:
+                connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+                if affected:
+                    marks = ','.join('?' * len(affected))
+                    connection.execute(
+                        'UPDATE events SET source_count=(SELECT COUNT(*) FROM event_sources '
+                        'WHERE event_sources.event_id=events.event_id) WHERE event_id IN (%s)' % marks,
+                        affected)
             for event_id in affected:
                 remaining = connection.execute(
                     'SELECT COUNT(*) FROM event_sources WHERE event_id=?', (event_id,)).fetchone()[0]
@@ -245,12 +268,17 @@ def hard_delete(connection, memory_id, reason=''):
                     continue
                 if 'event_stages' in tables:
                     connection.execute('DELETE FROM event_stages WHERE event_id=?', (event_id,))
-                connection.execute('DELETE FROM events WHERE event_id=?', (event_id,))
+                if 'events' in tables:
+                    connection.execute('DELETE FROM events WHERE event_id=?', (event_id,))
+        elif 'events' in tables:
+            # Older Brain schemas have the event table but no source table.
+            connection.execute('DELETE FROM events WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM memories WHERE id=?', (memory_id,))
         connection.execute('INSERT OR REPLACE INTO tombstones(memory_id,deleted_at,reason_hash) '
                            'VALUES(?,?,?)', (memory_id, now(), _sha(reason)[:16]))
         _journal(connection, 'hard_delete', memory_id, {'reason_hash': _sha(reason)[:16]}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -276,11 +304,16 @@ def merge_into(connection, source_id, target_id, reason=''):
     try:
         connection.execute('BEGIN IMMEDIATE')
         connection.execute("UPDATE memories SET bucket='archive',type='archived' WHERE id=?", (source_id,))
+        connection.execute(
+            "INSERT INTO sidecar_state(memory_id,locked,links_json,sources_json,merged_into) "
+            "VALUES(?,0,'[]','[]',?) ON CONFLICT(memory_id) DO UPDATE SET merged_into=excluded.merged_into",
+            (source_id, target_id))
         _sidecar(connection, source_id, 'merged', raw={'memory_id': source_id, 'kind': 'merged',
                                                        'merged_into': target_id,
                                                        'reason_hash': _sha(reason)[:16]})
         _journal(connection, 'merge', source_id, {'target': target_id}, 'saved')
         connection.commit()
+        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
@@ -306,6 +339,8 @@ def retry_pending_vectors(connection, embedder):
             saved += 1
         except Exception:
             continue
+    if saved:
+        refresh_digest(connection)
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}
 
 
@@ -338,3 +373,4 @@ def link(connection, memory_id, target_id):
     _sidecar(connection, memory_id, 'link', raw={'memory_id': memory_id, 'kind': 'link',
                                                 'to': target_id})
     connection.commit()
+    refresh_digest(connection)

@@ -93,6 +93,14 @@ class BrainRetrievalTests(unittest.TestCase):
         text, meta = self.search('我们因为记忆吵架')
         self.assertEqual(meta['ids'][0], 'fight')
 
+    def test_plain_embed_function_is_accepted(self):
+        # P2-B: BrainAuthority's writer boundary passes embedder.embed, so retrieval must accept
+        # either the provider object or the bare function.
+        text, meta = brain_retrieval.search_text(self.db, '她最喜欢的颜色',
+                                                embedder=self.embedder.embed)
+        self.assertEqual(meta['ids'][0], 'blue')
+        self.assertIn('[bucket_id:blue]', text)
+
     def test_hidden_tombstone_and_archived_never_enter_results(self):
         text, _ = self.search('蓝色 吵架 墓碑 隐藏 归档 记忆')
         self.assertIn('[bucket_id:blue]', text)

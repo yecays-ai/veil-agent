@@ -1,18 +1,22 @@
-# P2-A 自审（2026-11-24）
+# P2-A 自审（2026-11-24 收尾）
 
-## 已完成（隔离/单测）
+## 已完成（隔离/实机/单测）
 
-- 事件 69 故事 / 69 阶段入库；未知字段 payload_json；迁移幂等。
-- 事务写入三态、版本、向量 pending 重试、合并、备份/恢复。
-- 硬删除已补齐：清 sidecar_events、event_sources、受影响事件/阶段；只留最小 tombstone；
-  SQLite 异常不再被吞掉。
-- 同 ID 导出回导 0 problems；authority/shadow 互斥。
-- 测试：`test_brain_*.py` 60 条通过；memory panel 8 条通过。
+- 事件完整入库：隔离快照 287 记忆、72 事件、73 阶段、284 版本、171 sidecar、248 向量、关系/来源/原话；
+  逐字段对账 0 mismatch，digest/integrity 通过。证据：仓库外 `p2-439/iso/evidence/data/migration-verification.json`。
+- 迁移健壮性：events.jsonl 的追加更新行按 event_id 折叠（旧实现会撞 PRIMARY KEY）；完整事件迁移后
+  重算 digest，并把 event_stages 纳入 digest。新增回归测试。
+- 三态反馈：embedding 失败返回 `saved_index_pending` 并在正文提示“检索索引待重试”，事件层也转述该提示；
+  恢复 embedder 后 pending 重试为 ready。写入失败抛出且无半条记录。
+- 写入矩阵/可见性/硬删/合并/锁定/归档/导出/备份恢复/互斥均通过隔离验收；硬删只留最小 tombstone。
+- `test_brain_*.py` 78 条通过。
 
 ## 未完成/限制
 
-- 未在仓库提交任何真实聊天、真实记忆正文；真实环境证据不落仓库。
-- 未执行正式切换；`write_authority` 默认关闭。
-- 未单独跑真实聊天循环；P2-B 才做读取/切换验收。
+- 未执行正式切换；`write_authority` 默认仍关闭。
+- 正式 `.env` 的 `EMBED_API_KEY` 当前 401（外部凭据）；隔离验收使用本机备份 `.env` 的可用 key，只留在仓库外。
+- 真实聊天样本与真实记忆正文不提交仓库。
 
-结论：P2-A 存储与写入在隔离环境通过；正式切换与 Lan 体验验收未做。
+## 结论
+
+P2-A 的隔离存储、事件、写入、导出与备份恢复验收已完成；正式切换与 Lan 的正式体验验收不在本单。

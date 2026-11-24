@@ -87,6 +87,16 @@ class NativeHoldAuthorityTests(unittest.TestCase):
         detail = events.detail(event_id)
         self.assertTrue(detail and detail.get('story'))
 
+    def test_panel_read_api_shape_matches_frontend(self):
+        panel = self.tools.panel_entries()
+        self.assertEqual(set(panel), {'items', 'recent_requests'})
+        item = next(row for row in panel['items'] if row['memory_id'] == self.target)
+        for key in ('memory_id', 'title', 'created', 'kind', 'domain', 'tags', 'importance',
+                    'why', 'body', 'locked', 'links', 'sources'):
+            self.assertIn(key, item)
+        self.assertEqual(self.tools.panel_versions(self.target), [])
+        self.assertEqual(self.tools.panel_archived(), [])
+
     def test_panel_lock_edit_and_delete_work_against_brain(self):
         self.assertIn(self.target, self.tools._visible_records())
         ok, _ = self.tools.panel_lock(self.target, True)

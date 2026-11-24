@@ -137,6 +137,24 @@ class BrainImportTests(unittest.TestCase):
         self.assertEqual(veil_brain.check_db(self.db)['digest'],
                          veil_brain.check_db(second_db)['digest'])
 
+    def test_append_only_event_updates_fold_to_one_row(self):
+        """The live events.jsonl appends an update row for the same event; import must keep the last."""
+        with (self.source / 'events.jsonl').open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'event_id': 'E1', 'memory_id': 'm1',
+                                     'title': 'Updated fixture event',
+                                     'source_memory_ids': ['m1', 'm1']},
+                                    ensure_ascii=False) + '\n')
+        importer = veil_brain.run_import(self.source, self.db)
+        self.assertEqual(importer.problems, [])
+        self.assertEqual(importer.counts['events'], 1)
+        self.assertEqual(importer.counts['event_sources'], 1)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM events WHERE event_id=?', ('E1',)).fetchone()[0], 1)
+        finally:
+            connection.close()
+
     def test_db_is_portable_to_another_directory(self):
         first = self.import_once()
         portable = self.root / 'elsewhere'

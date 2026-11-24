@@ -20,6 +20,7 @@ class BrainStore:
         self.role = role
         self.db_path = Path(db_path)
         self.root = base.root
+        self.freeze_path = Path(base.root) / role / 'brain-write-freeze'
 
     def __getattr__(self, name):
         return getattr(self.base, name)
@@ -30,7 +31,18 @@ class BrainStore:
         brain_events.ensure_schema(connection)
         return connection
 
+    def _read_connect(self):
+        """Reads never write schema: a locked/read-only brain.db must degrade, not stop the chat."""
+        return sqlite3.connect('file:%s?mode=ro' % self.db_path, uri=True, timeout=30)
+
     def append(self, path, row):
+        from brain_lock import write_lock
+        with write_lock(self.base, self.role):
+            return self._append(path, row)
+
+    def _append(self, path, row):
+        if self.freeze_path.exists():
+            raise RuntimeError('memory writes are frozen for cutover')
         name = str(path).replace('\\', '/')
         if name == '%s/memory-versions.jsonl' % self.role:
             return self._append_version(row)
@@ -46,6 +58,7 @@ class BrainStore:
                                    (row.get('request_id'), row.get('memory_id'), row.get('reason'),
                                     row.get('status'), row.get('created_at'), raw))
                 connection.commit()
+                brain_writer.refresh_digest(connection)
             finally:
                 connection.close()
             return None
@@ -53,6 +66,7 @@ class BrainStore:
             connection = self._connect()
             try:
                 brain_events.upsert_event(connection, dict(row))
+                brain_writer.refresh_digest(connection)
             finally:
                 connection.close()
             return None
@@ -60,6 +74,7 @@ class BrainStore:
             connection = self._connect()
             try:
                 brain_events.upsert_stage(connection, dict(row))
+                brain_writer.refresh_digest(connection)
             finally:
                 connection.close()
             return None
@@ -113,11 +128,12 @@ class BrainStore:
                  row.get('why_remembered') or '', json.dumps(row.get('fields') or []),
                  old, brain_writer._sha(old) if isinstance(old, str) else None))
             connection.commit()
+            brain_writer.refresh_digest(connection)
         finally:
             connection.close()
 
     def _read_versions(self):
-        connection = self._connect()
+        connection = self._read_connect()
         try:
             return [{'memory_id': row[0], 'time': row[1], 'operation_reason': row[2],
                      'why_remembered': row[3], 'fields': json.loads(row[4] or '[]'),
@@ -153,11 +169,12 @@ class BrainStore:
                     "VALUES(?,0,'[]','[]',?) ON CONFLICT(memory_id) DO UPDATE SET merged_into=excluded.merged_into",
                     (memory_id, row['to']))
             connection.commit()
+            brain_writer.refresh_digest(connection)
         finally:
             connection.close()
 
     def _read_sidecar(self):
-        connection = self._connect()
+        connection = self._read_connect()
         try:
             rows = []
             for raw in connection.execute('SELECT raw_json FROM sidecar_events ORDER BY seq'):

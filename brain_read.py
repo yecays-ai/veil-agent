@@ -72,10 +72,14 @@ class BrainRead:
                  'versions': row['versions']} for row in rows]
 
     def archived(self, limit=100):
-        return [{'memory_id': row['id'], 'title': row['title'] or row['id'], 'time': row['created']}
-                for row in self.connection.execute(
-                    "SELECT id,title,created FROM memories WHERE bucket='archive' "
-                    'AND is_tombstone=0 AND is_deleted=0 ORDER BY created DESC LIMIT ?', (limit,))]
+        rows = self.connection.execute(
+            "SELECT m.id, m.title, m.created, m.body, s.merged_into "
+            "FROM memories m LEFT JOIN sidecar_state s ON s.memory_id=m.id "
+            "WHERE m.bucket='archive' AND m.is_tombstone=0 AND m.is_deleted=0 "
+            'ORDER BY m.created DESC LIMIT ?', (limit,)).fetchall()
+        return [{'memory_id': row['id'], 'title': row['title'] or row['id'],
+                 'created': row['created'], 'body': row['body'] or '',
+                 'merged_into': row['merged_into']} for row in rows]
 
     def all_vectors(self):
         import array

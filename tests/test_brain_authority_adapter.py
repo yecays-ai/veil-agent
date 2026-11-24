@@ -28,11 +28,78 @@ class AuthorityTests(unittest.TestCase):
 
     def test_hold_creates_and_returns_ombre_id_shape(self):
         text = self.authority.call('hold', {'content': 'body', 'title': 'T'}, embedder=None)
-        self.assertRegex(text, r'^新建→[0-9a-f]{12}$')
-        memory_id = text.split('→')[1]
+        self.assertRegex(text, r'^新建→[0-9a-f]{12}')
+        self.assertIn('检索索引待重试', text)
+        memory_id = text.split('→')[1].split('（')[0]
         connection = sqlite3.connect(self.db)
         self.assertEqual(connection.execute('SELECT body FROM memories WHERE id=?', (memory_id,)).fetchone()[0], 'body')
         connection.close()
+
+    def test_hold_accepts_embedder_object_and_indexes_it(self):
+        class Embedder:
+            def __init__(self):
+                self.seen = []
+
+            def embed(self, text):
+                self.seen.append(text)
+                return [0.25] * 1024
+
+        embedder = Embedder()
+        text = self.authority.call('hold', {'content': 'object embedder body', 'title': 'T'},
+                                   embedder=embedder)
+        memory_id = text.split('→')[1]
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute(
+                'SELECT vector_state FROM memories WHERE id=?', (memory_id,)).fetchone()[0], 'ready')
+            self.assertIsNotNone(connection.execute(
+                'SELECT vector FROM vectors WHERE memory_id=?', (memory_id,)).fetchone())
+        finally:
+            connection.close()
+        self.assertEqual(embedder.seen, ['object embedder body'])
+
+    def test_index_failure_is_reported_and_retried_on_next_write(self):
+        """P2-A: a failed embedding is saved_index_pending, never reported as fully saved, and is
+        retried once an embedder works again."""
+        class Broken:
+            def embed(self, _text):
+                raise RuntimeError('embedding down')
+
+        text = self.authority.call('hold', {'content': 'pending body', 'title': 'P'}, embedder=Broken())
+        self.assertIn('检索索引待重试', text)
+        memory_id = text.split('→')[1].split('（')[0]
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute(
+                'SELECT vector_state FROM memories WHERE id=?', (memory_id,)).fetchone()[0], 'pending')
+        finally:
+            connection.close()
+        self.authority._last_pending_retry = 0.0
+        self.authority.call('hold', {'content': 'second body', 'title': 'S'},
+                            embedder=lambda _text: [0.3] * 1024)
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute(
+                'SELECT vector_state FROM memories WHERE id=?', (memory_id,)).fetchone()[0], 'ready')
+            self.assertIsNotNone(connection.execute(
+                'SELECT vector FROM vectors WHERE memory_id=?', (memory_id,)).fetchone())
+        finally:
+            connection.close()
+
+    def test_breath_search_accepts_embedder_object(self):
+        """Regression: call() used to pass embedder.embed (a function) into brain_retrieval,
+        which requires the object's .embed(), so active recall fell back to Ombre."""
+        class Embedder:
+            def embed(self, text):
+                return [0.5] * 1024
+
+        text = self.authority.call('hold', {'content': 'harbour bell memory', 'title': 'Harbour'},
+                                   embedder=Embedder())
+        memory_id = text.split('→')[1]
+        result = self.authority.call('breath_search', {'query': 'harbour bell', 'max_results': 5},
+                                     embedder=Embedder())
+        self.assertIn('[bucket_id:%s]' % memory_id, result)
+        self.assertIn('harbour bell memory', result)
 
     def test_trace_updates_and_soft_deletes(self):
         connection = sqlite3.connect(self.db)
@@ -47,6 +114,41 @@ class AuthorityTests(unittest.TestCase):
         connection = sqlite3.connect(self.db)
         self.assertEqual(connection.execute('SELECT is_deleted FROM memories').fetchone()[0], 1)
         connection.close()
+
+    def test_freeze_blocks_hold_and_unfreeze_restores(self):
+        brain_authority.freeze(self.store, 'fake')
+        try:
+            with self.assertRaises(RuntimeError):
+                self.authority.call('hold', {'content': 'frozen', 'title': 'F'}, embedder=None)
+        finally:
+            brain_authority.unfreeze(self.store, 'fake')
+        text = self.authority.call('hold', {'content': 'after thaw', 'title': 'T'}, embedder=None)
+        self.assertTrue(text.startswith('新建→'))
+
+    def test_hold_works_without_a_configured_budget(self):
+        from memory_agent import Memory
+        from veil_agent import Character, Store
+        import tempfile
+        from unittest.mock import Mock
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = Store(temp.name + '/data')
+        db = store.root / 'fake' / 'brain.db'
+        db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(str(db))
+        connection.executescript(veil_brain.SCHEMA)
+        brain_writer.ensure_schema(connection)
+        connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        settings = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
+                    'base_url': 'https://example.invalid/v1',
+                    'brain': {'write_authority': True, 'shadow': False}}
+        cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake', settings)
+        memory = Memory(cfg, store, None, Mock(), Mock())
+        self.addCleanup(memory.__exit__, None, None, None)
+        text = memory.call('hold', {'content': 'no budget', 'title': 'B'})
+        self.assertTrue(text.startswith('新建→'))
 
     def test_memory_call_uses_authority_before_ombre(self):
         calls = []
@@ -77,7 +179,7 @@ class AuthorityTests(unittest.TestCase):
         """P2-C review: Brain write authority must never persist caller-supplied free tags."""
         text = self.authority.call('hold', {'content': 'body', 'title': 'T',
                                             'tags': 'foo,bar', 'domain': 'work'}, embedder=None)
-        memory_id = text.split('→')[1]
+        memory_id = text.split('→')[1].split('（')[0]
         connection = sqlite3.connect(self.db)
         try:
             row = connection.execute('SELECT tags_json,domain_json FROM memories WHERE id=?',
@@ -86,6 +188,32 @@ class AuthorityTests(unittest.TestCase):
             self.assertEqual(row[1], '[]', 'Brain must not store domain tags supplied by caller')
         finally:
             connection.close()
+
+    def test_trace_merge_into_archives_the_source(self):
+        """P2-B merge must archive the duplicate, not treat it as a normal delete."""
+        connection = sqlite3.connect(self.db)
+        try:
+            target = brain_writer.create_memory(connection, {'body': 'merge target'}, embedder=None)
+            source = brain_writer.create_memory(connection, {'body': 'merge source'}, embedder=None)
+        finally:
+            connection.close()
+        text = self.authority.call('trace', {'bucket_id': source['memory_id'],
+                                             'merge_into': target['memory_id']})
+        self.assertIn('已归档', text)
+        connection = sqlite3.connect(self.db)
+        try:
+            bucket = connection.execute('SELECT bucket,type FROM memories WHERE id=?',
+                                        (source['memory_id'],)).fetchone()
+            raw = connection.execute('SELECT raw_json FROM sidecar_events WHERE memory_id=? AND kind=?',
+                                     (source['memory_id'], 'merged')).fetchone()[0]
+            state = connection.execute('SELECT merged_into FROM sidecar_state WHERE memory_id=?',
+                                       (source['memory_id'],)).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(bucket, ('archive', 'archived'))
+        self.assertEqual(state, target['memory_id'])
+        self.assertIn('"memory_id"', raw)
+        self.assertIn('"kind"', raw)
 
 
 if __name__ == '__main__':

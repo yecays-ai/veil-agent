@@ -39,6 +39,14 @@ class BrainStoreTests(unittest.TestCase):
         self.base = FakeStore(self.root)
         self.store = brain_store.BrainStore(self.base, 'fake', self.db)
 
+    def test_freeze_blocks_ledger_writes(self):
+        (self.root / 'fake').mkdir(exist_ok=True)
+        (self.root / 'fake' / 'brain-write-freeze').write_text('frozen', encoding='utf-8')
+        with self.assertRaises(RuntimeError):
+            self.store.append('fake/memory-versions.jsonl', {'memory_id': 'm1', 'old_content': 'x'})
+        (self.root / 'fake' / 'brain-write-freeze').unlink()
+        self.store.append('fake/memory-versions.jsonl', {'memory_id': 'm1', 'old_content': 'x'})
+
     def test_versions_round_trip(self):
         self.store.append('fake/memory-versions.jsonl', {
             'memory_id': 'm1', 'fields': ['content'], 'operation_reason': 'edit',
