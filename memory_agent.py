@@ -698,7 +698,7 @@ class Memory:
         self.finish_write(operation_id, status, error=exc)
         return status
 
-    def call(self, name, args, *, write_operation=None):
+    def call(self, name, args, *, write_operation=None, legacy=False):
         authority = getattr(self, 'brain_authority', None)
         reservation = None
         model_reservation = None
@@ -742,7 +742,7 @@ class Memory:
                 self.finish_write(write_operation, 'not_submitted')
             raise
         try:
-            if authority is not None and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
+            if authority is not None and not legacy and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
                 try:
                     embedder = self.embedder() if callable(getattr(self, 'embedder', None)) else None
                 except Exception:
@@ -1383,7 +1383,7 @@ class Memory:
                     reported = getattr(embedder, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
                         amount = Decimal(reported) * rate / Decimal(1_000_000)
-                        if amount <= reservation[1]:
+                        if reservation is not None and amount <= reservation[1]:
                             usage_tokens, settled_amount = reported, amount
                             accounting = 'embedding-usage'
                 finally:
@@ -1406,9 +1406,10 @@ class Memory:
                 except Exception:
                     pass
         if getattr(self, 'brain_authority', None) is not None:
-            # Never route the fallback back into Brain; go straight to the legacy backend.
-            return self.backend.call('breath_search', {
-                'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
+            # Never route the fallback back into Brain; go straight to the legacy backend, but keep
+            # the same budget lifecycle as a normal breath_search (no unaccounted paid call).
+            return self.call('breath_search', {
+                'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked}, legacy=True)
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
 
