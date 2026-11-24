@@ -20,6 +20,7 @@ class BrainStore:
         self.role = role
         self.db_path = Path(db_path)
         self.root = base.root
+        self.freeze_path = Path(base.root) / role / 'brain-write-freeze'
 
     def __getattr__(self, name):
         return getattr(self.base, name)
@@ -31,6 +32,8 @@ class BrainStore:
         return connection
 
     def append(self, path, row):
+        if self.freeze_path.exists():
+            raise RuntimeError('memory writes are frozen for cutover')
         name = str(path).replace('\\', '/')
         if name == '%s/memory-versions.jsonl' % self.role:
             return self._append_version(row)

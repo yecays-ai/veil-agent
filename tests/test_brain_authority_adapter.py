@@ -48,6 +48,41 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(connection.execute('SELECT is_deleted FROM memories').fetchone()[0], 1)
         connection.close()
 
+    def test_freeze_blocks_hold_and_unfreeze_restores(self):
+        brain_authority.freeze(self.store, 'fake')
+        try:
+            with self.assertRaises(RuntimeError):
+                self.authority.call('hold', {'content': 'frozen', 'title': 'F'}, embedder=None)
+        finally:
+            brain_authority.unfreeze(self.store, 'fake')
+        text = self.authority.call('hold', {'content': 'after thaw', 'title': 'T'}, embedder=None)
+        self.assertTrue(text.startswith('新建→'))
+
+    def test_hold_works_without_a_configured_budget(self):
+        from memory_agent import Memory
+        from veil_agent import Character, Store
+        import tempfile
+        from unittest.mock import Mock
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = Store(temp.name + '/data')
+        db = store.root / 'fake' / 'brain.db'
+        db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(str(db))
+        connection.executescript(veil_brain.SCHEMA)
+        brain_writer.ensure_schema(connection)
+        connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        settings = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
+                    'base_url': 'https://example.invalid/v1',
+                    'brain': {'write_authority': True, 'shadow': False}}
+        cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake', settings)
+        memory = Memory(cfg, store, None, Mock(), Mock())
+        self.addCleanup(memory.__exit__, None, None, None)
+        text = memory.call('hold', {'content': 'no budget', 'title': 'B'})
+        self.assertTrue(text.startswith('新建→'))
+
     def test_memory_call_uses_authority_before_ombre(self):
         calls = []
         fake = SimpleNamespace(brain_authority=self.authority, embedder=lambda: None)

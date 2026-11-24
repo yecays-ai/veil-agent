@@ -31,7 +31,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--db', required=True)
     parser.add_argument('--chat', required=True)
-    parser.add_argument('--env-file', default=str(ROOT / '.env'))
+    parser.add_argument('--env-file', default=None)
     parser.add_argument('--limit', type=int, default=50)
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
@@ -46,7 +46,7 @@ def main(argv=None):
             expected.setdefault(request, [str(item) for item in row['memory_refs']])
     cases = [(request, users[request], expected[request]) for request in expected if request in users]
     cases = cases[-args.limit:] if args.limit else cases
-    values = dotenv_values(args.env_file, interpolate=False, encoding='utf-8-sig')
+    values = dotenv_values(args.env_file, interpolate=False, encoding='utf-8-sig') if args.env_file else {}
     key = (values.get('EMBED_API_KEY') or '').strip()
     embedder = QueryEmbedder('https://api.siliconflow.cn/v1', 'BAAI/bge-m3', key) if key else None
     hits, overlaps, items = 0, 0, []

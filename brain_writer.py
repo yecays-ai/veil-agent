@@ -223,21 +223,24 @@ def hard_delete(connection, memory_id, reason=''):
         return {'status': 'missing', 'memory_id': memory_id}
     try:
         connection.execute('BEGIN IMMEDIATE')
-        connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM versions WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM relations WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM sources WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM quotes WHERE memory_id=?', (memory_id,))
-        connection.execute('DELETE FROM sidecar_state WHERE memory_id=?', (memory_id,))
-        # P2-A review: no sensitive content or linkage may survive a hard delete.
-        connection.execute('DELETE FROM sidecar_events WHERE memory_id=?', (memory_id,))
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in ('vectors', 'versions', 'relations', 'sources', 'quotes', 'sidecar_state',
+                      'sidecar_events'):
+            if table in tables:
+                connection.execute('DELETE FROM %s WHERE memory_id=?' % table, (memory_id,))
         if 'event_sources' in tables:
             affected = [row[0] for row in connection.execute(
                 'SELECT DISTINCT event_id FROM event_sources WHERE memory_id=?', (memory_id,))]
             connection.execute('DELETE FROM event_sources WHERE memory_id=?', (memory_id,))
-            connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+            if 'events' in tables:
+                connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+                if affected:
+                    marks = ','.join('?' * len(affected))
+                    connection.execute(
+                        'UPDATE events SET source_count=(SELECT COUNT(*) FROM event_sources '
+                        'WHERE event_sources.event_id=events.event_id) WHERE event_id IN (%s)' % marks,
+                        affected)
             for event_id in affected:
                 remaining = connection.execute(
                     'SELECT COUNT(*) FROM event_sources WHERE event_id=?', (event_id,)).fetchone()[0]
@@ -245,7 +248,11 @@ def hard_delete(connection, memory_id, reason=''):
                     continue
                 if 'event_stages' in tables:
                     connection.execute('DELETE FROM event_stages WHERE event_id=?', (event_id,))
-                connection.execute('DELETE FROM events WHERE event_id=?', (event_id,))
+                if 'events' in tables:
+                    connection.execute('DELETE FROM events WHERE event_id=?', (event_id,))
+        elif 'events' in tables:
+            # Older Brain schemas have the event table but no source table.
+            connection.execute('DELETE FROM events WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM memories WHERE id=?', (memory_id,))
         connection.execute('INSERT OR REPLACE INTO tombstones(memory_id,deleted_at,reason_hash) '
                            'VALUES(?,?,?)', (memory_id, now(), _sha(reason)[:16]))

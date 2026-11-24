@@ -4,7 +4,10 @@
 
 ## 切换前
 
-1. 冻结旧写入（Lan 授权窗口）：停止 Ombre 接收新写入，确认无进行中的保存。
+1. 冻结写入（Lan 授权窗口）：
+   - 旧 Ombre：停止接收新写入，确认无进行中的保存。
+   - 新 Brain：`python scripts/p2b_freeze.py freeze`；写文件存在时 authority 会拒绝新的
+     hold/trace，导出后不会漏掉切换期新记忆。
 2. 备份：`python scripts/p2b_cutover.py backup --db data/peter/brain.db --out <备份>`。
 3. 检查：`python scripts/p2b_cutover.py check --db data/peter/brain.db --out <报告>`，要求
    `digest_ok=true`、pending_vectors=0、event_stories=事件数、tags 已按 P2-C 处理。
@@ -18,7 +21,9 @@
 
 ## 回退
 
-8. 导出：`python scripts/p2b_cutover.py export --db data/peter/brain.db --out <vault>`。
+8. 导出：先确认 `python scripts/p2b_freeze.py status` 为冻结，再执行
+   `python scripts/p2b_cutover.py export --db data/peter/brain.db --out <vault>`；导出后
+   `python scripts/p2b_freeze.py unfreeze` 才恢复 Brain 写入。
 9. 校验：`verify` 回导 0 problems；启动 **独立 Ombre**（独立 vault/端口）读取同一批新增/修改/
    删除，核对 ID/正文/版本/状态/sidecar/事件；hard delete 不得复活。
 10. 在 Ombre 上实际聊天/保存/修改/检索；全部通过才把 backend 切回 ombre。

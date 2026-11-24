@@ -498,8 +498,9 @@ class Memory:
         self.shadow = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
-        budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
-                                    'memory-extraction'})
+        if budget is not None:
+            budget.reconcile_unsettled({'ombre-model-estimate', 'embedding-estimate',
+                                        'memory-extraction'})
         try:
             self.state = states[-1]['state'] if states else {'entries': {}, 'sources': {}}
             if not isinstance(self.state, dict):
@@ -1296,8 +1297,9 @@ class Memory:
             try:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
-                return bool(not row or row.get('is_hidden') or row.get('is_tombstone')
-                            or row.get('is_deleted') or row.get('type') == 'archived')
+                return bool(not row or row.get('is_hidden') or row.get('dont_surface')
+                            or row.get('is_tombstone') or row.get('is_deleted')
+                            or row.get('type') == 'archived')
             except Exception:
                 return True
         return memory_id in self.hidden_ids()
@@ -2304,6 +2306,8 @@ class Memory:
         Only runs after Ombre confirmed the delete: a file still outside archive/
         means the delete did not land, so nothing is erased."""
         if getattr(self, 'brain_authority', None) is not None:
+            if self.brain_authority.freeze_path.exists():
+                raise RuntimeError('memory writes are frozen for cutover')
             import sqlite3
             import brain_writer
             connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)

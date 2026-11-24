@@ -38,6 +38,16 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.memory._embedder = FakeEmbedder()
         self.addCleanup(self.memory.__exit__, None, None, None)
 
+    def test_is_hidden_includes_dont_surface(self):
+        connection = sqlite3.connect(str(self.db))
+        try:
+            row = brain_writer.create_memory(connection, {'body': 'surface off'}, embedder=None)
+            connection.execute('UPDATE memories SET dont_surface=1 WHERE id=?', (row['memory_id'],))
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertTrue(self.memory.is_hidden(row['memory_id']))
+
     def test_hold_writes_brain_and_is_parseable(self):
         text = self.memory.call('hold', {'content': 'saved through authority', 'title': 'T'})
         self.assertRegex(text, r'^新建→[0-9a-f]{12}$')

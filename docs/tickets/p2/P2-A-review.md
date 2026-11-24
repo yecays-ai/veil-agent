@@ -4,8 +4,8 @@
 
 - 事件 69 故事 / 69 阶段入库；未知字段 payload_json；迁移幂等。
 - 事务写入三态、版本、向量 pending 重试、合并、备份/恢复。
-- 硬删除已补齐：清 sidecar_events、event_sources、受影响事件/阶段；只留最小 tombstone；
-  SQLite 异常不再被吞掉。
+- 硬删除已补齐：清 sidecar_events、event_sources、共享事件来源计数、受影响事件/阶段；旧库缺表时
+  不崩溃；只留最小 tombstone；SQLite 异常不再被吞掉。
 - 同 ID 导出回导 0 problems；authority/shadow 互斥。
 - 测试：`test_brain_*.py` 60 条通过；memory panel 8 条通过。
 

@@ -22,6 +22,6 @@
 
 ## 4. 切换/回退
 
-- 切换窗口、备份、冻结、对账、锁单写、切换、验证：见 `docs/tickets/p2/P2-B-runbook.md`。
+- 切换窗口、备份、冻结（`scripts/p2b_freeze.py`）、对账、锁单写、切换、验证：见 `docs/tickets/p2/P2-B-runbook.md`。
 - 回退：导出同 ID vault → 启动独立 Ombre → 核对新增/修改/删除；已演练，但正式切换未执行。
 - 任何异常回退，不丢切换期新记忆；P2-B 未通过前不进入 P3。

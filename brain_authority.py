@@ -20,6 +20,7 @@ class BrainAuthority:
         if not self.db_path.is_file():
             raise FileNotFoundError(str(self.db_path))
         self.mutex = threading.Lock()
+        self.freeze_path = Path(store.root) / cfg.id / 'brain-write-freeze'
 
     def _connect(self):
         connection = sqlite3.connect(str(self.db_path), timeout=30)
@@ -27,6 +28,8 @@ class BrainAuthority:
         return connection
 
     def call(self, name, args, embedder=None):
+        if self.freeze_path.exists() and name in ('hold', 'trace'):
+            raise RuntimeError('memory writes are frozen for cutover')
         if name == 'breath':
             return self.breath()
         if name == 'dream':
@@ -151,3 +154,23 @@ def attach_authority(cfg, store):
         raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
     return BrainAuthority(cfg, store)
 
+
+
+def freeze(store, role):
+    path = Path(store.root) / role / 'brain-write-freeze'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('frozen for cutover', encoding='utf-8')
+    return str(path)
+
+
+def unfreeze(store, role):
+    path = Path(store.root) / role / 'brain-write-freeze'
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return str(path)
+
+
+def frozen(store, role):
+    return (Path(store.root) / role / 'brain-write-freeze').exists()
