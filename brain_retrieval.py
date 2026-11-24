@@ -155,6 +155,8 @@ class BrainIndex:
             visible_ids = [row[0] for row in rows]
         query_vector = None
         if embedder is not None:
+            # Let a provider failure reach Memory.search_candidates so it can fall back to
+            # Ombre and record the diagnostic instead of silently degrading to BM25.
             query_vector = embedder.embed(query)
         vector_scores = self._vector_scores(query_vector, visible_ids)
         keyword_scores = self._keyword_scores(bm25, rows, query)

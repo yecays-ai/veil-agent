@@ -55,6 +55,38 @@ class AuthorityTests(unittest.TestCase):
         self.assertTrue(text.startswith('新建→'))
         self.assertEqual(calls, [])
 
+    def test_memory_call_authority_breath_search_participates_in_budget(self):
+        # Create a visible memory first
+        self.authority.call('hold', {'content': 'test memory content', 'title': 'T'}, embedder=None)
+        budget_calls = []
+        fake_budget = SimpleNamespace(
+            estimate=lambda role, model, tokens, rate: budget_calls.append(('estimate', tokens, rate)) or ('res1', 10),
+            settle_estimate=lambda res, accounting, settled_amount=None, usage_tokens=None: budget_calls.append(('settle', accounting, settled_amount)),
+            release_estimate=lambda res: budget_calls.append(('release', res))
+        )
+        fake = SimpleNamespace(
+            brain_authority=self.authority, embedder=lambda: None, budget=fake_budget,
+            cfg=SimpleNamespace(id='fake', memory={'model': 'm', 'input_cny_per_million': 0.5}),
+        )
+        result = Memory.call(fake, 'breath_search', {'query': 'test'})
+        self.assertTrue(any(c[0] == 'estimate' for c in budget_calls))
+        self.assertTrue(any(c[0] == 'settle' for c in budget_calls))
+
+
+    def test_hold_does_not_write_free_tags_to_brain(self):
+        """P2-C review: Brain write authority must never persist caller-supplied free tags."""
+        text = self.authority.call('hold', {'content': 'body', 'title': 'T',
+                                            'tags': 'foo,bar', 'domain': 'work'}, embedder=None)
+        memory_id = text.split('→')[1]
+        connection = sqlite3.connect(self.db)
+        try:
+            row = connection.execute('SELECT tags_json,domain_json FROM memories WHERE id=?',
+                                     (memory_id,)).fetchone()
+            self.assertEqual(row[0], '[]', 'Brain must not store free tags supplied by caller')
+            self.assertEqual(row[1], '[]', 'Brain must not store domain tags supplied by caller')
+        finally:
+            connection.close()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -91,7 +91,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
     frontmatter = _frontmatter({'id': memory_id, 'title': title,
                                 'type': record.get('type') or 'dynamic',
                                 'created': created, 'importance': record.get('importance')})
-    raw = frontmatter + body + ('\n' if not body.endswith('\n') else '')
+    raw = frontmatter + body
     frontmatter_json = json.dumps({'id': memory_id, 'title': title,
                                    'type': record.get('type') or 'dynamic',
                                    'created': created}, ensure_ascii=False, sort_keys=True)
@@ -229,6 +229,23 @@ def hard_delete(connection, memory_id, reason=''):
         connection.execute('DELETE FROM sources WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM quotes WHERE memory_id=?', (memory_id,))
         connection.execute('DELETE FROM sidecar_state WHERE memory_id=?', (memory_id,))
+        # P2-A review: no sensitive content or linkage may survive a hard delete.
+        connection.execute('DELETE FROM sidecar_events WHERE memory_id=?', (memory_id,))
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'event_sources' in tables:
+            affected = [row[0] for row in connection.execute(
+                'SELECT DISTINCT event_id FROM event_sources WHERE memory_id=?', (memory_id,))]
+            connection.execute('DELETE FROM event_sources WHERE memory_id=?', (memory_id,))
+            connection.execute('UPDATE events SET memory_id=NULL WHERE memory_id=?', (memory_id,))
+            for event_id in affected:
+                remaining = connection.execute(
+                    'SELECT COUNT(*) FROM event_sources WHERE event_id=?', (event_id,)).fetchone()[0]
+                if remaining:
+                    continue
+                if 'event_stages' in tables:
+                    connection.execute('DELETE FROM event_stages WHERE event_id=?', (event_id,))
+                connection.execute('DELETE FROM events WHERE event_id=?', (event_id,))
         connection.execute('DELETE FROM memories WHERE id=?', (memory_id,))
         connection.execute('INSERT OR REPLACE INTO tombstones(memory_id,deleted_at,reason_hash) '
                            'VALUES(?,?,?)', (memory_id, now(), _sha(reason)[:16]))

@@ -1,9 +1,10 @@
 # HANDOFF
 
-## P2 收尾（2026-11-24）
+## P2 复查修正（2026-11-24）
 
-- 三单均已合并：P2-A `0f6028d`、P2-C `affea8c`、P2-B `e4306ad`；默认不改变正式 Peter。
-- P2-B 已完成隔离 Ombre 回退（canary 新增/修改可见、删除不复活）与同库 A/B；正式切换未做。
-- P2-C 只在隔离副本执行清理；正式库未清理。
-- 下一步：Lan 验收；授权后按 `docs/tickets/p2/P2-B-runbook.md` 执行切换/回退；之后 P3。
+- 分支 `fix/p2-review-corrections`（PR #438）。
+- 已修：真实数据证据移除；硬删除关联清理；authority 读取回退；web 排空超时与游戏 POST 拒绝；
+  文档/验收/README 去除夸大与失效命令。
+- 未完成：P2-B 页面契约/旧机制/备份/失败/P2-C 数据回退/字段核验；负向拒绝证据；正式切换。
+- 下一步：按 `docs/tickets/p2/acceptance.md` 复核；不要合并后直接切换。
 

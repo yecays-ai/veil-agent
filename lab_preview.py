@@ -228,7 +228,7 @@ def _playwright_render(lab: Path, entry: Path, stopped, legacy_lab_name='lab'):
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
-                headless=True, chromium_sandbox=True, timeout=8_000,
+                headless=True, chromium_sandbox=True, timeout=30_000,
                 downloads_path=None,
                 args=["--disable-extensions", "--disable-background-networking", "--disable-sync",
                       "--no-first-run", "--disable-component-update", "--disable-features=MediaRouter"],

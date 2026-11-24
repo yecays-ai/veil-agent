@@ -27,21 +27,27 @@ class BrainAuthority:
         return connection
 
     def call(self, name, args, embedder=None):
-        if embedder is not None and hasattr(embedder, 'embed'):
-            embedder = embedder.embed
         if name == 'breath':
             return self.breath()
         if name == 'dream':
             return ''
         if name == 'breath_search':
-            return self.breath_search(args.get('query') or '', args.get('max_results') or 8, embedder)
+            # brain_retrieval expects an object with .embed() or a callable wrapped in an adapter
+            retrieval_embedder = embedder
+            if embedder is not None and not hasattr(embedder, 'embed') and callable(embedder):
+                retrieval_embedder = type('EmbedAdapter', (), {'embed': staticmethod(embedder)})()
+            return self.breath_search(args.get('query') or '', args.get('max_results') or 8, retrieval_embedder)
+        # For hold and trace, brain_writer expects a callable embedder(text)
+        writer_embedder = embedder
+        if writer_embedder is not None and hasattr(writer_embedder, 'embed'):
+            writer_embedder = writer_embedder.embed
         with self.mutex:
             connection = self._connect()
             try:
                 if name == 'hold':
-                    return self._hold(connection, args, embedder)
+                    return self._hold(connection, args, writer_embedder)
                 if name == 'trace':
-                    return self._trace(connection, args, embedder)
+                    return self._trace(connection, args, writer_embedder)
                 raise ValueError('unsupported authority tool: %s' % name)
             finally:
                 connection.close()
@@ -60,13 +66,16 @@ class BrainAuthority:
                 if isinstance(merged, str) and merged != memory_id:
                     brain_writer.merge_into(connection, merged, memory_id, 'hold merge')
         else:
+            # P2-C: Brain is the write authority; free tags are not generated here.
+            # domain/tags from callers are silently dropped so that Brain never accumulates
+            # free-text tags.  category defaults to 'unclassified'; governance runs separately.
             record = {'body': content, 'title': args.get('title') or '',
                       'type': args.get('type') or 'dynamic',
                       'importance': args.get('importance') or 5,
                       'why_remembered': args.get('why_remembered') or '',
                       'meaning': args.get('meaning') or '',
-                      'domain': _split(args.get('domain')),
-                      'tags': _split(args.get('tags'))}
+                      'domain': [],
+                      'tags': []}
             result = brain_writer.create_memory(connection, record, embedder=embedder)
             memory_id = result['memory_id']
         link_to = args.get('link_to')

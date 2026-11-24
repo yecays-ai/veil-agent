@@ -1963,18 +1963,35 @@ def make_handler(hub, token):
             self.end_headers()
             self.wfile.write(data)
 
+        def _drain_body(self):
+            """Read and discard a bounded body so a rejected client cannot wedge this worker."""
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if 0 < length <= 10 * 1024 * 1024:
+                    self.connection.settimeout(2.0)
+                    try:
+                        self.rfile.read(length)
+                    finally:
+                        self.connection.settimeout(None)
+            except (OSError, ValueError):
+                # A client that promises a body and then stalls must not hold the thread.
+                self.close_connection = True
+
         def _guard(self, supplied):
             port = self.server.server_address[1]
             allowed_hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
             allowed_origins = {f'http://{h}' for h in allowed_hosts}
             if self.headers.get('Host') not in allowed_hosts:
+                self._drain_body()
                 self._send(403, {'error': 'host'})
                 return False
             origin = self.headers.get('Origin')
             if origin is not None and origin not in allowed_origins:
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if not hmac.compare_digest((supplied or '').encode(), token.encode()):
+                self._drain_body()
                 self._send(403, {'error': 'token'})
                 return False
             return True
@@ -1983,16 +2000,20 @@ def make_handler(hub, token):
             port = self.server.server_address[1]
             host = self.headers.get('Host')
             if host != f'127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'host'})
                 return False
             origin = self.headers.get('Origin')
             if post and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if origin is not None and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if post and self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
+                self._drain_body()
                 self._send(403, {'error': 'source'})
                 return False
             return True
@@ -2012,6 +2033,7 @@ def make_handler(hub, token):
                 return
             manager = getattr(hub, 'game_manager', None)
             if manager is None:
+                self._drain_body()
                 self._send(404, {'error': 'game unavailable'})
                 return
             try:
@@ -2459,6 +2481,7 @@ def make_handler(hub, token):
         def _post_game_score(self, url):
             parts = url.path.split('/')
             if len(parts) != 4 or parts[3] != 'score':
+                self._drain_body()
                 self._send(404, {'error': 'game endpoint unavailable'})
                 return
             if not self._game_origin_guard(post=True):
@@ -3730,7 +3753,7 @@ def main(argv=None):
                             root, config, budget=budget)) as tools:
                         if use_memory:
                             from memory_agent import Memory, open_ombre
-                            with open_ombre(config_root, cfg) as backend:
+                            with open_ombre(ROOT, cfg, data_root=data_dir) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
                                     # Ticket 382: Peter's background model judges which memories fit what she just said.
                                     memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)

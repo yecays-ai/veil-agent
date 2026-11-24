@@ -85,6 +85,7 @@ output_cny_per_million = "8"
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read() or b'{}')
 
+
     def test_life_page_reports_service_not_ready_instead_of_empty_records(self):
         status, body = self.call('/api/life')
         self.assertEqual(status, 503)
