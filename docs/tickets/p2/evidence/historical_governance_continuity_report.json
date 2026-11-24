@@ -1,13 +1,14 @@
 {
-  "timestamp": "2026-11-24T10:19:32.163420",
+  "timestamp": "2026-11-24T11:31:41.601528",
   "steps": {
     "1_legacy_cleanup": {
       "status": "PASS",
       "letters_verified": 4,
-      "plans_verified": 5,
+      "plans_completed_verified": 5,
       "garden_rule_verified": true,
+      "backup_verified_all_10_present": true,
       "cleaned_from_brain": 10,
-      "backup_location": "data/peter/backups/simplify-20261123T180850+0800"
+      "vectors_deleted": 10
     },
     "2_memory_disposition": {
       "status": "PASS",
@@ -16,13 +17,14 @@
       "f8c23ac29f8d_in_v09": true,
       "aea_471_digested_archived": true,
       "feel_i_not_resurrected": true,
-      "dangling_sources_known_legacy": 7
+      "dangling_event_sources_count": 7,
+      "known_sidecar_links_count": 8
     },
     "3_retrieval_verification": {
       "status": "PASS",
-      "2fd52c0b984b_excluded_from_recall": true,
-      "2fd52c0b984b_readable_by_id": true,
-      "c13e3ebd3a84_readable_by_id": true
+      "2fd52c0b984b_excluded_when_hidden": true,
+      "2fd52c0b984b_body_intact": true,
+      "c13e3ebd3a84_body_intact": true
     },
     "4_memory_continuity": {
       "status": "PASS",
@@ -30,7 +32,8 @@
       "independent_event_creates_new_id": true,
       "v09_new_stage_id": "s-e5b819caec5430d2",
       "new_event_id": "e-20261124-f7d075",
-      "full_story_no_600char_cap": true
+      "story_length_observed": 1041,
+      "full_story_exceeds_600_chars_and_untruncated": true
     }
   },
   "overall_status": "PASS"

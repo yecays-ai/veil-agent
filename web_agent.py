@@ -1994,16 +1994,20 @@ def make_handler(hub, token):
             port = self.server.server_address[1]
             host = self.headers.get('Host')
             if host != f'127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'host'})
                 return False
             origin = self.headers.get('Origin')
             if post and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if origin is not None and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
                 self._send(403, {'error': 'origin'})
                 return False
             if post and self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
+                self._drain_body()
                 self._send(403, {'error': 'source'})
                 return False
             return True

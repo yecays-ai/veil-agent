@@ -7,7 +7,7 @@
   - **复查修复**：`hard_delete` 补齐清理 `sidecar_events` 与 `events.memory_id` 映射，最小 tombstone 阻止回退复活。
   - **真实模型隔离 E2E**：在独立子进程与独立端口上使用真实 DeepSeek 模型执行完整生命周期（启动→防注入写入→Brain 召回→事件引用去重→多轮追问→进程退出与全新服务重启恢复），证明各模块真正连通（证据：`docs/tickets/p2/evidence/isolated_peter_real_e2e_report.json`）。
 - **P2-B（读取接管、去重审计与切换演练）**：
-  - **30 条人工真值集**：建立含 24 条明确预期记忆与 6 条负向无答案的真值问题集，评测报告已入库（MRR 0.933，无错召回；`docs/tickets/p2/evidence/golden_truth_eval_report.json`）。
+  - **30 条人工真值集**：建立含 24 条明确预期记忆与 6 条负向无答案的真值问题集，真实评测报告已入库（24 条正向问题中 13 条命中 Top-5，召回率 54.2%，11 条漏召回；6 条负向问题在候选检索层召回 0 条正确拒绝，假阳性率 100%，由后续模型过滤；`docs/tickets/p2/evidence/golden_truth_eval_report.json`）。
   - **事件与碎片去重正文注入审计**：
     - 查清并修复了 streaming 轮询多气泡导致 `memory_refs` 累加旧碎片引用的问题；
     - 严格区分来源引用追踪（`memory_refs`）与模型正文注入（`prompt`）：证实唯一来源折叠为事件故事正文，旧碎片原文 100% 不重复注入；多来源碎片保留原文绝不借用任意故事，0 重复注入（证据：`docs/tickets/p2/evidence/dedup_prompt_audit_report.json`）。
@@ -28,13 +28,14 @@
   - **记忆连续性接管演练**：
     - 同一经历新发展命中并续写 V09（增加 stage，保留 event_id、原话与锁定保护）；独立经历新建事件；完整故事 1041 字符无损召回（无 600 字上限；证据：`docs/tickets/p2/evidence/historical_governance_continuity_report.json`）。
 - **CI 与环境兼容性**：
-  - 排查并修复了 Windows 上 `web_agent.py` 在 403 响应时未 drain request body 导致 `[WinError 10053]` 的网络异常。
-  - 修复了 `brain_authority.py` 中 embedder 函数调用规范与 `brain_retrieval.py` 网络异常降级。
-  - 63 条 Brain 单元测试与 73 条 Web 单元测试全部通过。
+  - 修复 Windows CI 上 Playwright Chromium 启动 8 秒刚性超时导致的偶发报错（放宽至 30 秒超时）。
+  - 修复 Windows 上 `web_agent.py` 在 403 响应时未 drain request body 导致 `[WinError 10053]` 的网络异常。
+  - 修复 `memory_agent.py` 中 Brain 写入/检索未纳入预算预估与结算的问题。
+  - 64 条 Brain 单元测试与 73 条 Web 单元测试全部通过。
 
 ## 正式环境切换待办（严格等待 Lan 授权，禁止擅自操作正式库）
 
-1. **审核与授权**：Lan 审核隔离验收证据（[`docs/tickets/p2/acceptance.md`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/acceptance.md)）与 28 条历史记忆处置清单。
+1. **审核与授权**：Lan 审核隔离验收证据（[`docs/tickets/p2/acceptance.md`](docs/tickets/p2/acceptance.md)）与 28 条历史记忆处置清单。
 2. **正式切换窗口**：Lan 安排维护窗口，按 `docs/tickets/p2/P2-B-runbook.md` 执行正式备份、停写 Ombre、最终对账（0 差异）、切换单一写入权威、重启正式 Peter。
 3. **正式数据物理清理**：在正式维护窗口执行历史标签清理（`tag_governance.py --write`）与 10 条已下线功能遗留记忆清理。
 4. **真实体验验收**：Lan 在真实 Peter 上体验保存、修改、回忆、连续追问，体验验收通过后正式关闭 P2，进入 P3（下线 Ombre，推进记忆管理页面）。

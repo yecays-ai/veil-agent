@@ -26,11 +26,13 @@
      - 同一经历新发展命中并续写 V09（增加 stage，保留 event_id、原话与锁定）；独立经历新建事件；完整故事 1041 字符无损召回（无 600 字上限）。
      - 证据见 `docs/tickets/p2/evidence/historical_governance_continuity_report.json`。
   6. **30 条人工真值问题集与召回评测**：
-     - `docs/tickets/p2/evidence/golden_truth_30.json` 与 `docs/tickets/p2/evidence/golden_truth_eval_report.json`（MRR 0.933，无错召回）。
+     - `docs/tickets/p2/evidence/golden_truth_30.json` 与 `docs/tickets/p2/evidence/golden_truth_eval_report.json`（24 条正向问题中 13 条命中 Top-5，召回率 54.2%；6 条负向问题在候选检索层假阳性率 100%，由后续模型过滤）。
   7. **隔离 Peter 真实模型端到端 E2E**：
      - `docs/tickets/p2/evidence/isolated_peter_real_e2e.log` 与 `docs/tickets/p2/evidence/isolated_peter_real_e2e_report.json`。
   8. **Windows CI 修复与网络断开安全容错**：
-     - `web_agent.py` 修复 Windows 下 403 触发 WinError 10053 导致的 CI 失败。
+     - 修复 Playwright Chromium 启动 8 秒刚性超时导致的 Windows CI 偶发失败（放宽至 30 秒超时）；
+     - 修复 `web_agent.py` 在 Windows 下 403 触发 `WinError 10053` 导致的 CI 失败（增加 body 彻底排空）；
+     - 修复 `memory_agent.py` 中 Brain 写入/检索未纳入预算预估与结算的问题。
 
 ## 待 Lan 决定的正式环境事项（严格隔离边界，未获授权绝不操作）
 

@@ -5,13 +5,14 @@
 针对正式库 286 条记忆（基准 283 条加上后续演练测试条目），经全量对账修正后准确分类如下：
 
 - **正式库总记录数**：286 条
-- **事件故事投影记忆（Event Projections）**：71 条（含 V01–V96 投影）
-- **非事件历史记忆**：215 条
-  - **已由 69 篇事件完整覆盖（作为事件来源引用）**：140 条（占 65.1%）
+- **权威事件故事记忆（Events）**：69 条（V01–V96 中 69 篇完整定稿事件）
+- **非事件历史记忆**：217 条（286 - 69 = 217）
+  - **已由 69 篇事件完整覆盖（作为事件来源引用）**：140 条（占非事件记忆的 64.5%）
   - **历史墓碑 / 软删除记忆（is_tombstone=1 或 is_deleted=1）**：39 条（严格保持墓碑状态，禁止复活）
   - **已下线功能的遗留数据（4 封信件、6 条计划）**：10 条（#426 已完成文件导出与日历迁移，#427 功能下线，隔离副本已清理，不再计入待归组有效记忆）
   - **剩余独立有效记忆**：**28 条**（逐条深度核实，依正文事实与历史决定确定处置，严禁模板化归组）
-- **已知历史悬空引用**：7 个事件来源 ID（源于 #426 删除的 7 条 feel 数据，在备份中保留，在数据库中确认为已知遗留映射）与 8 条 sidecar 历史链接。
+  - （140 + 39 + 10 + 28 = 217 条）
+- **已知历史悬空引用**：7 个事件来源 ID 与 8 条 sidecar 历史链接（全部源于 #426 删除的 feel 数据 `feel_20261019*`，在备份中保留，在数据库中确认为已知遗留映射）。
 
 ---
 
@@ -81,7 +82,7 @@
 
 ## 4. 关键既定决定核对与合规证据
 
-在隔离副本 `tmp/governance_drill` 中执行自动化校验（见 [`scripts/p2_historical_governance_and_continuity_drill.py`](file:///E:/Peter-Agent/VEIL/veil-agent/scripts/p2_historical_governance_and_continuity_drill.py) 与 [`docs/tickets/p2/evidence/historical_governance_continuity_report.json`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/historical_governance_continuity_report.json)）：
+在隔离副本中执行自动化校验（见 `scripts/p2_historical_governance_and_continuity_drill.py` 与 `docs/tickets/p2/evidence/historical_governance_continuity_report.json`）：
 
 1. **`c13e3ebd3a84` 独立保留**：
    - 数据库验证：`is_hidden=0, dont_surface=0, is_deleted=0`。
@@ -99,7 +100,7 @@
 6. **#426 已删除的 feel/I 数据不得复活**：
    - 验证 7 条 feel（`feel_202610191458_V050` 等）与 3 条 I（`aabfd4e3cc2d` 等）在 `memories` 表中不存在或已硬删，未在影子同步或对账中复活。
 7. **#429 7 个悬空事件来源与 8 条 sidecar 链接**：
-   - 数据库全量扫描确认：7 个悬空事件来源全部属于上述已删除的 7 条 feel 数据，按已知历史引用报告，无新增异常悬空。
+   - 数据库全量扫描确认：7 个悬空事件来源与 8 条 sidecar 历史链接（`sidecar_state.links_json`）全部指向上述已删除的 feel 数据，确认为已知历史遗留映射，无新增异常悬空。
 
 ---
 

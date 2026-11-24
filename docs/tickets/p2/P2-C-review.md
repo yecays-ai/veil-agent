@@ -9,7 +9,8 @@
 - **源头问题**：此前仅做了历史标签批处理清理工具，但 `brain_authority.py` 在执行 `_hold` 写入时仍接受外部 caller 传入的自由 `tags` 与 `domain`，导致标签持续生成与膨胀。
 - **阻断实现**：
   - 在 `brain_authority.py` 中，当 Brain 处于写入权威接管状态时，强制将 `tags` 和 `domain` 置为空列表 `[]`（代码见 `tags = []` 及 `domain = []`）。
-  - 阻断无意义自由标签与碎片化新 domain 的生成。
+  - 彻底阻断自由标签与碎片化新 domain 的生成。
+  - **桌面 UI 兼容性保障**：桌面 UI（Desktop UI）的“最近（Recent）”标签依赖时间戳排序（`created_at`/`at`），“搜索（Search）”标签依赖 SQLite FTS 全文索引与向量语义检索（`BrainRead.search`），两者的正常功能完全不依赖自由标签或自由 domain，因此源头阻断不会损害 UI 交互。
 - **验证证据**：
   - 单元测试：`tests/test_brain_authority.py::test_hold_does_not_write_free_tags_to_brain` 100% 通过。
   - 隔离端到端：在 `scripts/p2_isolated_peter_real_e2e.py` 与 `scripts/p2_cutover_drill_live.py` 中，向 Brain 写入包含自由标签的测试记忆，校验落盘记录 `tags_json` 均为 `'[]'`，验证阻断彻底生效。
@@ -19,7 +20,7 @@
 ## 2. 标签分类治理决定
 
 - **七类固定分类审计与结论**：
-  - 提议的固定七类分类方案（`knowledge`, `relationship`, `project`, `growth`, `preference`, `daily`, `system`）经实际审计，仅 36.8% 历史数据可匹配，高达 63.2% 落入未分类，存在严重语义割裂。
+  - P2-C 原提案中的固定七类分类方案（`relationship` 关系、`experience` 经历、`preference` 偏好、`commitment` 约定、`work` 工作、`emotion` 情绪、`daily` 日常 + `unclassified` 未分类）经实际审计，仅 36.8% 历史数据可精准匹配，高达 63.2% 落入未分类，存在严重语义割裂。
   - **明确决定：不采用固定七类分类方案**。
 - **标签生命周期与后续边界**：
   - 彻底停止在 Brain 写入时生成自由标签与无意义 domain。
@@ -31,12 +32,12 @@
 
 ## 3. 历史数据与 145 条非事件记忆深度治理
 
-详见专题审计报告：[`docs/tickets/p2/historical_memories_verification.md`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/historical_memories_verification.md) 与隔离实跑证据 [`docs/tickets/p2/evidence/historical_governance_continuity_report.json`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/historical_governance_continuity_report.json)。
+详见专题审计报告：`docs/tickets/p2/historical_memories_verification.md` 与隔离实跑证据 `docs/tickets/p2/evidence/historical_governance_continuity_report.json`。
 
 ### 3.1 已下线功能遗留数据治理（10 条）
 原 38 条未关联清单中，包含 4 封信件与 6 条计划，这 10 条为旧 Ombre 遗留数据：
 - **核对历史依据**：
-  - #426 已执行正式导出：4 封信件导出至 `workspace/lab/letters/`；5 条计划迁入 `data/peter/life-records.json` 且状态为已完成；花园桌游规则 `ef34e23f2dc5` 早已归入 `growth/rules/`，按规则不重复迁移。
+  - #426 已执行正式导出：4 封信件导出至 `workspace/lab/letters/`；5 条计划迁入 `data/peter/life-records.json` 且状态为已完成（`state == 'completed'`）；花园桌游规则 `ef34e23f2dc5` 早已归入 `growth/`，按规则不重复迁移。
   - #427 已正式下线信件与计划的旧 Ombre 功能层。
 - **隔离清理与验证**：
   - 验证了目标文件导出完整性（4 封信件正文均在，`life-records.json` 包含 5 项完整归档计划）。
@@ -46,7 +47,7 @@
 ### 3.2 剩余 28 条有效历史记忆实际处置
 逐条读取 28 条记忆真实正文，对照 69 篇事件故事、聊天背景及前六批整理记录，杜绝模板化理由，严格执行人工既定决定与细分处置：
 1. **严格遵守既有决定**：
-   - `c13e3ebd3a84`（Peter 关于“被创造与陪伴”的自主反思）：独立保留，作为自我认知核心锚点。
+   - `c13e3ebd3a84`（Peter 关于“被创造与陪伴”的自主反思）：独立保留，脱离 V36。
    - `2fd52c0b984b`（涉及个人真实姓名隐私的情感记忆）：设置 `dont_surface=1, is_hidden=1`，退出日常普通召回，但保留原文与按 ID 明确检索能力。隔离验证通过。
    - `f8c23ac29f8d`（“一期一会”与重逢期待）：严格归属于 V09 事件故事（#428 既定），严禁挂回 V36。
    - `aea3998b1742`、`47118c6bf87c`：原状态为 digested & archived，严格遵守既有归档状态，不重新激活。

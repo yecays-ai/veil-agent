@@ -693,37 +693,33 @@ class Memory:
 
     def call(self, name, args, *, write_operation=None):
         authority = getattr(self, 'brain_authority', None)
-        if authority is not None and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
-            try:
-                embedder = self.embedder()
-            except Exception:
-                embedder = None
-            return authority.call(name, args, embedder=embedder)
         reservation = None
         model_reservation = None
         normal_embedding_amount = None
         normal_model_amount = None
+        budget = getattr(self, 'budget', None)
+        cfg = getattr(self, 'cfg', None)
         try:
-            if (name in {'hold', 'breath_search', 'dream'}
+            if budget is not None and cfg is not None and (name in {'hold', 'breath_search', 'dream'}
                     or (name == 'trace' and args.get('content') not in (None, ''))
                     or (name == 'trace' and any(args.get(key) for key in
                         ('old_str', 'new_str', 'meaning_append', 'meaning_replace')))):
                 normal_tokens = max(
                     8192, len(json.dumps(args, ensure_ascii=False).encode('utf-8')) + 2048)
                 reserve_tokens = 12 * normal_tokens
-                rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
-                reservation = self.budget.estimate(
-                    self.cfg.id, self.cfg.memory['model'], reserve_tokens, rate)
+                rate = Decimal(str(cfg.memory['input_cny_per_million']))
+                reservation = budget.estimate(
+                    cfg.id, cfg.memory['model'], reserve_tokens, rate)
                 normal_embedding_amount = Decimal(normal_tokens) * rate / Decimal(1_000_000)
-            if name == 'hold' and ombre_model_on(self.cfg):
+            if name == 'hold' and authority is None and cfg is not None and ombre_model_on(cfg):
                 content = str(args.get('content', ''))
                 tokens_in, tokens_out = ombre_model_tokens(content, worst_case=True)
                 normal_in, normal_out = ombre_model_tokens(content)
-                p = getattr(self.cfg, 'background_provider', None) or self.cfg.provider
+                p = getattr(cfg, 'background_provider', None) or cfg.provider
                 # Ticket 134: a per-request price covers analyze + judge, each retried up to three times.
                 per_call = p.get('cny_per_call')
-                model_reservation = self.budget.estimate_model(
-                    self.cfg.id, p['model'], tokens_in, tokens_out,
+                model_reservation = budget.estimate_model(
+                    cfg.id, p['model'], tokens_in, tokens_out,
                     p['input_cny_per_million'], p['output_cny_per_million'],
                     fixed=per_call * 2 * OMBRE_MODEL_ATTEMPTS if per_call else None)
                 normal_model_amount = per_call * 2 if per_call else (
@@ -733,25 +729,33 @@ class Memory:
         except Exception:
             # If a later preflight rejects, earlier reservations are known not to
             # have reached the child process and can safely be released.
-            if reservation is not None:
-                self.budget.release_estimate(reservation)
-            if name in {'hold', 'trace'} and write_operation is not None:
+            if reservation is not None and budget is not None:
+                budget.release_estimate(reservation)
+            if name in {'hold', 'trace'} and write_operation is not None and hasattr(self, 'finish_write'):
                 self.finish_write(write_operation, 'not_submitted')
             raise
         try:
-            result = self.backend.call(name, args)
+            if authority is not None and name in ('hold', 'trace', 'breath', 'breath_search', 'dream'):
+                try:
+                    embedder = self.embedder() if callable(getattr(self, 'embedder', None)) else None
+                except Exception:
+                    embedder = None
+                result = authority.call(name, args, embedder=embedder)
+            else:
+                result = self.backend.call(name, args)
         except Exception as exc:
             # A child-process timeout or disconnect can happen after the provider
             # accepted a request. Keep the full conservative estimate as spent.
-            if reservation is not None:
-                self.budget.settle_estimate(reservation, accounting='embedding-estimate')
-            if model_reservation is not None:
-                self.budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
-            self.tool_failure(name, exc)
-            if name in {'hold', 'trace'} and write_operation is not None:
+            if reservation is not None and budget is not None:
+                budget.settle_estimate(reservation, accounting='embedding-estimate')
+            if model_reservation is not None and budget is not None:
+                budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
+            if hasattr(self, 'tool_failure'):
+                self.tool_failure(name, exc)
+            if name in {'hold', 'trace'} and write_operation is not None and hasattr(self, 'write_failure'):
                 self.write_failure(write_operation, exc)
             raise
-        if name in {'hold', 'trace'} and write_operation is not None:
+        if name in {'hold', 'trace'} and write_operation is not None and hasattr(self, 'finish_write'):
             # This is the earliest point at which Ombre's own response is
             # available.  Do not let a later cache/index failure turn a
             # confirmed server result back into a replayable pending write.
@@ -763,18 +767,20 @@ class Memory:
                 self.finish_write(write_operation, 'unconfirmed')
                 raise MemoryToolError('unknown')
             self.finish_write(write_operation, 'confirmed', memory_id=memory_id)
-        if reservation is not None:
-            self.budget.settle_estimate(
+        if reservation is not None and budget is not None:
+            budget.settle_estimate(
                 reservation, accounting='embedding-estimate',
                 settled_amount=normal_embedding_amount)
-        if model_reservation is not None:
-            self.budget.settle_estimate(
+        if model_reservation is not None and budget is not None:
+            budget.settle_estimate(
                 model_reservation, accounting='ombre-model-estimate',
                 settled_amount=normal_model_amount)
         # Only Ombre's own notice counts, and Ombre always puts it on the first line, ahead of any memory text.
         if result.lstrip().startswith(DEGRADED_NOTICE):
-            self._notice_once('degraded-search', f'Memory search is using keyword fallback ({name}); see memory/_agent/server.log for the cause.')
-        self._shadow_note(name, args, result)
+            if hasattr(self, '_notice_once'):
+                self._notice_once('degraded-search', f'Memory search is using keyword fallback ({name}); see memory/_agent/server.log for the cause.')
+        if hasattr(self, '_shadow_note'):
+            self._shadow_note(name, args, result)
         return result
 
     def _shadow_note(self, name, args, result):
@@ -1079,7 +1085,8 @@ class Memory:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
                     state = reader.state(memory_id)
-                allowed = bool(row and not row.get('is_hidden') and not row.get('is_tombstone')
+                allowed = bool(row and not row.get('is_hidden') and not row.get('dont_surface')
+                               and not row.get('is_tombstone')
                                and not row.get('is_deleted') and row.get('type') != 'archived')
             except Exception:
                 allowed = None
@@ -1200,6 +1207,25 @@ class Memory:
 
     def visibility_reason(self, memory_id):
         """Why a candidate may not be shown (ticket 391); returns a code, never content."""
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                if row is None:
+                    return 'missing'
+                if row.get('type') == 'archived':
+                    return 'archived'
+                if row.get('is_tombstone'):
+                    return 'tombstone'
+                if row.get('dont_surface'):
+                    return 'dont_surface'
+                if row.get('is_deleted'):
+                    return 'deleted'
+                if row.get('is_hidden'):
+                    return 'hidden'
+            except Exception:
+                pass
         raw = self.raw_content_for(memory_id)
         if raw is None:
             return 'missing'
