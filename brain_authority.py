@@ -9,6 +9,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from brain_lock import write_lock
+
 import brain_writer
 
 
@@ -28,29 +30,30 @@ class BrainAuthority:
         return connection
 
     def call(self, name, args, embedder=None):
-        if self.freeze_path.exists() and name in ('hold', 'trace'):
-            raise RuntimeError('memory writes are frozen for cutover')
+        if embedder is not None and hasattr(embedder, 'embed'):
+            embedder = embedder.embed
+        if name in ('hold', 'trace'):
+            with write_lock(self.store, self.cfg.id):
+                if self.freeze_path.exists():
+                    raise RuntimeError('memory writes are frozen for cutover')
+                return self._write(name, args, embedder)
         if name == 'breath':
             return self.breath()
         if name == 'dream':
             return ''
         if name == 'breath_search':
-            # brain_retrieval expects an object with .embed() or a callable wrapped in an adapter
-            retrieval_embedder = embedder
-            if embedder is not None and not hasattr(embedder, 'embed') and callable(embedder):
-                retrieval_embedder = type('EmbedAdapter', (), {'embed': staticmethod(embedder)})()
-            return self.breath_search(args.get('query') or '', args.get('max_results') or 8, retrieval_embedder)
-        # For hold and trace, brain_writer expects a callable embedder(text)
-        writer_embedder = embedder
-        if writer_embedder is not None and hasattr(writer_embedder, 'embed'):
-            writer_embedder = writer_embedder.embed
+            return self.breath_search(args.get('query') or '',
+                                      args.get('max_results') or 8, embedder)
+        raise ValueError('unsupported authority tool: %s' % name)
+
+    def _write(self, name, args, embedder):
         with self.mutex:
             connection = self._connect()
             try:
                 if name == 'hold':
-                    return self._hold(connection, args, writer_embedder)
+                    return self._hold(connection, args, embedder)
                 if name == 'trace':
-                    return self._trace(connection, args, writer_embedder)
+                    return self._trace(connection, args, embedder)
                 raise ValueError('unsupported authority tool: %s' % name)
             finally:
                 connection.close()
@@ -159,7 +162,8 @@ def attach_authority(cfg, store):
 def freeze(store, role):
     path = Path(store.root) / role / 'brain-write-freeze'
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('frozen for cutover', encoding='utf-8')
+    with write_lock(store, role):
+        path.write_text('frozen for cutover', encoding='utf-8')
     return str(path)
 
 

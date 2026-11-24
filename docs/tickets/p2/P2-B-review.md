@@ -13,6 +13,15 @@
 - 该集没有人工真值，且不能覆盖全部场景；不足以单独证明长期质量。
 - 负向问题（无答案）没有可靠拒绝证据，不能宣称通过。
 
+## 新增验收（本轮）
+
+- 页面读取方法级形状测试：panel 字段、versions、archived 通过。
+- 备份/恢复测试：digest、integrity、counts、字段一致。
+- 失败降级测试：Brain 搜索异常回退到旧 backend，记录 fallback。
+- 旧机制审计表：`docs/tickets/p2/P2-B-old-mechanisms.md`；后台经验整理/事件测试 54+28 条通过。
+- C 数据回退：`p2b_rollback_check.py` 实际启动 Ombre，288 记忆/284 版本/171 sidecar/1 tombstone/72 事件，
+  canary 新增+修改可搜到、删除不复活。
+
 ## 未完成
 
 - 页面 API 仅方法级形状测试，未做前端端到端；旧机制审计见 `P2-B-old-mechanisms.md`，后台经验整理未跑通；

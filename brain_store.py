@@ -32,6 +32,11 @@ class BrainStore:
         return connection
 
     def append(self, path, row):
+        from brain_lock import write_lock
+        with write_lock(self.base, self.role):
+            return self._append(path, row)
+
+    def _append(self, path, row):
         if self.freeze_path.exists():
             raise RuntimeError('memory writes are frozen for cutover')
         name = str(path).replace('\\', '/')

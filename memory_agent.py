@@ -560,7 +560,11 @@ class Memory:
         except Exception as exc:
             raise UserError('开场记忆读取失败，请保留记忆库后重开。') from exc
         self.persist()
-        erased = self.erase_deleted()
+        if (getattr(self, 'brain_authority', None) is not None
+                and self.brain_authority.freeze_path.exists()):
+            erased = []
+        else:
+            erased = self.erase_deleted()
         if erased:
             self.messages.put(f'已彻底抹掉 {len(erased)} 条之前删除的记忆。')
 
@@ -2312,15 +2316,17 @@ class Memory:
         Only runs after Ombre confirmed the delete: a file still outside archive/
         means the delete did not land, so nothing is erased."""
         if getattr(self, 'brain_authority', None) is not None:
-            if self.brain_authority.freeze_path.exists():
-                raise RuntimeError('memory writes are frozen for cutover')
+            from brain_lock import write_lock
             import sqlite3
             import brain_writer
-            connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
-            try:
-                brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
-            finally:
-                connection.close()
+            with write_lock(self.store, self.cfg.id):
+                if self.brain_authority.freeze_path.exists():
+                    raise RuntimeError('memory writes are frozen for cutover')
+                connection = sqlite3.connect(str(self.brain_authority.db_path), timeout=30)
+                try:
+                    brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
+                finally:
+                    connection.close()
         else:
             files = list(self._bucket_files(memory_id))
             if any(not in_archive for _, in_archive in files):
