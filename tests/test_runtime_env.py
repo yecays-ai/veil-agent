@@ -11,8 +11,9 @@ from recall_judge import RecallJudge
 
 class RuntimeEnvTests(unittest.TestCase):
     def test_env_file_follows_character_root(self):
-        cfg = SimpleNamespace(root=r'C:\isolated-config')
-        self.assertEqual(runtime_env.env_file(cfg), Path(r'C:\isolated-config\.env'))
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = SimpleNamespace(root=temp)
+            self.assertEqual(runtime_env.env_file(cfg), Path(temp).resolve() / '.env')
 
     def test_legacy_config_without_root_keeps_repository_env(self):
         self.assertEqual(runtime_env.env_file(SimpleNamespace()), runtime_env.ROOT / '.env')
