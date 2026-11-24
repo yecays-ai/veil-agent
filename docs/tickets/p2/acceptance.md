@@ -9,7 +9,7 @@
 
 ## 2. 隔离复核命令
 
-- `python -m unittest discover -s tests -p 'test_brain_*.py'`：60 条。
+- `python -m unittest discover -s tests -p 'test_brain_*.py'`：64 条。
 - `python -m unittest discover -s tests -p 'test_memory_panel.py'`：8 条。
 - `python -m unittest discover -s tests -p 'test_recall_*.py'`：234 条。
 - `tag_governance.py apply --db <隔离副本>/brain.db --write`：仅在副本执行。
