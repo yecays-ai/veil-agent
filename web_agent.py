@@ -3741,7 +3741,7 @@ def main(argv=None):
                             root, config, budget=budget)) as tools:
                         if use_memory:
                             from memory_agent import Memory, open_ombre
-                            with open_ombre(config_root, cfg) as backend:
+                            with open_ombre(ROOT, cfg, data_root=data_dir) as backend:
                                 with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
                                     # Ticket 382: Peter's background model judges which memories fit what she just said.
                                     memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)

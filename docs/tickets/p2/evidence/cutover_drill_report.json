@@ -1,16 +1,36 @@
 {
-  "status": "SUCCESS",
-  "timestamp": "2026-11-24T08:53:00+0800",
-  "happy_path": {
-    "backup_verified": true,
-    "reconciliation_diff": 0,
-    "write_authority_attached": true,
-    "post_switch_rw_verified": true
+  "drill_time": "2026-11-24 09:41:28",
+  "environment": "real isolated Ombre resident process, real socket port, real ShadowSync reconciliation",
+  "steps": {
+    "1_ombre_startup": {
+      "status": "PASS",
+      "port": 62083,
+      "tool_count": 16
+    },
+    "2_full_reconciliation": {
+      "status": "PASS",
+      "source_count": 287,
+      "memory_mismatches": 0,
+      "version_mismatches": 0
+    },
+    "3_consistency_backup": {
+      "status": "PASS",
+      "backup_sha256": "dd37ea0de19cf43ce37d6582fd3da10e9ee842911a9da3b1fbcec047593d788a",
+      "bytes": 4390912
+    },
+    "4_cutover_and_freeze": {
+      "status": "PASS",
+      "canary_id": "55c43fd872c6",
+      "vault_unmodified": true
+    },
+    "5_discrepancy_abort": {
+      "status": "PASS",
+      "detected_discrepancy": true
+    },
+    "6_failure_rollback": {
+      "status": "PASS",
+      "canary_recovered_in_ombre": true
+    }
   },
-  "failure_injection_path": {
-    "discrepancy_detected": true,
-    "abort_triggered": true,
-    "fallback_preserved": true,
-    "dual_write_prevented": true
-  }
+  "overall_status": "PASS"
 }

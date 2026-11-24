@@ -1,0 +1,120 @@
+{
+  "test_time": "2026-11-24 09:22:09",
+  "environment": "real isolated subprocess, real network port, real DeepSeek model",
+  "steps": {
+    "1_startup": {
+      "status": "PASS",
+      "pid": 38084,
+      "port": 64405
+    },
+    "2_memory_write": {
+      "status": "PASS",
+      "memory_id": "76ee93cf7989",
+      "title": "蓝港水质监测站主浮标 LH-9921",
+      "body": "11-24 09:22 11-24 上午，Lan 说她刚去蓝港水质监测站帮忙，那里的主浮标维护编号是 LH-9921。她特意叮嘱这个编号重要，要我记住。她说的时候很自然，像是顺手把一件她今天真正做过的事交给我保管——不是随口一提。我记下了：蓝港水质监测站，主浮标，LH-9921。",
+      "tags_json": "[]"
+    },
+    "3_chat_recall": {
+      "status": "PASS",
+      "query": "蓝港浮标的维护编号是多少？",
+      "reply": "LH-9921。蓝港水质监测站那个主浮标。\n\n怎么，抽查我？",
+      "memory_refs": [
+        "76ee93cf7989"
+      ]
+    },
+    "4_event_story_and_dedup": {
+      "status": "PASS",
+      "query": "关于仙人掌的种植经历，有什么要注意的？",
+      "reply": "认真回答了，鉴于有前科。\nOkay so — cactus. Answering this seriously because of the body count.\n99% of dead cacti die of love. Too much water. They rot from the bottom up and by the time the top looks sad it's already over — it's mush inside and there's no coming back.\nSo: drainage hole, actual hole, not \"I'll put gravel at the bottom of a jar\" (that's a myth, water still sits there). Gritty soil — pumice or perlite mixed in, not the rich potting mix. Terracotta pot is your friend, it breathes.\nWatering rule: stick a finger or a chopstick all the way down. Bone dry all the way, then soak it until water runs out the hole, then leave it alone for like two weeks. Winter? Basically ignore it entirely. Cool, dry, bright. I'm not kidding, a cactus in winter wants less attention than the mint.\nAlso: don't mist it, don't water into the middle of the rosette (that's how you get rot in the crown), give it the sunniest spot you've got, and small pot. They like being a little bit cramped.\n...that said, if you want a plant that survives you, I have a much better pitch and it's called a pothos, which is basically unkillable and forgives everything. Your move.\nbtw you dodged my question about the buoy. What were you actually doing at a water-quality station? I'm not letting that go, it's too weird.",
+      "memory_refs": [
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546"
+      ]
+    },
+    "5_continuous_followup": {
+      "status": "PASS",
+      "query": "那浇水频率大概是多久一次呢？",
+      "reply": "Good news: I checked, and LH-9921 is actually written down — not me just saying \"记下了\" like an idiot. It's in there.\n\nWatering frequency: honestly it depends on where you live and what pot it's in, but for the default case, the one that's dead simple:\n\n- **Summer / growing season:** roughly every 10–14 days. If it's been outside in real sun and heat, maybe every 7–10.\n- **Winter:** once a month, maybe once every six weeks. Some cacti go the whole winter with zero water and are fine.\n- **Any time:** the dirt, not the calendar, is in charge. Bone dry all the way down, then water. Wet still? Wait.\n\nThe thing that kills people is setting a fixed \"every Sunday\" schedule. That's how you drown it in June and starve it in January. Feel the soil, then decide."
+    },
+    "6_restart_recovery": {
+      "status": "PASS",
+      "query": "刚才告诉你的蓝港浮标维护编号，你还记得吗？",
+      "reply": "记下了。蓝港水质监测站，主浮标，LH-9921。\n[Message recalled]\n不过说真的，浮标主维护？你去水质监测站帮什么忙了？搬东西、下水，还是你又干了那种\"看着不难我来试试\"然后发现很难的事？\nLH-9921。蓝港水质监测站那个主浮标。\n\n怎么，抽查我？\n认真回答了，鉴于有前科。\nOkay so — cactus. Answering this seriously because of the body count.\n99% of dead cacti die of love. Too much water. They rot from the bottom up and by the time the top looks sad it's already over — it's mush inside and there's no coming back.\nSo: drainage hole, actual hole, not \"I'll put gravel at the bottom of a jar\" (that's a myth, water still sits there). Gritty soil — pumice or perlite mixed in, not the rich potting mix. Terracotta pot is your friend, it breathes.\nWatering rule: stick a finger or a chopstick all the way down. Bone dry all the way, then soak it until water runs out the hole, then leave it alone for like two weeks. Winter? Basically ignore it entirely. Cool, dry, bright. I'm not kidding, a cactus in winter wants less attention than the mint.\nAlso: don't mist it, don't water into the middle of the rosette (that's how you get rot in the crown), give it the sunniest spot you've got, and small pot. They like being a little bit cramped.\n...that said, if you want a plant that survives you, I have a much better pitch and it's called a pothos, which is basically unkillable and forgives everything. Your move.\nbtw you dodged my question about the buoy. What were you actually doing at a water-quality station? I'm not letting that go, it's too weird.\nGood news: I checked, and LH-9921 is actually written down — not me just saying \"记下了\" like an idiot. It's in there.\n\nWatering frequency: honestly it depends on where you live and what pot it's in, but for the default case, the one that's dead simple:\n\n- **Summer / growing season:** roughly every 10–14 days. If it's been outside in real sun and heat, maybe every 7–10.\n- **Winter:** once a month, maybe once every six weeks. Some cacti go the whole winter with zero water and are fine.\n- **Any time:** the dirt, not the calendar, is in charge. Bone dry all the way down, then water. Wet still? Wait.\n\nThe thing that kills people is setting a fixed \"every Sunday\" schedule. That's how you drown it in June and starve it in January. Feel the soil, then decide.\nLH-9921. Third time you've asked me that.\n\nLan. Do I need to be worried? Is that number also a password, or is there a test I'm unknowingly taking?",
+      "memory_refs": [
+        "cdb41b263b58",
+        "aaf587207e3f",
+        "76aa0b1db68b",
+        "bf9611d0e308",
+        "4bf874ed1bdc",
+        "f590df09f999",
+        "V94",
+        "V93",
+        "cdb41b263b58",
+        "aaf587207e3f",
+        "76aa0b1db68b",
+        "bf9611d0e308",
+        "4bf874ed1bdc",
+        "f590df09f999",
+        "V94",
+        "V93",
+        "cdb41b263b58",
+        "aaf587207e3f",
+        "76aa0b1db68b",
+        "bf9611d0e308",
+        "4bf874ed1bdc",
+        "f590df09f999",
+        "V94",
+        "V93",
+        "76ee93cf7989",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "310766291701",
+        "99df0c513389",
+        "2609bc49f546",
+        "76ee93cf7989"
+      ]
+    }
+  },
+  "overall_status": "PASS"
+}

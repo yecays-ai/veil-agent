@@ -8,7 +8,7 @@
   "negative_correct_rejection": 0,
   "false_positives_count": 6,
   "false_positive_rate": 1.0,
-  "mean_latency_ms": 833.3,
+  "mean_latency_ms": 764.1,
   "details": [
     {
       "id": "GT-01",
@@ -28,12 +28,12 @@
         "2609bc49f546"
       ],
       "matched_ids": [
-        "99df0c513389",
-        "db4b1f9c6a4f"
+        "db4b1f9c6a4f",
+        "99df0c513389"
       ],
       "hit": true,
-      "top_score": 0.9401,
-      "elapsed_ms": 3312.0
+      "top_score": 0.9407,
+      "elapsed_ms": 3375.0
     },
     {
       "id": "GT-02",
@@ -47,13 +47,13 @@
         "72dbd7d6b356",
         "b8d7bc20f4f9",
         "bc72c550abb4",
-        "8e292411bf07",
-        "V18"
+        "V18",
+        "8e292411bf07"
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.8542,
-      "elapsed_ms": 734.0
+      "top_score": 0.8537,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-03",
@@ -74,8 +74,8 @@
         "V03"
       ],
       "hit": true,
-      "top_score": 0.926,
-      "elapsed_ms": 641.0
+      "top_score": 0.9268,
+      "elapsed_ms": 640.0
     },
     {
       "id": "GT-04",
@@ -96,8 +96,8 @@
         "V04"
       ],
       "hit": true,
-      "top_score": 0.8823,
-      "elapsed_ms": 625.0
+      "top_score": 0.8824,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-05",
@@ -117,7 +117,7 @@
       "matched_ids": [],
       "hit": false,
       "top_score": 0.9424,
-      "elapsed_ms": 641.0
+      "elapsed_ms": 625.0
     },
     {
       "id": "GT-06",
@@ -139,7 +139,7 @@
       ],
       "hit": true,
       "top_score": 1.0,
-      "elapsed_ms": 687.0
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-07",
@@ -160,8 +160,8 @@
         "V07"
       ],
       "hit": true,
-      "top_score": 0.9039,
-      "elapsed_ms": 735.0
+      "top_score": 0.9044,
+      "elapsed_ms": 640.0
     },
     {
       "id": "GT-08",
@@ -182,8 +182,8 @@
         "V08"
       ],
       "hit": true,
-      "top_score": 0.9266,
-      "elapsed_ms": 703.0
+      "top_score": 0.9264,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-09",
@@ -202,8 +202,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.953,
-      "elapsed_ms": 656.0
+      "top_score": 0.9529,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-10",
@@ -223,7 +223,7 @@
       "matched_ids": [],
       "hit": false,
       "top_score": 0.9207,
-      "elapsed_ms": 703.0
+      "elapsed_ms": 640.0
     },
     {
       "id": "GT-11",
@@ -242,8 +242,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.9643,
-      "elapsed_ms": 1094.0
+      "top_score": 0.9645,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-12",
@@ -285,7 +285,7 @@
       ],
       "hit": true,
       "top_score": 1.0,
-      "elapsed_ms": 640.0
+      "elapsed_ms": 625.0
     },
     {
       "id": "GT-14",
@@ -307,7 +307,7 @@
       ],
       "hit": true,
       "top_score": 1.0,
-      "elapsed_ms": 641.0
+      "elapsed_ms": 625.0
     },
     {
       "id": "GT-15",
@@ -322,12 +322,12 @@
         "99df0c513389",
         "bc72c550abb4",
         "8e292411bf07",
-        "b8d7bc20f4f9"
+        "bf9611d0e308"
       ],
       "matched_ids": [],
       "hit": false,
       "top_score": 0.9874,
-      "elapsed_ms": 625.0
+      "elapsed_ms": 640.0
     },
     {
       "id": "GT-16",
@@ -348,8 +348,8 @@
         "V18"
       ],
       "hit": true,
-      "top_score": 0.9626,
-      "elapsed_ms": 1313.0
+      "top_score": 0.9629,
+      "elapsed_ms": 657.0
     },
     {
       "id": "GT-17",
@@ -368,8 +368,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.9033,
-      "elapsed_ms": 625.0
+      "top_score": 0.9032,
+      "elapsed_ms": 750.0
     },
     {
       "id": "GT-18",
@@ -390,8 +390,8 @@
         "V20"
       ],
       "hit": true,
-      "top_score": 1.008,
-      "elapsed_ms": 640.0
+      "top_score": 1.0079,
+      "elapsed_ms": 797.0
     },
     {
       "id": "GT-19",
@@ -410,8 +410,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.8743,
-      "elapsed_ms": 641.0
+      "top_score": 0.8717,
+      "elapsed_ms": 656.0
     },
     {
       "id": "GT-20",
@@ -430,8 +430,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.8422,
-      "elapsed_ms": 656.0
+      "top_score": 0.8428,
+      "elapsed_ms": 672.0
     },
     {
       "id": "GT-21",
@@ -453,7 +453,7 @@
       ],
       "hit": true,
       "top_score": 1.0,
-      "elapsed_ms": 625.0
+      "elapsed_ms": 656.0
     },
     {
       "id": "GT-22",
@@ -472,8 +472,8 @@
       ],
       "matched_ids": [],
       "hit": false,
-      "top_score": 0.8731,
-      "elapsed_ms": 938.0
+      "top_score": 0.8724,
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-23",
@@ -495,7 +495,7 @@
       ],
       "hit": true,
       "top_score": 1.04,
-      "elapsed_ms": 640.0
+      "elapsed_ms": 656.0
     },
     {
       "id": "GT-24",
@@ -519,7 +519,7 @@
       ],
       "hit": true,
       "top_score": 1.0008,
-      "elapsed_ms": 641.0
+      "elapsed_ms": 640.0
     },
     {
       "id": "GT-25",
@@ -534,7 +534,7 @@
         "V52",
         "1ad83ee96415"
       ],
-      "top_score": 0.9509,
+      "top_score": 0.951,
       "false_positive": true,
       "correct_rejection": false,
       "elapsed_ms": 625.0
@@ -552,10 +552,10 @@
         "63d331ab2e96",
         "4e211bcbcc9e"
       ],
-      "top_score": 0.8192,
+      "top_score": 0.8197,
       "false_positive": true,
       "correct_rejection": false,
-      "elapsed_ms": 640.0
+      "elapsed_ms": 657.0
     },
     {
       "id": "GT-27",
@@ -570,10 +570,10 @@
         "bc72c550abb4",
         "db4b1f9c6a4f"
       ],
-      "top_score": 0.9052,
+      "top_score": 0.9046,
       "false_positive": true,
       "correct_rejection": false,
-      "elapsed_ms": 1860.0
+      "elapsed_ms": 687.0
     },
     {
       "id": "GT-28",
@@ -588,10 +588,10 @@
         "72dbd7d6b356",
         "1bcbb7d32052"
       ],
-      "top_score": 0.9096,
+      "top_score": 0.9098,
       "false_positive": true,
       "correct_rejection": false,
-      "elapsed_ms": 672.0
+      "elapsed_ms": 1047.0
     },
     {
       "id": "GT-29",
@@ -609,7 +609,7 @@
       "top_score": 0.8957,
       "false_positive": true,
       "correct_rejection": false,
-      "elapsed_ms": 656.0
+      "elapsed_ms": 641.0
     },
     {
       "id": "GT-30",
@@ -627,7 +627,7 @@
       "top_score": 0.8993,
       "false_positive": true,
       "correct_rejection": false,
-      "elapsed_ms": 766.0
+      "elapsed_ms": 859.0
     }
   ]
 }

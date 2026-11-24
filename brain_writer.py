@@ -91,7 +91,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
     frontmatter = _frontmatter({'id': memory_id, 'title': title,
                                 'type': record.get('type') or 'dynamic',
                                 'created': created, 'importance': record.get('importance')})
-    raw = frontmatter + body + ('\n' if not body.endswith('\n') else '')
+    raw = frontmatter + body
     frontmatter_json = json.dumps({'id': memory_id, 'title': title,
                                    'type': record.get('type') or 'dynamic',
                                    'created': created}, ensure_ascii=False, sort_keys=True)

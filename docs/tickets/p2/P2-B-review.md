@@ -16,17 +16,18 @@
    - Top-5 命中率 54.2%，Top-8 命中率 62.5%，平均延迟 833.3 ms。
 
 3. **事件故事与旧碎片不重复注入**：
-   - 在隔离 Peter 端到端脚本 `scripts/p2_isolated_peter_e2e.py` 中验证，当检索到 V01 事件故事时，其关联旧碎片 `99df0c513389` 被 `_event_ledger()` 成功折叠，**0 重复注入**。
-   - 执行日志：[`docs/tickets/p2/evidence/isolated_peter_e2e.log`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/isolated_peter_e2e.log)。
+   - 在真实模型隔离端到端测试 `scripts/p2_isolated_peter_real_e2e.py` 中验证，当提问仙人掌经历召回 V01 事件故事时，其关联旧碎片 `99df0c513389` 被 `_event_ledger()` 成功折叠，**0 重复注入**。
+   - 执行日志：[`docs/tickets/p2/evidence/isolated_peter_real_e2e.log`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/isolated_peter_real_e2e.log)。
 
-4. **切换协议端到端演练**：
-   - 脚本 `scripts/p2_cutover_drill.py` 完整演练了：
-     - **Happy Path**：一致性备份 → 冻结旧写入 → 最终对账（0 diff）→ 锁定单一写入权威 → 切换并验证读写。
-     - **Failure Injection Path**：故意注入未对账差异，成功触发 ABORT 停机保护，保持单一权威不切，未发生双写。
+4. **真实 Ombre 进程切换协议与回退演练**：
+   - 脚本 `scripts/p2_cutover_drill_live.py` 在独立端口真实启动 Ombre 常驻服务进程，完整演练了：
+     - **真实启动与全量对账**：启动常驻 Ombre，运行 `ShadowSync.reconcile()` 对比 287 个源文件与数据库记录，0 差异；`check_db()` 验证 integrity=ok 与 digest_ok=True。
+     - **一致性备份**：生成完整快照文件。
+     - **权威锁定与旧写冻结**：切换 `write_authority=true, shadow=false`，双权威互斥校验通过；通过 `BrainAuthority` 写入金丝雀记忆，核验 Ombre vault 目录 287 个文件完全未变（旧写已冻结）。
+     - **差异中止保护（Discrepancy Abort）**：向 vault 注入篡改内容，对账比对检出 `mismatches=1`，成功触发中止保护。
+     - **真实失败回退演练（Failure Rollback）**：将 Brain 记忆全量导出回 vault，切回 Ombre 权威，哈希对账 0 差异，重启 Ombre 常驻服务；调用 Ombre 原生 MCP `breath_search` 成功检索到金丝雀记忆，**数据零丢失，回退通道完全安全**。
    - 执行日志：[`docs/tickets/p2/evidence/cutover_drill.log`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/cutover_drill.log)。
-
-5. **回退演练**：
-   - `scripts/p2b_rollback_check.py` 实际启动独立 Ombre 进程，验证新增/修改可见、已删除数据不复活。
+   - 统计报告：[`docs/tickets/p2/evidence/cutover_drill_report.json`](file:///E:/Peter-Agent/VEIL/veil-agent/docs/tickets/p2/evidence/cutover_drill_report.json)。
 
 ## 待 Lan 授权的正式切换事项
 

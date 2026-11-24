@@ -11,8 +11,10 @@
   5. 交付持久化证据：
      - 30 条人工真值集：`docs/tickets/p2/evidence/golden_truth_30.json`
      - 真值召回评测报告：`docs/tickets/p2/evidence/golden_truth_eval_report.json`
-     - 隔离 Peter E2E 完整日志：`docs/tickets/p2/evidence/isolated_peter_e2e.log`
-     - 切换协议正常与中止演练日志：`docs/tickets/p2/evidence/cutover_drill.log`
+     - 隔离 Peter 真实模型 E2E 完整日志：`docs/tickets/p2/evidence/isolated_peter_real_e2e.log`
+     - 隔离 Peter 真实模型 E2E 结构化报告：`docs/tickets/p2/evidence/isolated_peter_real_e2e_report.json`
+     - 真实 Ombre 常驻切换协议与回退日志：`docs/tickets/p2/evidence/cutover_drill.log`
+     - 切换协议演练结构化报告：`docs/tickets/p2/evidence/cutover_drill_report.json`
      - 145 条历史记忆与 69 篇事件核实报告：`docs/tickets/p2/historical_memories_verification.md`
 
 ## 待 Lan 决定的正式环境事项
