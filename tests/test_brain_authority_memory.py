@@ -2,6 +2,8 @@
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from unittest.mock import Mock
 
 import brain_writer
@@ -47,6 +49,15 @@ class MemoryAuthorityTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertTrue(self.memory.is_hidden(row['memory_id']))
+
+    def test_brain_search_failure_falls_back_to_ombre_backend(self):
+        self.memory.backend = SimpleNamespace(call=lambda name, args: 'OMBRE_FALLBACK')
+        self.memory.last_recall_debug = {}
+        self.memory.retrieval_settings = {'backend': 'brain', 'weight_vector': 0.65,
+                                         'weight_keyword': 0.35}
+        with patch('memory_agent.brain_retrieval_search', side_effect=RuntimeError('down')):
+            self.assertEqual(self.memory.search_candidates('anything', 5), 'OMBRE_FALLBACK')
+        self.assertEqual(self.memory.last_recall_debug['retrieval']['fallback'], 'RuntimeError')
 
     def test_hold_writes_brain_and_is_parseable(self):
         text = self.memory.call('hold', {'content': 'saved through authority', 'title': 'T'})

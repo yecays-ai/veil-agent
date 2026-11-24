@@ -1364,9 +1364,10 @@ class Memory:
                 embedder = self.embedder()
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
-                reservation = self.budget.estimate(
-                    self.cfg.id, self.cfg.memory['model'], tokens, rate)
-                settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
+                if getattr(self, 'budget', None) is not None:
+                    reservation = self.budget.estimate(
+                        self.cfg.id, self.cfg.memory['model'], tokens, rate)
+                    settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
                 try:
                     text, meta = brain_retrieval_search(
                         brain_db, query, limit=asked, embedder=embedder,
@@ -1391,10 +1392,15 @@ class Memory:
                                                        'fallback': type(exc).__name__}
                 try:
                     self.store.append(self.diagnostics, {
-                        'time': self.budget.clock(), 'code': 'brain_retrieval_fallback',
+                        'time': self.budget.clock() if getattr(self, 'budget', None) else '',
+                        'code': 'brain_retrieval_fallback',
                         'error_type': type(exc).__name__})
                 except Exception:
                     pass
+        if getattr(self, 'brain_authority', None) is not None:
+            # Never route the fallback back into Brain; go straight to the legacy backend.
+            return self.backend.call('breath_search', {
+                'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
 
