@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT))
 import p3_4_cleanup
+import brain_events
 import brain_writer
 import veil_brain
 
@@ -28,6 +29,7 @@ class CleanupTests(unittest.TestCase):
         try:
             connection.executescript(veil_brain.SCHEMA)
             brain_writer.ensure_schema(connection)
+            brain_events.ensure_schema(connection)
             self.normal = brain_writer.create_memory(
                 connection, {'body': 'normal body', 'title': 'Normal'}, embedder=None)
             connection.execute(
@@ -65,12 +67,40 @@ class CleanupTests(unittest.TestCase):
             connection.execute(
                 'INSERT INTO quotes(memory_id,ord,speaker,text) VALUES(?,?,?,?)',
                 (self.normal['memory_id'], 0, 'Lan', 'quote'))
+            connection.execute(
+                'INSERT INTO versions(memory_id,time,operation_reason,why_remembered,fields_json,'
+                'old_content,old_sha256) VALUES(?,?,?,?,?,?,?)',
+                (self.normal['memory_id'], 'old', '', '', '[]', 'normal old version', 'x'))
+            connection.execute(
+                'INSERT INTO vectors(memory_id,dim,vector,vector_sha256,updated_at,content_hash) '
+                'VALUES(?,?,?,?,?,?)', (self.normal['memory_id'], 1024, b'normal', 'x', 'now', 'x'))
+            brain_events.upsert_event(connection, {'event_id': 'E-normal',
+                                                   'memory_id': self.normal['memory_id'],
+                                                   'story': 'normal story', 'title': 'Normal event'})
+            brain_events.upsert_stage(connection, {'stage_id': 'S-normal', 'event_id': 'E-normal',
+                                                   'text': 'normal stage'})
+            connection.execute(
+                'INSERT INTO event_ledger(ledger_seq,kind,source_file,event_id,memory_id,payload_json) '
+                "VALUES(1,'stage-evidence','__live__','E-normal',?, '{\"text\":\"normal evidence\"}')",
+                (self.normal['memory_id'],))
+            connection.execute(
+                'INSERT INTO event_ledger(ledger_seq,kind,source_file,event_id,memory_id,payload_json) '
+                "VALUES(0,'stage-evidence','__live__',NULL,?, '{\"text\":\"deleted residue\"}')",
+                (self.deleted['memory_id'],))
+            connection.execute(
+                'INSERT INTO delete_requests(request_id,memory_id,reason,status,raw_json) '
+                "VALUES('r-closed',?,'old reason','approved','{}')", (self.deleted['memory_id'],))
+            connection.execute(
+                'INSERT INTO write_journal(time,operation,memory_id,detail_json,status) '
+                "VALUES('now','state',?,'{\"old\":true}','saved')", (self.deleted['memory_id'],))
             connection.commit()
         finally:
             connection.close()
         for directory in ('dynamic', 'letters', 'plans', 'archive', '_agent', '_media'):
             (self.memory / directory).mkdir(parents=True, exist_ok=True)
         (self.memory / 'dynamic' / 'old.md').write_text('old vault', encoding='utf-8')
+        (self.memory / 'embeddings.db').write_bytes(b'old embeddings')
+        (self.memory / 'old-mirror.jsonl').write_text('{"old": true}\n', encoding='utf-8')
         (self.memory / '_agent' / 'state.jsonl').write_text('{}', encoding='utf-8')
         (self.memory / '_media' / 'keep.bin').write_bytes(b'keep-media')
         (self.memory / 'archive').mkdir(exist_ok=True)
@@ -87,8 +117,16 @@ class CleanupTests(unittest.TestCase):
         self.backup = Path(self.temp.name) / 'backup'
         self.backup.mkdir()
         self.archive = Path(self.temp.name) / 'archive-outside'
+        files, dirs = [], ['payload/data', 'payload/data/peter']
+        for path in sorted(self.role_dir.rglob('*')):
+            rel = 'payload/' + path.relative_to(self.root).as_posix()
+            if path.is_file():
+                files.append({'path': rel, 'size': path.stat().st_size,
+                               'sha256': p3_4_cleanup._sha_bytes(path.read_bytes())})
+            elif path.is_dir():
+                dirs.append(rel)
         self.patch = mock.patch.object(p3_4_cleanup.backup_restore, 'verify_backup',
-                                       return_value={'files': [1, 2]})
+                                       return_value={'files': files, 'directories': dirs})
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
@@ -98,8 +136,13 @@ class CleanupTests(unittest.TestCase):
         self.assertIn(self.deleted['memory_id'], ids)
         self.assertEqual({row['id'] for row in plan['letters_plans']},
                          {self.letter['memory_id'], self.plan['memory_id']})
+        self.assertEqual(plan['residuals']['event_ledger'], 1)
+        self.assertEqual(plan['residuals']['delete_requests'], 1)
+        self.assertGreaterEqual(plan['residuals']['write_journal'], 1)
         paths = {item['path'] for item in plan['file_targets']}
         self.assertIn('data/peter/memory/dynamic', paths)
+        self.assertIn('data/peter/memory/embeddings.db', paths)
+        self.assertIn('data/peter/memory/old-mirror.jsonl', paths)
         self.assertIn('data/peter/memory.backup-old', paths)
         self.assertIn('.deps/ombre', paths)
         self.assertNotIn('data/peter/memory/_agent', paths)
@@ -145,6 +188,28 @@ class CleanupTests(unittest.TestCase):
                 'SELECT COUNT(*) FROM sources WHERE memory_id=?', (self.normal['memory_id'],)).fetchone()[0], 1)
             self.assertEqual(connection.execute(
                 'SELECT COUNT(*) FROM quotes WHERE memory_id=?', (self.normal['memory_id'],)).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM event_ledger WHERE memory_id=?',
+                (self.deleted['memory_id'],)).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM delete_requests WHERE memory_id=?',
+                (self.deleted['memory_id'],)).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM write_journal WHERE memory_id=?',
+                (self.deleted['memory_id'],)).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM events WHERE event_id=?', ('E-normal',)).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM event_stages WHERE stage_id=?', ('S-normal',)).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM event_ledger WHERE memory_id=?',
+                (self.normal['memory_id'],)).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM versions WHERE memory_id=?',
+                (self.normal['memory_id'],)).fetchone()[0], 1)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM vectors WHERE memory_id=?',
+                (self.normal['memory_id'],)).fetchone()[0], 1)
         finally:
             connection.close()
         self.assertTrue((self.memory / '_agent' / 'state.jsonl').is_file())
@@ -153,7 +218,14 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse((self.memory / 'dynamic').exists())
         self.assertFalse((self.root / '.deps' / 'ombre').exists())
         self.assertTrue((self.archive / 'ombre-115d831.zip').is_file())
-        self.assertTrue((self.archive / 'letters-plans.json').is_file())
+        archives = list(self.archive.glob('letters-plans-*.json'))
+        self.assertTrue(archives)
+        archived = json.loads(archives[0].read_text(encoding='utf-8'))
+        by_id = {item['id']: item for item in archived}
+        self.assertEqual(by_id[self.letter['memory_id']]['body'], 'letter body')
+        self.assertEqual(by_id[self.letter['memory_id']]['type'], 'letter')
+        self.assertFalse((self.memory / 'embeddings.db').exists())
+        self.assertFalse((self.memory / 'old-mirror.jsonl').exists())
         self.assertEqual(result['verify']['tombstone_rows'], 0)
         self.assertEqual(result['verify']['letter_plan_rows'], 0)
 
@@ -174,6 +246,69 @@ class CleanupTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             p3_4_cleanup.apply_plan(self.root, 'peter', plan_path, backup=self.backup,
                                     archive_dir=self.archive, confirm=p3_4_cleanup.CONFIRM_WORD)
+
+    def test_plan_refuses_archive_backup_overlap_and_missing_coverage(self):
+        with self.assertRaises(RuntimeError):
+            p3_4_cleanup._plan(self.root, 'peter', self.backup, self.backup)
+        (self.memory / 'dynamic' / 'late.md').write_text('late', encoding='utf-8')
+        with self.assertRaises(RuntimeError):
+            p3_4_cleanup._plan(self.root, 'peter', self.backup, self.archive)
+
+    def test_apply_refuses_rows_added_after_plan(self):
+        plan = p3_4_cleanup._plan(self.root, 'peter', self.backup, self.archive)
+        plan_path = Path(self.temp.name) / 'plan.json'
+        p3_4_cleanup._write_json(plan_path, plan)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            extra = brain_writer.create_memory(connection, {'body': 'late', 'title': 'Late'},
+                                               embedder=None)
+            connection.execute('UPDATE memories SET is_deleted=1 WHERE id=?', (extra['memory_id'],))
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(RuntimeError):
+            p3_4_cleanup.apply_plan(self.root, 'peter', plan_path, backup=self.backup,
+                                    archive_dir=self.archive, confirm=p3_4_cleanup.CONFIRM_WORD)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM memories WHERE id=?', (extra['memory_id'],)).fetchone()[0], 1)
+        finally:
+            connection.close()
+
+    def test_interrupted_after_db_commit_resumes_without_deleting_twice(self):
+        plan = p3_4_cleanup._plan(self.root, 'peter', self.backup, self.archive)
+        plan_path = Path(self.temp.name) / 'plan.json'
+        p3_4_cleanup._write_json(plan_path, plan)
+        original = p3_4_cleanup._finish_db
+        with mock.patch.object(p3_4_cleanup, '_finish_db', side_effect=RuntimeError('fake disk full')):
+            with self.assertRaises(RuntimeError):
+                p3_4_cleanup.apply_plan(self.root, 'peter', plan_path, backup=self.backup,
+                                        archive_dir=self.archive,
+                                        confirm=p3_4_cleanup.CONFIRM_WORD)
+        # Deletion committed, file cleanup not done; retry must finish, not re-delete.
+        self.assertTrue((self.memory / 'dynamic').exists())
+        result = p3_4_cleanup.apply_plan(self.root, 'peter', plan_path, backup=self.backup,
+                                         archive_dir=self.archive,
+                                         confirm=p3_4_cleanup.CONFIRM_WORD)
+        self.assertFalse((self.memory / 'dynamic').exists())
+        self.assertEqual(result['db']['tombstones_removed'], 1)
+
+    def test_exclusive_plan_file_never_overwrites_user_file(self):
+        path = Path(self.temp.name) / 'user.json'
+        path.write_text('user data', encoding='utf-8')
+        with self.assertRaises(FileExistsError):
+            p3_4_cleanup._write_json(path, {'plan': True}, exclusive=True)
+        self.assertEqual(path.read_text(encoding='utf-8'), 'user data')
+
+    def test_external_symlink_target_is_not_listed_for_deletion(self):
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (outside / 'keep.txt').write_text('keep', encoding='utf-8')
+        with mock.patch.object(p3_4_cleanup, '_targets', return_value=[outside]):
+            safe, external = p3_4_cleanup._safe_targets(self.root, 'peter')
+        self.assertEqual(safe, [])
+        self.assertEqual(len(external), 1)
 
 
 if __name__ == '__main__':

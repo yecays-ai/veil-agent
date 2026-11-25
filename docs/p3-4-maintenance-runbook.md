@@ -52,3 +52,15 @@
 
 清理前完整冷备是唯一回退来源；清理后新增记忆不能靠旧备份直接覆盖。恢复前按
 `docs/backup-and-restore.md` 的 Brain 恢复规则保留 safety copy/export。
+
+
+## 安全边界（复审补充）
+
+- `--plan` 必须是不存在的路径；工具独占创建，绝不覆盖已有文件。`--archive-dir` 不能与冷备目录相同或嵌套。
+- 生成计划会逐个文件核对冷备 `payload` 中的路径、大小和 sha256；`brain.db` 也必须存在且哈希一致。`.deps/`、`.local-tmp/` 是可重装运行依赖，不要求进入冷备，但 Ombre 安装包必须先进入 archive。
+- 计划包含每个待删文件的 sha256 和每个目录的完整成员/tree hash；同大小替换也会被拒绝。
+- 通过父目录联接点解析到仓库外的目标不会进入删除名单。
+- 数据库删除在一个事务内先核对当前墓碑/letters/plans 集合与批准计划完全一致；不一致时不删除任何行。删除会清掉该记忆的 event_ledger/已关闭删除申请/操作记录残留，但保留其他记忆和共享事件。
+- 删除事务提交后写 archive 状态文件；若 VACUUM、完整性对账或文件清理中断，用同一 plan/archive 重试会从已提交阶段继续，不会重新删除记录。
+- 清理前后对保留的 memories/events/stages/versions/vectors/relations/sources/quotes/event_ledger/event_state 做逐行内容指纹对账；不一致则停止。
+
