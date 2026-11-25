@@ -2770,6 +2770,33 @@ setInterval(()=>{if(document.body.dataset.currentPage==='life'&&!document.hidden
 setInterval(()=>{if(document.body.dataset.currentPage==='mcp'&&!mcpLoading&&$('mcp-form').hidden)loadMCP()},3000);
 
 // Ticket 134: 模型 settings card and the header switch. The server keeps keys; this page only sees "…1234".
+const configOverviewRefresh=$('config-overview-refresh');
+configOverviewRefresh.onclick=async()=>{
+  const status=$('config-overview-status'), rows=$('config-overview-rows');
+  const source={runtime:'运行时',startup:'启动时',saved:'用户选择',settings_default:'默认选择'};
+  const timing={immediate:'立即',next_request:'下一轮',next_task:'下次任务',restart:'重启',unknown:'未核实'};
+  const describe=value=>{
+    if(value?.status==='known')return `${value.value}（${source[value.source]||'来源未核实'}）`;
+    if(value?.status==='unset')return '未设置';
+    if(value?.status==='redacted')return '不显示';
+    return '无法核实';
+  };
+  configOverviewRefresh.disabled=true;rows.replaceChildren();status.textContent='读取中…';
+  try{
+    const response=await api('/api/config/overview');
+    const view=await response.json();
+    if(!response.ok||view?.schema_version!==1||!Array.isArray(view.entries))throw Error();
+    for(const entry of view.entries){
+      const li=document.createElement('li'), title=document.createElement('strong'), detail=document.createElement('p');
+      title.textContent=entry.label;
+      const ready=entry.readiness==='configured'?'凭据已配置（未探测）':entry.readiness==='missing'?'缺少凭据':'凭据未核实';
+      detail.textContent=`配置：${describe(entry.configured)}；实际生效：${describe(entry.effective)}；生效时机：${timing[entry.apply_mode]||'未核实'}；${ready}${entry.pending_restart===true?'；待重启':''}`;
+      li.append(title,detail);rows.append(li);
+    }
+    status.textContent=view.entries.length?`已读取 ${view.entries.length} 项。`:'没有可显示的配置项。';
+  }catch{rows.replaceChildren();status.textContent='读不到配置总览，请检查连接后重试。';}
+  finally{configOverviewRefresh.disabled=false;}
+};
 let modelsView=null,modelsSignature='',editingEndpoint=null,editingModel=null,modelBilling='call',modelsSaving=false;
 function modelName(m){return (m.label||m.model)+(m.builtin?'':' · '+m.endpoint_name)}
 function modelPrice(m){

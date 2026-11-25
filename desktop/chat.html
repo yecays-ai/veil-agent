@@ -183,6 +183,11 @@
   </section>
   <section id="more-view" class="page" data-page-view="more" hidden>
     <div class="page-heading"><div><h2>设置</h2></div></div>
+    <article class="surface models-card" id="config-overview-card">
+      <div class="section-heading"><div><h3>配置总览 · 模型</h3><p class="muted">只读：对照配置选择与运行证据，不会探测供应商或启动任务。</p></div><button type="button" id="config-overview-refresh">读取配置总览</button></div>
+      <p id="config-overview-status" class="setting-hint" role="status">此预览先覆盖五种模型用途。</p>
+      <ul id="config-overview-rows" class="model-list" aria-label="模型配置状态"></ul>
+    </article>
     <article class="surface models-card" id="models-card"><div class="section-heading"><div><h3>模型</h3></div></div>
       <p id="models-error" class="setting-hint models-error" role="alert" hidden></p>
       <p id="models-migration" class="muted" role="status" hidden></p>

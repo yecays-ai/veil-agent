@@ -2441,6 +2441,26 @@ def make_handler(hub, token):
                 self._get_life()
             elif url.path == '/api/mcp':
                 self._get_mcp(query)
+            elif url.path == '/api/config/overview':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': '配置总览不接受查询参数。'})
+                    return
+                cfg = getattr(hub.chat, 'cfg', None)
+                if not getattr(cfg, 'id', None):
+                    self._send(503, {'error': '角色配置尚未就绪。'})
+                    return
+                from config_registry import model_config_overview
+                models = getattr(cfg, 'models', None)
+                try:
+                    settings = models.public() if models is not None else None
+                except SettingsError:
+                    settings = None
+                self._send(200, model_config_overview(
+                    role_id=cfg.id, settings=settings,
+                    background_model=hub.background_running,
+                ))
             elif url.path == '/api/workbench':
                 self._get_workbench()
             elif url.path == '/api/windows-apps':
