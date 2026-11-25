@@ -3,7 +3,7 @@
 ## P3-4 维护窗口数据清理 + 物理卸载 + 最终验收（2026-11-25，施工中）
 
 - 已完成：新增手动清理工具 `scripts/p3_4_cleanup.py`；plan 校验冷备覆盖（逐文件 sha256、目录成员、brain.db 哈希）、文件/目录内容指纹、独占计划文件，apply 需相同 plan + 确认词 + 停服/写锁/网页端口检查；删除事务内确认只处理批准 ID，提交后支持 VACUUM/文件清理中断恢复；清理已删除/墓碑内容、letters/plans DB 重复行、旧 embeddings/JSONL/vault/备份副本、Ombre 运行目录；清理前后逐行对账，共享事件和 P6 不动。
-- 已完成：移除遗留 Ombre 入口源文件 `ombre_entry.py`/`ombre_host.py` 和 prompt allowlist 引用；新增隔离测试 `tests/test_p3_4_cleanup.py`（P6 保留、墓碑/letters-plans 清理、文件保护、错误计划拒绝）和 `docs/p3-4-maintenance-runbook.md`。
+- 已完成：移除遗留 Ombre 入口源文件 `ombre_entry.py`/`ombre_host.py` 和 prompt allowlist 引用；新增隔离测试 `tests/test_p3_4_cleanup.py`（9 项：显式 JSONL 白名单/活跃记录保护、冷备覆盖/内容指纹、完整 letters/plans 归档且墓碑不归档、独占计划、额外行拒绝、中断恢复时剩余文件指纹复核、共享事件/P6 保留）和 `docs/p3-4-maintenance-runbook.md`。
 - 未做：**未在正式数据执行任何清理**；未创建正式 plan、未删除正式文件、未物理卸载正式 Ombre。P3-4 必须在 Lan 维护窗口确认名单、完成冷备 + 恢复演练后执行。
 - 下一步：PR 复审；合并后在维护窗口按 runbook 先部署 P3-3，再 plan 复查/apply/启动/导出/恢复复验；P3-4 完成记录只在验收后写。
 - 正式状态：正式 Peter 仍运行 P3-2/f63e58a；P3-3 已合并未部署。

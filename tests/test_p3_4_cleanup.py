@@ -83,6 +83,16 @@ class CleanupTests(unittest.TestCase):
                 'INSERT INTO event_ledger(ledger_seq,kind,source_file,event_id,memory_id,payload_json) '
                 "VALUES(1,'stage-evidence','__live__','E-normal',?, '{\"text\":\"normal evidence\"}')",
                 (self.normal['memory_id'],))
+            brain_events.upsert_event(connection, {'event_id': 'E-tombstone',
+                                                   'memory_id': self.deleted['memory_id'],
+                                                   'story': 'deleted event story',
+                                                   'title': 'Deleted event'})
+            brain_events.upsert_stage(connection, {'stage_id': 'S-tombstone',
+                                                   'event_id': 'E-tombstone',
+                                                   'text': 'deleted event stage'})
+            connection.execute(
+                "INSERT INTO event_sources(event_id,ord,memory_id,part) VALUES('E-tombstone',0,?,'x')",
+                (self.deleted['memory_id'],))
             connection.execute(
                 'INSERT INTO event_ledger(ledger_seq,kind,source_file,event_id,memory_id,payload_json) '
                 "VALUES(0,'stage-evidence','__live__',NULL,?, '{\"text\":\"deleted residue\"}')",
@@ -100,8 +110,13 @@ class CleanupTests(unittest.TestCase):
             (self.memory / directory).mkdir(parents=True, exist_ok=True)
         (self.memory / 'dynamic' / 'old.md').write_text('old vault', encoding='utf-8')
         (self.memory / 'embeddings.db').write_bytes(b'old embeddings')
-        (self.memory / 'old-mirror.jsonl').write_text('{"old": true}\n', encoding='utf-8')
+        (self.memory / 'memory-versions.jsonl').write_text('{"old": true}\n', encoding='utf-8')
+        (self.role_dir / 'events.jsonl').write_text('{"old": true}\n', encoding='utf-8')
+        for active in ('chat.jsonl', 'tools.jsonl', 'context-log.jsonl',
+                       'incoming-submissions.jsonl', 'provider-errors.jsonl'):
+            (self.role_dir / active).write_text('{"live": true}\n', encoding='utf-8')
         (self.memory / '_agent' / 'state.jsonl').write_text('{}', encoding='utf-8')
+        (self.memory / '_agent' / 'diagnostics.jsonl').write_text('{}', encoding='utf-8')
         (self.memory / '_media' / 'keep.bin').write_bytes(b'keep-media')
         (self.memory / 'archive').mkdir(exist_ok=True)
         (self.role_dir / 'archive' / 'pre-p3-2-event-ledgers-x').mkdir(parents=True)
@@ -137,12 +152,18 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual({row['id'] for row in plan['letters_plans']},
                          {self.letter['memory_id'], self.plan['memory_id']})
         self.assertEqual(plan['residuals']['event_ledger'], 1)
+        self.assertEqual(plan['removed_event_ids'], ['E-tombstone'])
         self.assertEqual(plan['residuals']['delete_requests'], 1)
         self.assertGreaterEqual(plan['residuals']['write_journal'], 1)
         paths = {item['path'] for item in plan['file_targets']}
         self.assertIn('data/peter/memory/dynamic', paths)
         self.assertIn('data/peter/memory/embeddings.db', paths)
-        self.assertIn('data/peter/memory/old-mirror.jsonl', paths)
+        self.assertIn('data/peter/memory/memory-versions.jsonl', paths)
+        self.assertIn('data/peter/events.jsonl', paths)
+        for active in ('chat.jsonl', 'tools.jsonl', 'context-log.jsonl',
+                       'incoming-submissions.jsonl', 'provider-errors.jsonl'):
+            self.assertNotIn('data/peter/' + active, paths)
+        self.assertNotIn('data/peter/memory/_agent/state.jsonl', paths)
         self.assertIn('data/peter/memory.backup-old', paths)
         self.assertIn('.deps/ombre', paths)
         self.assertNotIn('data/peter/memory/_agent', paths)
@@ -200,6 +221,10 @@ class CleanupTests(unittest.TestCase):
             self.assertEqual(connection.execute(
                 'SELECT COUNT(*) FROM events WHERE event_id=?', ('E-normal',)).fetchone()[0], 1)
             self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM events WHERE event_id=?', ('E-tombstone',)).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                'SELECT COUNT(*) FROM event_stages WHERE stage_id=?', ('S-tombstone',)).fetchone()[0], 0)
+            self.assertEqual(connection.execute(
                 'SELECT COUNT(*) FROM event_stages WHERE stage_id=?', ('S-normal',)).fetchone()[0], 1)
             self.assertEqual(connection.execute(
                 'SELECT COUNT(*) FROM event_ledger WHERE memory_id=?',
@@ -224,8 +249,16 @@ class CleanupTests(unittest.TestCase):
         by_id = {item['id']: item for item in archived}
         self.assertEqual(by_id[self.letter['memory_id']]['body'], 'letter body')
         self.assertEqual(by_id[self.letter['memory_id']]['type'], 'letter')
+        # Tombstone bodies must not be resurrected into the letter/plan archive.
+        self.assertNotIn(self.deleted['memory_id'], by_id)
+        self.assertNotIn('deleted secret', json.dumps(by_id, ensure_ascii=False))
         self.assertFalse((self.memory / 'embeddings.db').exists())
-        self.assertFalse((self.memory / 'old-mirror.jsonl').exists())
+        self.assertFalse((self.memory / 'memory-versions.jsonl').exists())
+        self.assertFalse((self.role_dir / 'events.jsonl').exists())
+        for active in ('chat.jsonl', 'tools.jsonl', 'context-log.jsonl',
+                       'incoming-submissions.jsonl', 'provider-errors.jsonl'):
+            self.assertTrue((self.role_dir / active).is_file())
+        self.assertTrue((self.memory / '_agent' / 'state.jsonl').is_file())
         self.assertEqual(result['verify']['tombstone_rows'], 0)
         self.assertEqual(result['verify']['letter_plan_rows'], 0)
 
@@ -293,6 +326,17 @@ class CleanupTests(unittest.TestCase):
                                          confirm=p3_4_cleanup.CONFIRM_WORD)
         self.assertFalse((self.memory / 'dynamic').exists())
         self.assertEqual(result['db']['tombstones_removed'], 1)
+
+    def test_resume_rechecks_remaining_file_fingerprints(self):
+        plan = p3_4_cleanup._plan(self.root, 'peter', self.backup, self.archive)
+        record = next(item for item in plan['file_targets']
+                      if item['path'] == 'data/peter/memory/dynamic')
+        # A partially deleted directory may contain only approved files; that is resumable.
+        (self.memory / 'dynamic' / 'old.md').unlink()
+        p3_4_cleanup._validate_remaining_target(self.root, record)
+        (self.memory / 'dynamic' / 'unapproved.md').write_text('new', encoding='utf-8')
+        with self.assertRaises(RuntimeError):
+            p3_4_cleanup._apply_files(self.root, plan, self.archive)
 
     def test_exclusive_plan_file_never_overwrites_user_file(self):
         path = Path(self.temp.name) / 'user.json'

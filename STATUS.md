@@ -17,7 +17,7 @@
 ## P3-4 维护窗口数据清理 + 物理卸载 + 最终验收（施工中）
 
 - **目标**：维护窗口内对已确认名单执行不可逆清理：墓碑正文/raw/版本/向量、letters/plans DB 重复行、旧 JSONL/vault/embeddings、Ombre 运行目录/旧备份副本；只保留最小防复活标记和 P6 数据；最后复验导出/备份恢复。
-- **已完成**：新增手动清理工具 `scripts/p3_4_cleanup.py`（plan/apply，备份覆盖 + 文件/目录内容哈希 + DB 哈希绑定，停服/写锁/网页端口检查，独占计划文件，确认词）；清理墓碑/letters-plans、旧 embeddings/JSONL/备份副本/Ombre 运行目录，保留 P6 和共享事件；删除事务内只处理批准 ID，支持 commit 后中断恢复，清理前后逐行内容对账。移除遗留 Ombre 入口源文件；新增 8 项隔离测试；运行手册 `docs/p3-4-maintenance-runbook.md`。
+- **已完成**：新增手动清理工具 `scripts/p3_4_cleanup.py`（plan/apply，备份覆盖 + 文件/目录内容哈希 + DB 哈希绑定，停服/写锁/网页端口检查，独占计划文件，确认词）；清理墓碑/letters-plans、旧 embeddings/JSONL/备份副本/Ombre 运行目录，保留 P6 和共享事件；删除事务内只处理批准 ID，支持 commit 后中断恢复，清理前后逐行内容对账。移除遗留 Ombre 入口源文件；新增 9 项隔离测试；运行手册 `docs/p3-4-maintenance-runbook.md`。
 - **未做**：未在正式数据执行任何清理；未创建正式计划/未删除正式文件；需 Lan 在维护窗口确认名单、完成冷备和恢复演练后执行。P3-4 完成记录只能在维护窗口验收后写。
 - **下一步**：PR 复审；合并后在维护窗口执行 plan → 复查 → apply → 启动/导出/恢复复验，再更新 STATUS 为 P3 完成。
 

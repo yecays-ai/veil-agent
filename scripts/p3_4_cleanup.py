@@ -39,6 +39,20 @@ RUNTIME_TARGETS = ('.deps/ombre', '.local-tmp/ombre-115d831.zip',
                    '.local-tmp/ombre-upstream', '.local-tmp/ombre312',
                    '.local-tmp/probe_ombre.py', '.local-tmp/ticket-066-ombre.log')
 
+# Explicit retired ledgers. Never use a *.jsonl glob: chat/cost/tool/context/agent ledgers are live.
+OBSOLETE_ROLE_JSONL = frozenset({
+    'events.jsonl', 'event-stages.jsonl', 'stage-evidence.jsonl', 'event-versions.jsonl',
+    'event-review.jsonl', 'event-ops.jsonl', 'event-projections.jsonl', 'event-revisions.jsonl',
+    'event-dream-report.jsonl', 'memory-versions.jsonl', 'memory-sidecar.jsonl',
+    'delete-requests.jsonl',
+})
+OBSOLETE_MEMORY_JSONL = frozenset({
+    'events.jsonl', 'event-stages.jsonl', 'stage-evidence.jsonl', 'event-versions.jsonl',
+    'event-review.jsonl', 'event-ops.jsonl', 'event-projections.jsonl', 'event-revisions.jsonl',
+    'event-dream-report.jsonl', 'memory-versions.jsonl', 'memory-sidecar.jsonl',
+    'delete-requests.jsonl',
+})
+
 
 def _sha_bytes(data):
     return hashlib.sha256(data).hexdigest()
@@ -109,12 +123,13 @@ def _targets(root, role):
     for name in ('dynamic', 'permanent', 'archive', 'feel', 'letters', 'plans', '_ledger',
                  '_sources', '.locks', '.logs', '.them', '.you'):
         found.append(memory / name)
-    for pattern in ('memory.backup-*', '.event-import-backup-*', '*.jsonl'):
+    for pattern in ('memory.backup-*', '.event-import-backup-*'):
         found.extend(role_dir.glob(pattern))
+    found.extend(role_dir / name for name in OBSOLETE_ROLE_JSONL)
     if (role_dir / 'backups').is_dir():
         found.extend((role_dir / 'backups').glob('*'))
-    for pattern in ('*.jsonl', 'embeddings.db'):
-        found.extend(memory.glob(pattern))
+    found.extend(memory / name for name in OBSOLETE_MEMORY_JSONL)
+    found.append(memory / 'embeddings.db')
     found.extend(root / rel for rel in RUNTIME_TARGETS)
     return found
 
@@ -356,8 +371,8 @@ def _plan(root, role, backup, archive_dir):
         ids = {row['id'] for row in tombstones} | {row['id'] for row in letters}
         residuals = _residuals(connection, ids)
         db_sha = _sha_bytes(db_path.read_bytes())
-        before = _snapshot(connection, ids)
-        # Events hard-deleted because all their sources belong to cleaned memories.
+        # Events hard-deleted because all their sources belong to cleaned memories. Compute this
+        # before the "before" snapshot and use the SAME set on both sides of reconciliation.
         removed_events = set()
         if ids and _table(connection, 'event_sources'):
             marks = ','.join('?' * len(ids))
@@ -369,6 +384,7 @@ def _plan(root, role, backup, archive_dir):
                     % marks, (row[0], *ids)).fetchone()[0]
                 if remaining == 0:
                     removed_events.add(row[0])
+        before = _snapshot(connection, ids, removed_events)
     finally:
         connection.close()
     plan = {
@@ -472,6 +488,9 @@ def _apply_db(root, role, plan, archive_dir, state_path):
     archive_dir = Path(archive_dir)
     archive_dir.mkdir(parents=True, exist_ok=True)
     plan_ids = {row['id'] for row in plan['tombstones']} | {row['id'] for row in plan['letters_plans']}
+    # Only migrated letter/plan duplicate rows are archived; tombstone bodies are deliberately
+    # not copied into this archive (the cold backup already holds them if ever needed).
+    archive_ids = {row['id'] for row in plan['letters_plans']}
     archive_name = archive_dir / ('letters-plans-' + plan['plan_hash'][:16] + '.json')
     if archive_name.exists():
         archived = json.loads(archive_name.read_text(encoding='utf-8'))
@@ -481,7 +500,7 @@ def _apply_db(root, role, plan, archive_dir, state_path):
         connection = sqlite3.connect(str(db_path), timeout=30)
         connection.row_factory = sqlite3.Row
         try:
-            archived = _archive_full_rows(connection, plan_ids)
+            archived = _archive_full_rows(connection, archive_ids)
         finally:
             connection.close()
         _write_json(archive_name, archived, exclusive=True)
@@ -535,6 +554,37 @@ def _finish_db(root, role, plan, state_path):
             'p6': plan['p6_before']}
 
 
+def _validate_remaining_target(root, record):
+    path = root / record['path']
+    if not path.exists():
+        return
+    if not _inside(root, path):
+        raise RuntimeError('清理目标越出项目目录：%s' % record['path'])
+    if path.is_symlink():
+        raise RuntimeError('清理目标含符号链接/联接点：%s' % record['path'])
+    if record.get('kind') == 'file':
+        data = path.read_bytes()
+        if len(data) != record['bytes'] or _sha_bytes(data) != record['sha256']:
+            raise RuntimeError('待删文件内容与批准计划不一致：%s' % record['path'])
+        return
+    approved_files = {item['path']: item for item in record.get('members', [])}
+    approved_dirs = set(record.get('dirs', []))
+    for item in path.rglob('*'):
+        if item.is_symlink():
+            raise RuntimeError('清理目录含符号链接/联接点：%s' % item)
+        relative = item.relative_to(path).as_posix()
+        if item.is_dir():
+            if relative not in approved_dirs:
+                raise RuntimeError('清理目录含批准计划外的子目录：%s' % relative)
+        elif item.is_file():
+            expected = approved_files.get(relative)
+            if expected is None:
+                raise RuntimeError('清理目录含批准计划外的文件：%s' % relative)
+            data = item.read_bytes()
+            if len(data) != expected['bytes'] or _sha_bytes(data) != expected['sha256']:
+                raise RuntimeError('待删文件内容与批准计划不一致：%s' % relative)
+
+
 def _apply_files(root, plan, archive_dir):
     root = Path(root)
     archive_dir = Path(archive_dir)
@@ -548,18 +598,20 @@ def _apply_files(root, plan, archive_dir):
                 raise RuntimeError('已有 Ombre 安装包未通过离线校验')
         else:
             target.write_bytes(data)
+    # Validate all remaining targets before deleting anything. A retry after a partially
+    # interrupted cleanup may see a subset of approved files, but never a changed/extra file.
+    for record in plan['file_targets']:
+        _validate_remaining_target(root, record)
     removed = []
-    for item in plan['file_targets']:
-        path = root / item['path']
+    for record in plan['file_targets']:
+        path = root / record['path']
         if not path.exists():
             continue
-        if not _inside(root, path):
-            raise RuntimeError('清理目标越出项目目录：%s' % item['path'])
         if path.is_dir():
             shutil.rmtree(path)
         else:
             path.unlink()
-        removed.append(item['path'])
+        removed.append(record['path'])
     return removed
 
 
