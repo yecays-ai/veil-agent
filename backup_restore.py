@@ -30,7 +30,7 @@ DESKTOP_FILES = ("desktop.json",) + tuple(
 )
 BACKUP_DIR_KEY = "VEIL_BACKUP_DIR"
 _AUTO = object()
-OMBRE_RUNTIME_FILES = {
+LEGACY_RUNTIME_FILES = {
     "ombre.lock", "ombre.process.json", "ombre.stop", "ombre-http-ready.json",
     "process.log",
 }
@@ -155,7 +155,7 @@ def _entry_is_excluded(relative):
     if "_agent" not in parts:
         return False
     after = parts[parts.index("_agent") + 1:]
-    if len(after) == 1 and (name in OMBRE_RUNTIME_FILES or name.endswith(".tmp")):
+    if len(after) == 1 and (name in LEGACY_RUNTIME_FILES or name.endswith(".tmp")):
         return True
     return "tmp" in after
 
@@ -236,7 +236,7 @@ class _FileLock:
             if self.handle:
                 self.handle.close()
                 self.handle = None
-            raise BackupError("VEIL 或 Ombre 仍在运行或正在写入，请先完整关闭服务后重试。") from exc
+            raise BackupError("VEIL 仍在运行或正在写入，请先完整关闭服务后重试。") from exc
 
     def close(self):
         if self.handle is None:
@@ -259,14 +259,6 @@ def _acquire_cold_locks(root, *, create_session=False):
         if data.is_symlink():
             raise BackupError("data 目录是符号链接，已停止。")
         locks.append(_FileLock(data / "session.lock", create=create_session and data.exists()))
-        for path in sorted(data.glob("*/memory/_agent/ombre.lock")):
-            relative = path.relative_to(data)
-            candidate = data
-            for part in relative.parts:
-                candidate = candidate / part
-                if candidate.is_symlink():
-                    raise BackupError("Ombre 服务锁路径含符号链接，已停止。")
-            locks.append(_FileLock(path, create=False))
         return locks
     except Exception:
         for lock in reversed(locks):
@@ -403,10 +395,6 @@ def create_backup(root, destination, desktop_dir=_AUTO):
                 "files": manifest_files,
                 "excluded_runtime_items": [
                     "data/session.lock", "data/web_service.json", "data/*.tmp", "data/<role>/*.tmp",
-                    "data/<role>/memory/_agent/ombre.lock",
-                    "data/<role>/memory/_agent/ombre.process.json",
-                    "data/<role>/memory/_agent/ombre.stop",
-                    "data/<role>/memory/_agent/ombre-http-ready.json",
                     "data/<role>/memory/_agent/process.log",
                     "data/<role>/memory/_agent/tmp/", "*.tmp",
                 ],
@@ -937,7 +925,7 @@ def usage_report(root, destination=None):
     root = Path(root).resolve()
     lines = []
     copies = sorted((root / "data").glob("*/memory.backup-*"))
-    lines.append(f"Ombre 升级前自动留的记忆副本（data/<角色>/memory.backup-*）：{len(copies)} 份，"
+    lines.append(f"旧版自动留的记忆副本（data/<角色>/memory.backup-*）：{len(copies)} 份，"
                  f"共 {_mb(sum(_tree_size(path) for path in copies))}")
     stray = [path for path in (root / "data").glob("*.tmp")] + [path for path in (root / "data").glob("*/*.tmp")]
     lines.append(f"数据目录里遗留的 .tmp 文件：{len(stray)} 个，共 {_mb(sum(_tree_size(path) for path in stray))}")

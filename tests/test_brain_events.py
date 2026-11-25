@@ -62,7 +62,8 @@ class EventStorageTests(unittest.TestCase):
             counts = brain_events.export_jsonl(connection, self.root / 'export')
         finally:
             connection.close()
-        self.assertEqual(counts, {'events': 1, 'stages': 2})
+        self.assertEqual((counts['events'], counts['stages']), (1, 2))
+        self.assertEqual(set(counts['ledger']), set(brain_events.EVENT_LEDGER_FILES.values()))
         exported = json.loads((self.root / 'export' / 'events.jsonl').read_text(encoding='utf-8'))
         self.assertEqual(exported['story'], 'The whole story.')
         self.assertEqual(exported['a_field_from_the_future'], {'kept': True})

@@ -1058,10 +1058,8 @@ def load_character(root, character_id):
             raise ValueError('unsupported voice provider')
         memory = dict(cfg.get('memory') or {})
         if memory.get('enabled', False):
-            memory_port = positive_int(memory.get('ombre_port'))
-            if not 1024 <= memory_port <= 65535:
-                raise ValueError('memory.ombre_port must be an available TCP port')
-            memory['ombre_port'] = memory_port
+            # P3-2: no Ombre listener/port; Brain is the memory backend.
+            memory.pop('ombre_port', None)
         profile = cfg.get('profile')
         if profile is not None:
             raw_profile = profile
@@ -6591,12 +6589,6 @@ def memory_available(cfg):
     return bool((getattr(cfg, 'memory', None) or {}).get('enabled')) and models_available(cfg)
 
 
-def brain_authority_ready(cfg):
-    """P3-1: memory now requires the Brain write authority instead of an Ombre backend."""
-    brain = ((getattr(cfg, 'memory', None) or {}).get('brain') or {})
-    return isinstance(brain, dict) and brain.get('write_authority') is True
-
-
 def make_voice(root, cfg, store, budget):
     from voice_output import MiniMaxVoice, load_voice_config
     if not cfg.voice or cfg.voice.get('provider') != 'minimax':
@@ -6916,9 +6908,6 @@ def main():
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
-                    if use_memory and not brain_authority_ready(cfg):
-                        print('记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
-                        use_memory = False
                     if use_memory:
                         from memory_agent import Memory
                         with Memory(cfg, store, budget, model) as memory:

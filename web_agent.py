@@ -33,7 +33,7 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
 from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        background_cfg, brain_authority_ready, load_character, memory_available, now,
+                        background_cfg, load_character, memory_available, now,
                         make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
@@ -3729,8 +3729,7 @@ def main(argv=None):
             from runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             use_memory = memory_available(cfg)
-            memory_port = (cfg.memory or {}).get('ombre_port') if use_memory else None
-            hub = Hub(cfg.name, activity, memory_port, store.root / cfg.id / 'media',
+            hub = Hub(cfg.name, activity, None, store.root / cfg.id / 'media',
                       data_root=data_dir, config_root=config_root)
             if cfg.memory and cfg.memory.get('enabled') and not use_memory:
                 hub.push('notice', '模型还没有选择，记忆后台暂未启动；请在设置里选择模型后重启。')
@@ -3752,9 +3751,6 @@ def main(argv=None):
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:
-                        if use_memory and not brain_authority_ready(cfg):
-                            hub.push('notice', '记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
-                            use_memory = False
                         if use_memory:
                             from memory_agent import Memory
                             with Memory(cfg, store, budget, model,

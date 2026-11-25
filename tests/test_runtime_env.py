@@ -53,21 +53,5 @@ class RuntimeEnvTests(unittest.TestCase):
             judge.settings = {'timeout_seconds': 5}
             self.assertEqual(judge.make_embedder().api_key, 'judge-sentinel')
 
-    def test_ombre_environment_reads_env_root(self):
-        import ombre_resident
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            env_root = root / 'config'
-            env_root.mkdir()
-            (env_root / '.env').write_text('EMBED_API_KEY=ombre-sentinel\n', encoding='utf-8')
-            cfg = SimpleNamespace(memory={'ombre_model': False},
-                                  provider={'api_key_env': 'DEEPSEEK_API_KEY'})
-            (root / 'private').mkdir()
-            environment = ombre_resident._environment(
-                root, cfg, root / 'vault', root / 'private', root / 'config.yaml', 't' * 48, 12345,
-                env_root=env_root)
-            self.assertEqual(environment['OMBRE_EMBED_API_KEY'], 'ombre-sentinel')
-
-
 if __name__ == '__main__':
     unittest.main()

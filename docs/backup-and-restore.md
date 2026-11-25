@@ -2,10 +2,10 @@
 
 ## 备份了什么
 
-- 项目里的 `data\`（聊天、费用账本、Ombre 记忆、授权、长期任务、workspace……）、`characters\`、`persona\`、`.env`。
+- 项目里的 `data\`（聊天、费用账本、Brain 记忆与事件、授权、长期任务、workspace……）、`characters\`、`persona\`、`.env`。
 - 桌面版自己的设置：`%APPDATA%\VEIL Desktop\desktop.json`（窗口位置等）和你选的聊天背景图 `appearance-background.*`。
 - 不备份：`%APPDATA%\VEIL Desktop\attachments`（附件缓存，原件在 `data\<角色>\media`，已被备份）、`session-data`（浏览器缓存）、`.venv`、`.deps`、桌面 exe（都可重新生成）。
-- 不备份的运行残留：`data\web_service.json`、`data\` 与 `data\<角色>\` 下遗留的 `*.tmp`、锁文件、Ombre 进程标志和日志。
+- 不备份的运行残留：`data\web_service.json`、`data\` 与 `data\<角色>\` 下遗留的 `*.tmp`、锁文件和运行日志。
 
 ## 备份放哪里
 
@@ -48,4 +48,4 @@ $backup = "X:\VEIL-backups\VEIL-Agent-Backup-实际时间戳"
 
 ## 看看哪些东西在堆积
 
-`.venv\Scripts\python.exe backup_restore.py usage` 只统计数字，不删除任何东西：Ombre 升级前留的 `memory.backup-*`、遗留 `.tmp`、`*.before-restore-*` 安全副本、备份位置里的备份和中断留下的临时目录。
+`.venv\Scripts\python.exe backup_restore.py usage` 只统计数字，不删除任何东西：旧版留下的 `memory.backup-*`、遗留 `.tmp`、`*.before-restore-*` 安全副本、备份位置里的备份和中断留下的临时目录。

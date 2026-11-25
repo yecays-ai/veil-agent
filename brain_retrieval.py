@@ -1,7 +1,7 @@
 """Ticket 430 / P1: retrieval from VEIL Brain's own store.
 
-Only the candidate source changes in this ticket. The recall judge, dedup, cooldown, budget and the
-authoritative read/write path stay exactly as they are; Ombre remains the default backend.
+Brain is the only retrieval backend (P3-2); the recall judge, dedup, cooldown, budget and the
+authoritative read/write path are unchanged.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 DEFAULTS = {
-    'backend': 'ombre',
+    'backend': 'brain',
     'weight_vector': 0.65,
     'weight_keyword': 0.35,
 }

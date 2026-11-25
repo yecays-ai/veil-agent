@@ -117,30 +117,6 @@ class ColdBackupTests(BackupFixture, unittest.TestCase):
             process.stdout.close()
             process.stderr.close()
 
-    def test_running_ombre_lock_blocks_backup(self):
-        lock_path = self.source / "data" / "fixture" / "memory" / "_agent" / "ombre.lock"
-        code = (
-            "from pathlib import Path; import sys; from backup_restore import _FileLock; "
-            "lock=_FileLock(Path(sys.argv[1]), create=True); print('ready', flush=True); "
-            "sys.stdin.readline(); lock.close()"
-        )
-        process = subprocess.Popen(
-            [sys.executable, "-c", code, str(lock_path)], cwd=REPO,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        try:
-            self.assertEqual(process.stdout.readline().strip(), "ready")
-            with self.assertRaises(backup_restore.BackupError):
-                backup_restore.create_backup(self.source, self.backups)
-            self.assertFalse(self.backups.exists())
-        finally:
-            process.stdin.write("\n")
-            process.stdin.flush()
-            process.wait(timeout=5)
-            process.stdin.close()
-            process.stdout.close()
-            process.stderr.close()
-
     def test_corruption_is_detected_before_target_changes(self):
         backup = self._create()
         (backup / "payload/data/fixture/chat.jsonl").write_bytes(b"corrupt")

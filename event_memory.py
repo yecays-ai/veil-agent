@@ -1425,10 +1425,7 @@ class EventMemory:
         state_path = f'{self.cfg.id}/event-dream.json'
         report_path = f'{self.cfg.id}/event-dream-report.jsonl'
         now = datetime.now().astimezone()
-        try:
-            state = json.loads((self.store.root / state_path).read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            state = {}
+        state = self._dream_state()
         lease = _when(state.get('lease_until'))
         if state.get('status') == 'running' and lease and now < lease:
             return 0
@@ -1451,11 +1448,21 @@ class EventMemory:
                                         'fixed': fixed, 'error': error})
         return fixed
 
-    def dream_state(self):
+    def _dream_state(self):
+        path = f'{self.cfg.id}/event-dream.json'
+        reader = getattr(self.store, 'read_state', None)
+        if callable(reader):
+            try:
+                return reader(path) or {}
+            except Exception:
+                return {}
         try:
-            return json.loads((self.store.root / f'{self.cfg.id}/event-dream.json').read_text(encoding='utf-8'))
+            return json.loads((self.store.root / path).read_text(encoding='utf-8'))
         except (OSError, ValueError):
             return {}
+
+    def dream_state(self):
+        return self._dream_state()
 
     @_serialized
     def auto_correct(self):

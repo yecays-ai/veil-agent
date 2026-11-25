@@ -6,11 +6,35 @@ stages, sources and provenance for every event, losslessly. It is additive and i
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# P3-2: every remaining event-lifecycle ledger is a virtual JSONL path backed by brain.db.
+# The keys keep the old file names so BrainStore can preserve the existing read/append call sites.
+EVENT_LEDGER_FILES = {
+    'stage-evidence.jsonl': 'stage-evidence',
+    'event-versions.jsonl': 'event-version',
+    'event-review.jsonl': 'event-review',
+    'event-ops.jsonl': 'event-op',
+    'event-projections.jsonl': 'event-projection',
+    'event-revisions.jsonl': 'event-revision',
+    'event-dream-report.jsonl': 'event-dream-report',
+}
+EVENT_STATE_FILE = 'event-dream.json'
+EVENT_LEDGER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS event_ledger(
+    seq INTEGER PRIMARY KEY, at TEXT, kind TEXT NOT NULL, event_id TEXT, stage_id TEXT,
+    memory_id TEXT, payload_json TEXT NOT NULL, row_sha256 TEXT NOT NULL,
+    UNIQUE(kind, row_sha256));
+CREATE INDEX IF NOT EXISTS event_ledger_event ON event_ledger(event_id);
+CREATE INDEX IF NOT EXISTS event_ledger_kind ON event_ledger(kind, seq);
+CREATE TABLE IF NOT EXISTS event_state(
+    key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at TEXT);
+"""
 
 EVENT_COLUMNS = {
     'story': 'TEXT', 'title': 'TEXT', 'status': 'TEXT', 'first_at': 'TEXT',
@@ -33,6 +57,7 @@ def ensure_schema(connection):
         for name, kind in columns.items():
             if name not in existing:
                 connection.execute('ALTER TABLE %s ADD COLUMN %s %s' % (table, name, kind))
+    connection.executescript(EVENT_LEDGER_SCHEMA)
     connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                        (str(SCHEMA_VERSION),))
     connection.commit()
@@ -40,6 +65,75 @@ def ensure_schema(connection):
 
 def _as_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True) if value is not None else None
+
+
+def ledger_kind(path, role):
+    """Map a legacy event JSONL path to its event_ledger kind, or None."""
+    name = str(path).replace('\\', '/').rsplit('/', 1)[-1]
+    if name not in EVENT_LEDGER_FILES:
+        return None
+    prefix = '%s/' % role
+    if not str(path).replace('\\', '/').startswith(prefix):
+        return None
+    return EVENT_LEDGER_FILES[name]
+
+
+def append_ledger(connection, kind, row):
+    """Append one lossless event-ledger row; duplicate rows are idempotent by hash."""
+    ensure_schema(connection)
+    payload = json.dumps(dict(row), ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    connection.execute(
+        'INSERT OR IGNORE INTO event_ledger(at,kind,event_id,stage_id,memory_id,payload_json,row_sha256) '
+        'VALUES(?,?,?,?,?,?,?)',
+        (row.get('at') or row.get('time'), kind, row.get('event_id'), row.get('stage_id'),
+         row.get('memory_id'), payload, digest))
+    return digest
+
+
+def read_ledger(connection, kind, limit=None):
+    sql = 'SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY seq'
+    params = [kind]
+    try:
+        if limit is not None:
+            sql = ('SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY seq DESC LIMIT ?')
+            params.append(int(limit))
+            rows = list(reversed([json.loads(item[0]) for item in connection.execute(sql, params)]))
+            return rows
+        return [json.loads(item[0]) for item in connection.execute(sql, params)]
+    except sqlite3.Error:
+        return []
+
+
+def ledger_count(connection, kind):
+    try:
+        row = connection.execute('SELECT COUNT(*) FROM event_ledger WHERE kind=?', (kind,)).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0] if row else 0)
+
+
+def write_state(connection, key, value):
+    ensure_schema(connection)
+    connection.execute(
+        'INSERT INTO event_state(key,payload_json,updated_at) VALUES(?,?,?) '
+        'ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json, '
+        'updated_at=excluded.updated_at',
+        (str(key), json.dumps(value, ensure_ascii=False, sort_keys=True), value.get('updated_at') if isinstance(value, dict) else None))
+    connection.commit()
+
+
+def read_state(connection, key):
+    try:
+        row = connection.execute('SELECT payload_json FROM event_state WHERE key=?', (str(key),)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    try:
+        return json.loads(row[0])
+    except ValueError:
+        return None
 
 
 def read_jsonl(path):
@@ -77,12 +171,21 @@ def upsert_event(connection, row):
     connection.commit()
 
 
-def upsert_stage(connection, row, index=0):
+def upsert_stage(connection, row, index=None):
     ensure_schema(connection)
     stage_id = str(row.get('stage_id') or '').strip()
     event_id = str(row.get('event_id') or '').strip()
     if not stage_id or not event_id:
         return
+    if index is None:
+        existing = connection.execute(
+            'SELECT ord FROM event_stages WHERE stage_id=?', (stage_id,)).fetchone()
+        if existing is not None:
+            index = existing[0]
+        else:
+            top = connection.execute(
+                'SELECT COALESCE(MAX(ord), -1) + 1 FROM event_stages').fetchone()
+            index = int(top[0] if top else 0)
     connection.execute(
         'INSERT INTO event_stages(stage_id, event_id, at, state, text, facts_json, ord) '
         'VALUES(?,?,?,?,?,?,?) ON CONFLICT(stage_id) DO UPDATE SET event_id=excluded.event_id, '
@@ -195,7 +298,19 @@ def export_jsonl(connection, out_dir):
         with open(out / name, 'w', encoding='utf-8', newline='\n') as handle:
             for row in rows:
                 handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n')
-    return {'events': len(events), 'stages': len(stages)}
+    ledger_counts = {}
+    for filename, kind in EVENT_LEDGER_FILES.items():
+        rows = read_ledger(connection, kind)
+        with open(out / filename, 'w', encoding='utf-8', newline='\n') as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n')
+        ledger_counts[kind] = len(rows)
+    state = read_state(connection, 'event-dream')
+    if state is not None:
+        (out / EVENT_STATE_FILE).write_text(
+            json.dumps(state, ensure_ascii=False, indent=1, sort_keys=True), encoding='utf-8')
+    return {'events': len(events), 'stages': len(stages), 'ledger': ledger_counts,
+            'state': state is not None}
 
 
 def main(argv=None):

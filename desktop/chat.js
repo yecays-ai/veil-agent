@@ -986,7 +986,7 @@ async function readRawMemory(memoryId){
     const params=new URLSearchParams({id:memoryId,offset:String(offset)});if(version)params.set('version',version);
     const r=await api('/api/memory/read?'+params.toString());const page=await r.json();
     if(!r.ok)throw new Error(page.error||'这条记忆读不了');
-    if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('Ombre 记忆格式无法识别');
+    if(typeof page.text!=='string'||typeof page.version!=='string')throw new Error('记忆格式无法识别');
     version=page.version;content+=page.text;offset=page.next_offset;
   }while(offset!==null);
   return content;
@@ -1579,7 +1579,7 @@ function recallDetails(r){
   if(n(r.natural_association))lines.push('自然联想：'+ids(r.natural_association));
   const a=r.association||{};
   if(a.candidates!==undefined)lines.push(`自然联想候选 ${a.candidates} 条`+(a.reason?`（${a.reason}）`:'')+(n(a.dropped)?'；没选：'+a.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'):''));
-  if(n(r.ombre))lines.push(`Ombre 返回：${ids(r.ombre)}`);
+  if(n(r.ombre))lines.push(`记忆返回：${ids(r.ombre)}`);
   if(n(r.hidden))lines.push('不可见：'+r.hidden.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
   if(n(r.vector))lines.push(`向量候选：${ids(r.vector)}`);
   const j=r.judge||{};
@@ -1610,7 +1610,7 @@ function recallText(r){
   parts.push(`相关 ${relevant} 条`);
   parts.push(natural?`自然浮现 ${natural} 条`:'没有自然浮现');
   if(n(r.opening))parts.push(`开场 ${n(r.opening)} 条`);
-  parts.push(`Ombre ${n(r.ombre)} 条`);
+  parts.push(`记忆 ${n(r.ombre)} 条`);
   if(n(r.hidden)){
     const reasons=[...new Set((r.hidden||[]).map(x=>x&&x.reason).filter(Boolean))];
     parts.push(`不可见 ${n(r.hidden)} 条${reasons.length?'（'+reasons.join('/')+'）':''}`);
@@ -1779,7 +1779,7 @@ async function poll(){
     memoryAvailable=s.memory_available===true;
     $('memory-unavailable').hidden=memoryAvailable;
     if(memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
-    else if(!memoryAvailable&&!memoryLoaded){$('memory-list').textContent='没有 Ombre 记忆数据';$('memory-count').textContent='不可用'}
+    else if(!memoryAvailable&&!memoryLoaded){$('memory-list').textContent='没有记忆数据';$('memory-count').textContent='不可用'}
     const stick=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     const initial=after===0;pendingApproval=s.pending;
     for(const e of s.events){
@@ -2801,7 +2801,7 @@ function renderModels(view){
   fillModelSelect(sw,view,view.use.peter);
   fillModelSelect($('use-peter'),view,view.use.peter);fillModelSelect($('use-autonomy'),view,view.use.autonomy,true);fillModelSelect($('use-delegate'),view,view.use.delegate||'');fillModelSelect($('use-background'),view,view.use.background);fillModelSelect($('use-glance'),view,view.use.glance,true);
   $('models-migration').textContent=view.migration_notice||'';$('models-migration').hidden=!view.migration_notice;
-  $('background-hint').textContent=view.background_restart?'重启后生效':'Ombre 给记忆打标签、整理短期便签用这个。换了以后，完全退出 Peter 再打开才生效。';
+  $('background-hint').textContent=view.background_restart?'重启后生效':'记忆模型用来整理记忆和短期便签。换了以后，完全退出 Peter 再打开才生效。';
   if(document.activeElement!==$('limit-daily'))$('limit-daily').value=view.limits.daily_cny;
   if(document.activeElement!==$('limit-monthly'))$('limit-monthly').value=view.limits.monthly_cny;
   const endpoints=$('endpoint-list');endpoints.replaceChildren();

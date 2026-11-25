@@ -78,6 +78,16 @@ class BrainStore:
             finally:
                 connection.close()
             return None
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                brain_events.append_ledger(connection, kind, dict(row))
+                connection.commit()
+                brain_writer.refresh_digest(connection)
+            finally:
+                connection.close()
+            return None
         return self.base.append(path, row)
 
     def read(self, path):
@@ -110,11 +120,48 @@ class BrainStore:
                 return brain_events.read_rows(connection, 'event-stages')
             finally:
                 connection.close()
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                return brain_events.read_ledger(connection, kind)
+            finally:
+                connection.close()
         return self.base.read(path)
 
+    def replace(self, path, value):
+        name = str(path).replace('\\', '/')
+        if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
+            connection = self._connect()
+            try:
+                brain_events.write_state(connection, 'event-dream', dict(value or {}))
+                brain_writer.refresh_digest(connection)
+            finally:
+                connection.close()
+            return None
+        return self.base.replace(path, value)
+
+    def read_state(self, path):
+        name = str(path).replace('\\', '/')
+        if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
+            connection = self._connect()
+            try:
+                return brain_events.read_state(connection, 'event-dream') or {}
+            finally:
+                connection.close()
+        return None
+
     def read_tail(self, path, limit):
-        if str(path).replace('\\', '/') == '%s/memory-versions.jsonl' % self.role:
+        name = str(path).replace('\\', '/')
+        if name == '%s/memory-versions.jsonl' % self.role:
             return self._read_versions()[-limit:]
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                return brain_events.read_ledger(connection, kind, limit=limit)
+            finally:
+                connection.close()
         return self.base.read_tail(path, limit)
 
     def _append_version(self, row):

@@ -209,10 +209,8 @@ def _split(value):
 
 def attach_authority(cfg, store):
     settings = (getattr(cfg, 'memory', {}) or {}).get('brain') or {}
-    if not isinstance(settings, dict) or settings.get('write_authority') is not True:
-        return None
-    if settings.get('shadow') is True:
-        raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
+    if isinstance(settings, dict) and settings.get('shadow') is True:
+        raise ValueError('Brain 已成为唯一记忆后端，旧影子同步开关必须先移除')
     # P3-1: a brand-new role gets an empty Brain database; an existing role whose database
     # disappeared or is damaged fails here, before any Memory object can hide the loss.
     prepare_brain_database(store, cfg.id)
