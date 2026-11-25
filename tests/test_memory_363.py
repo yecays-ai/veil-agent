@@ -10,7 +10,6 @@ from unittest.mock import Mock
 from agent_types import UserError
 from memory_agent import Memory
 from memory_native import MEMORY_CHARS, NativeMemoryTools, ToolSet, dates_in
-from ombre_resident import resident_config
 from test_memory import Backend
 from veil_agent import Budget, Character, Store
 
@@ -260,14 +259,6 @@ class SmallPieces(unittest.TestCase):
                          {(10, 31), (11, 5), (10, 25), (10, 3), (11, 12)})
         self.assertEqual(dates_in('no dates here, rank 12:30'), set())
         self.assertEqual(dates_in('since 11-06 we'), {(11, 6)})          # an ordinary word must not eat the date
-
-    def test_ombre_merge_is_off_unless_asked_for(self):
-        cfg = SimpleNamespace(name='Peter', provider={'model': 'm', 'base_url': 'https://x'},
-                              memory={'model': 'e', 'base_url': 'https://y'})
-        self.assertEqual(resident_config(cfg, Path('v'), 't' * 64)['merge_threshold'], 1000)
-        cfg.memory['ombre_auto_merge'] = True
-        self.assertNotIn('merge_threshold', resident_config(cfg, Path('v'), 't' * 64))
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -327,37 +327,6 @@ class SimplifyMemoryTests(unittest.TestCase):
 
 
 
-    def test_refuses_while_ombre_resident_still_runs(self):
-        lock_path = self.fake['memory'] / '_agent' / 'ombre.lock'
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open('a+b')
-        handle.write(b'0')
-        handle.flush()
-        handle.seek(0)
-        if os.name == 'nt':
-            import msvcrt
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            result = run_script(self.fake['data_root'], '--apply')
-        finally:
-            if os.name == 'nt':
-                import msvcrt
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            handle.close()
-        output = result.stdout + result.stderr
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Ombre', output)
-        self.assertFalse((self.fake['role_root'] / 'backups').exists())
-        self.assertTrue(self.fake['feel_path'].exists())
-        self.assertEqual(len(read_records(self.fake['role_root'])), 1)
-
     def test_skip_plan_leaves_that_plan_out(self):
         result = run_script(self.fake['data_root'], '--apply', '--skip-plan', PLAN_ONE_ID)
         assert result.returncode == 0, result.stderr

@@ -78,6 +78,16 @@ class BrainStore:
             finally:
                 connection.close()
             return None
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                brain_events.append_ledger(connection, kind, dict(row))
+                connection.commit()
+                brain_writer.refresh_digest(connection)
+            finally:
+                connection.close()
+            return None
         return self.base.append(path, row)
 
     def read(self, path):
@@ -110,11 +120,64 @@ class BrainStore:
                 return brain_events.read_rows(connection, 'event-stages')
             finally:
                 connection.close()
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                return brain_events.read_ledger(connection, kind)
+            finally:
+                connection.close()
         return self.base.read(path)
 
+    def replace(self, path, value):
+        name = str(path).replace('\\', '/')
+        if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
+            from brain_lock import write_lock
+            with write_lock(self.base, self.role):
+                if self.freeze_path.exists():
+                    raise RuntimeError('memory writes are frozen for cutover')
+                connection = self._connect()
+                try:
+                    brain_events.write_state(connection, 'event-dream', dict(value or {}))
+                    brain_writer.refresh_digest(connection)
+                finally:
+                    connection.close()
+            return None
+        return self.base.replace(path, value)
+
+    def read_state(self, path):
+        name = str(path).replace('\\', '/')
+        if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
+            # Read-only: a busy writer must not make a missing lease look like an empty state.
+            connection = self._read_connect()
+            try:
+                try:
+                    row = connection.execute(
+                        'SELECT payload_json FROM event_state WHERE key=?',
+                        ('event-dream',)).fetchone()
+                except sqlite3.OperationalError as exc:
+                    if 'no such table' in str(exc).casefold():
+                        return None  # pre-P3-2 DB has no event state yet
+                    raise
+                if row is None:
+                    return None
+                value = json.loads(row[0])
+                return value if isinstance(value, dict) else None
+            finally:
+                connection.close()
+        return None
+
     def read_tail(self, path, limit):
-        if str(path).replace('\\', '/') == '%s/memory-versions.jsonl' % self.role:
+        name = str(path).replace('\\', '/')
+        if name == '%s/memory-versions.jsonl' % self.role:
             return self._read_versions()[-limit:]
+        kind = brain_events.ledger_kind(name, self.role)
+        if kind is not None:
+            connection = self._connect()
+            try:
+                return brain_events.read_ledger(connection, kind, limit=limit)
+            finally:
+                connection.close()
         return self.base.read_tail(path, limit)
 
     def _append_version(self, row):

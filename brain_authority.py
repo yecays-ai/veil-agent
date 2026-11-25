@@ -82,7 +82,10 @@ class BrainAuthority:
 
     def _retry_pending(self, embed):
         now = time.monotonic()
-        if now - self._last_pending_retry < self._pending_retry_seconds:
+        # 0 means "no retry has happened yet" (and tests use it to force a retry). A fresh
+        # runner can have monotonic() below the 60 s interval, so checking 0 as a timestamp
+        # would wrongly skip the first retry on the CI machine.
+        if self._last_pending_retry and now - self._last_pending_retry < self._pending_retry_seconds:
             return
         self._last_pending_retry = now
         connection = self._connect()
@@ -209,10 +212,8 @@ def _split(value):
 
 def attach_authority(cfg, store):
     settings = (getattr(cfg, 'memory', {}) or {}).get('brain') or {}
-    if not isinstance(settings, dict) or settings.get('write_authority') is not True:
-        return None
-    if settings.get('shadow') is True:
-        raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
+    if isinstance(settings, dict) and settings.get('shadow') is True:
+        raise ValueError('Brain 已成为唯一记忆后端，旧影子同步开关必须先移除')
     # P3-1: a brand-new role gets an empty Brain database; an existing role whose database
     # disappeared or is damaged fails here, before any Memory object can hide the loss.
     prepare_brain_database(store, cfg.id)

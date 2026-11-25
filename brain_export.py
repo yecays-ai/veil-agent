@@ -94,6 +94,8 @@ def export_vault(db_path, out_dir, *, include_events=True):
         manifest = {'memories': len(memories), 'versions': len(versions),
                     'sidecar': len(sidecar), 'tombstones': len(tombstones),
                     'events': events['events'], 'stages': events['stages'],
+                    'event_ledger': events.get('ledger', {}),
+                    'event_state': bool(events.get('state')),
                     'body_sha256': {row[0]: row[3] for row in memories}}
         (out / 'brain-export-manifest.json').write_text(
             json.dumps(manifest, ensure_ascii=False, indent=1, sort_keys=True), encoding='utf-8')

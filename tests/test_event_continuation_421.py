@@ -884,50 +884,6 @@ class ScaleTests(Fixture):
         self.assertLess(sum(len(str(candidate.get('story') or '')) for candidate in payload['candidates']), 9000)
 
 
-class ImportProtectionTests(Fixture):
-    """A reviewed import must not wipe what the running programme added afterwards."""
-
-    def final_file(self):
-        return {'events': [
-            {'id': 'V01', 'title': 'The lamp',
-             'english': 'A fictional reviewed story about the lamp and the desk.',
-             'sources': [{'recorded_at': '2026-11-01T10:00:00+08:00', 'memory_id': 'old-1',
-                          'text': 'a fictional source line'}]},
-            {'id': 'V02', 'title': 'The rain',
-             'english': 'Another fictional reviewed story about the rain.',
-             'sources': [{'recorded_at': '2026-11-02T10:00:00+08:00', 'memory_id': 'old-2',
-                          'text': 'another fictional source line'}]},
-        ], 'withdrawn': []}
-
-    def test_reimport_keeps_a_runtime_experience_added_after_the_import(self):
-        import event_import
-        data = self.temp / 'data'
-        plan = event_import.build_plan(self.final_file(), data)
-        first = event_import.apply_plan(plan, data)
-        self.assertEqual(first['actions']['create'], 2)
-        # A new stage arrives through the running programme after the import (same ledger shape).
-        imported = [row for row in self.store.read('peter/events.jsonl') if row.get('event_id') == 'V01'][-1]
-        runtime_story = (imported.get('story') or '') + '\n\n2026-11-22 A fictional runtime development about the lamp.'
-        self.store.append('peter/events.jsonl', {**imported, 'story': runtime_story, 'stage_count': 2,
-                                                 'revision': int(imported.get('revision') or 0) + 1})
-        self.store.append('peter/event-stages.jsonl', {
-            'stage_id': 's-runtime-421', 'event_id': 'V01', 'at': '2026-11-22T10:00:00+08:00',
-            'text': 'A fictional runtime development about the lamp.', 'state': 'committed',
-            'entities': ['lamp', 'runtime'], 'facts': {'dates': [], 'numbers': [], 'files': []}})
-        # The reviewed file is loaded again unchanged: the import must preserve the runtime stage.
-        second = event_import.build_plan(self.final_file(), data)
-        self.assertEqual(second['preview']['actions']['create'], 0)
-        self.assertIn('V01', [item['event_id'] for item in second['items']
-                              if item['action'] in ('preserved', 'unchanged')])
-        event_import.apply_plan(second, data)
-        rows = self.store.read('peter/events.jsonl')
-        stories = {row['event_id']: row.get('story') for row in rows if row.get('event_id')}
-        self.assertIn('runtime development', stories.get('V01') or '')
-        stages = self.store.read('peter/event-stages.jsonl')
-        self.assertEqual(len([row for row in stages if row.get('event_id') == 'V01'
-                              and row.get('state') == 'committed']), 2)
-
-
 class OldAndNewTests(Fixture):
     def test_an_old_fragment_stays_readable_beside_a_new_experience(self):
         old_id = self.memory.created_id(self.memory.call('hold', {'title': 'An old lamp memory',

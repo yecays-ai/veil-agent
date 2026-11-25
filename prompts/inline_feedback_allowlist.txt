@@ -4,8 +4,8 @@
 # Format: <sha1-12> <reason:...> <file>:<line> <preview>
 41590b0a0670 feedback:runtime executor_opencode.py:1063 set -eu; mkdir -p /tmp/home; export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp
 2bd781f4790b feedback:runtime executor_opencode.py:1162 The workbench image lacks the network-isolation tools. Rebuild veil-workbench fr
-4127627e9424 feedback:runtime memory_agent.py:1239 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
-45240802e8c9 feedback:runtime memory_agent.py:2498  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
+4127627e9424 feedback:runtime memory_agent.py:876 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
+45240802e8c9 feedback:runtime memory_agent.py:2135  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
 eec368d84360 feedback:runtime memory_native.py:323 . Deletion through trace requires explicit UI approval; requests made during aut
 1fdb5f8687a8 feedback:runtime memory_native.py:368 This tool is not authorized for the current role. Choose an available tool; perm
 819880ff86d9 feedback:runtime memory_native.py:827 This delete operation or argument combination is not available. Use the supporte
@@ -28,21 +28,21 @@ df0562a45219 feedback:runtime memory_native.py:1289 Every merge_id must be a mem
 d4cca9895e89 feedback:runtime memory_native.py:1310 . If what happened then still matters, put it back. If leaving it out is right, 
 e3cc8b638e2b feedback:runtime memory_native.py:1329 The rewrite could not be verified. Check this memory before continuing; its prev
 6674dde40ca3 feedback:runtime veil_agent.py:285 true also sends this message to Lan by email, for when she is away from the comp
-1f7fadc00a41 feedback:runtime veil_agent.py:2558 ，实际按用量结算并计入共享预算，超限时请求会被拦截。根据任务所需能力和预计总成本决定是否委派；无需因为单价较低就委派，主聊天模型与工具审批保持不变。
-d4196477b101 feedback:runtime veil_agent.py:2758 An autonomous wake may send at most three messages. A card with words is two mes
-8db5e44e5398 feedback:runtime veil_agent.py:2761 You may send at most 10 messages since Lan last wrote. A card with words is two 
-e7a01d0863ad feedback:runtime veil_agent.py:2780 You may send at most 10 messages since Lan last wrote. This card was not sent; i
-e8597b445fe9 feedback:runtime veil_agent.py:2831  That was your 10th message since Lan last wrote, so your turn ends here. Anythi
-6da7c45bbda9 feedback:runtime veil_agent.py:2994 An autonomous wake may send at most three messages. A sticker with words is two 
-9203788a7818 feedback:runtime veil_agent.py:2997 You may send at most 10 messages since Lan last wrote. A sticker with words is t
-c19f750bf1ac feedback:runtime veil_agent.py:3019 This email reply already has three attachments. This file was not sent; continue
-ba353725e8b9 feedback:runtime veil_agent.py:3032 You may send at most 10 messages since Lan last wrote. This message was not sent
-92403f59f44d feedback:runtime veil_agent.py:3062 The Lab file was rejected or could not be copied safely; nothing was sent. Use a
-f008b66a78f7 feedback:runtime veil_agent.py:3606 Internal recall candidates for your recall_message tool only. Never show these I
-46f9d438331d feedback:runtime veil_agent.py:5060 ; VEIL will commit, push and create/update the PR after your report. Do not run 
-eaff14068bdb feedback:runtime veil_agent.py:5062 . Host Git metadata is intentionally hidden; the container has a disposable snap
-a9bd2e73b885 feedback:runtime veil_agent.py:5762 VEIL runtime fact: the selected model rejected visual image input. Peter has not
-182c2bc0ba9a feedback:runtime veil_agent.py:5870 Your last response hit the output token limit. NONE of the tool calls in that re
-8be52f7c7a17 feedback:runtime veil_agent.py:5901 Your reply reached the output limit. Continue from the exact end of your previou
-070048339552 feedback:runtime veil_agent.py:5928 Lan pressed Request Reply. This one request must produce actual message text. re
-23de9ca6097f feedback:runtime veil_agent.py:5948 ]" in a reply does not send a sticker, and there is no such sticker in the libra
+1f7fadc00a41 feedback:runtime veil_agent.py:2556 ，实际按用量结算并计入共享预算，超限时请求会被拦截。根据任务所需能力和预计总成本决定是否委派；无需因为单价较低就委派，主聊天模型与工具审批保持不变。
+d4196477b101 feedback:runtime veil_agent.py:2756 An autonomous wake may send at most three messages. A card with words is two mes
+8db5e44e5398 feedback:runtime veil_agent.py:2759 You may send at most 10 messages since Lan last wrote. A card with words is two 
+e7a01d0863ad feedback:runtime veil_agent.py:2778 You may send at most 10 messages since Lan last wrote. This card was not sent; i
+e8597b445fe9 feedback:runtime veil_agent.py:2829  That was your 10th message since Lan last wrote, so your turn ends here. Anythi
+6da7c45bbda9 feedback:runtime veil_agent.py:2992 An autonomous wake may send at most three messages. A sticker with words is two 
+9203788a7818 feedback:runtime veil_agent.py:2995 You may send at most 10 messages since Lan last wrote. A sticker with words is t
+c19f750bf1ac feedback:runtime veil_agent.py:3017 This email reply already has three attachments. This file was not sent; continue
+ba353725e8b9 feedback:runtime veil_agent.py:3030 You may send at most 10 messages since Lan last wrote. This message was not sent
+92403f59f44d feedback:runtime veil_agent.py:3060 The Lab file was rejected or could not be copied safely; nothing was sent. Use a
+f008b66a78f7 feedback:runtime veil_agent.py:3604 Internal recall candidates for your recall_message tool only. Never show these I
+46f9d438331d feedback:runtime veil_agent.py:5058 ; VEIL will commit, push and create/update the PR after your report. Do not run 
+eaff14068bdb feedback:runtime veil_agent.py:5060 . Host Git metadata is intentionally hidden; the container has a disposable snap
+a9bd2e73b885 feedback:runtime veil_agent.py:5760 VEIL runtime fact: the selected model rejected visual image input. Peter has not
+182c2bc0ba9a feedback:runtime veil_agent.py:5868 Your last response hit the output token limit. NONE of the tool calls in that re
+8be52f7c7a17 feedback:runtime veil_agent.py:5899 Your reply reached the output limit. Continue from the exact end of your previou
+070048339552 feedback:runtime veil_agent.py:5926 Lan pressed Request Reply. This one request must produce actual message text. re
+23de9ca6097f feedback:runtime veil_agent.py:5946 ]" in a reply does not send a sticker, and there is no such sticker in the libra

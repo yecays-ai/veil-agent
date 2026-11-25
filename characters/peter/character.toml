@@ -37,13 +37,6 @@ output_cny_per_million = "16"
 enabled = true
 # Peter saves memories himself with the hold tool (ticket 007); "native" is the only mode.
 mode = "native"
-# Ombre's own tagging and same-event merge use the chat model and key; false keeps default tags only.
-ombre_model = true
-# Ticket 363: Ombre no longer glues a "same event" text onto an old memory by itself; Peter is shown related
-# memories and rewrites, links or saves new. true restores Ombre's own merge (takes effect when Ombre restarts).
-ombre_auto_merge = false
-# Role-local Ombre HTTP listener; future roles must choose a distinct port.
-ombre_port = 18011
 model = "BAAI/bge-m3"
 base_url = "https://api.siliconflow.cn/v1"
 dimensions = 1024
@@ -115,24 +108,8 @@ enabled = true
 # timeline_page = 20
 # evidence_minutes = 30
 
-[memory.brain]
-# P2 formal cutover (2026-11-25): VEIL Brain is the single memory write authority. This value is
-# committed to main on purpose: update-main resets tracked files to GitHub, so a local-only edit
-# would silently fall back to the retired Ombre shadow after the next update.
-# P3-2 removes this transitional table and makes Brain the only memory backend.
-write_authority = true
-# Shadow sync (P0-B) is transitional and must stay off while Brain is authoritative.
-shadow = false
-# Kept only until P3-2 deletes brain_sync; unused while shadow = false.
-reconcile_seconds = 600
-
-# Ticket 430 / P1: automatic-recall candidate source. "ombre" keeps today's search; "brain" uses
-# VEIL Brain's own vector + jieba/BM25 index (brain.db). Brain is opt-in in the shipped config and
-# the recall judge, dedup, cooldown, budget and write path are unchanged either way.
+# Ticket 430 / P3-2: automatic recall always uses VEIL Brain's vector + jieba/BM25 index.
 [memory.retrieval]
-# P2 formal cutover: automatic recall uses Brain retrieval. P3-2 removes the Ombre backend option.
-# Rollback from here is backup/offline-export based, not a runtime Ombre switch.
-backend = "brain"
 # weight_vector = 0.65
 # weight_keyword = 0.35
 

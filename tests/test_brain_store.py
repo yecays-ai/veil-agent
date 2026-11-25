@@ -61,13 +61,32 @@ class BrainStoreTests(unittest.TestCase):
                  'sources': [{'memory_id': 'm1'}], 'approved': True}
         self.store.append('fake/events.jsonl', event)
         self.store.append('fake/event-stages.jsonl',
-                          {'stage_id': 'S1', 'event_id': 'V01', 'text': 'stage', 'facts': ['f']})
+                          {'stage_id': 'S1', 'event_id': 'V01', 'text': 'stage', 'facts': ['f'],
+                           'event_row': {'kept': True}})
         events = self.store.read('fake/events.jsonl')
         stages = self.store.read('fake/event-stages.jsonl')
         self.assertEqual(events[0]['story'], 'full')
         self.assertEqual(stages[0]['text'], 'stage')
         self.assertEqual(stages[0]['facts'], ['f'])
+        self.assertEqual(stages[0]['event_row'], {'kept': True})
         self.assertEqual(self.base.appended, [])
+
+    def test_projection_duplicates_keep_order(self):
+        rows = [
+            {'stage_id': 'S1', 'event_id': 'E1', 'memory_id': 'A'},
+            {'stage_id': 'S1', 'event_id': 'E1', 'memory_id': 'B'},
+            {'stage_id': 'S1', 'event_id': 'E1', 'memory_id': 'A'},
+        ]
+        for row in rows:
+            self.store.append('fake/event-projections.jsonl', row)
+        self.assertEqual(self.store.read('fake/event-projections.jsonl'), rows)
+        self.assertEqual(self.base.appended, [])
+
+    def test_freeze_blocks_dream_state_replace(self):
+        (self.root / 'fake' / 'brain-write-freeze').write_text('frozen', encoding='utf-8')
+        with self.assertRaises(RuntimeError):
+            self.store.replace('fake/event-dream.json', {'status': 'running'})
+        self.assertIsNone(self.store.read_state('fake/event-dream.json'))
 
     def test_delete_requests_are_durable_in_brain(self):
         self.store.append('fake/delete-requests.jsonl', {

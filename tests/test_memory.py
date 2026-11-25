@@ -6,8 +6,7 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import MCP, Memory, MemoryToolError, ordinary_hits, vault_path
-from ombre_resident import resident_config
+from memory_agent import Memory, MemoryToolError, ordinary_hits, vault_path
 from veil_agent import Budget, Character, Chat, Store, UserError
 
 
@@ -242,23 +241,6 @@ class MemoryTests(unittest.TestCase):
         self.assertGreater(Decimal(modelled[0]['amount'])-Decimal(modelled[1]['amount']), 0)
         self.assertEqual(self.budget.totals()[2], 0)
 
-    def test_ombre_model_can_be_switched_off(self):
-        self.cfg.memory.update(ombre_model=False, base_url='https://example.invalid/v1')
-        self.memory.call('hold', {'content': 'x'})
-        costs = self.store.read('costs.jsonl')
-        self.assertFalse(any(c.get('accounting') == 'ombre-model-estimate' for c in costs))
-        self.assertEqual(resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration'], {'api_key': ''})
-
-    def test_ombre_config_uses_chat_model_without_a_key_in_the_file(self):
-        self.cfg.memory['base_url'] = 'https://example.invalid/v1'
-        self.cfg.provider['base_url'] = 'https://api.deepseek.com'
-        dehydration = resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration']
-        self.assertEqual(dehydration['model'], 'fake')
-        self.assertEqual(dehydration['api_key'], '')
-        self.assertEqual(dehydration['extra_body'], {'thinking': {'type': 'disabled'}})
-        self.cfg.provider['base_url'] = 'https://api.openai.com/v1'
-        self.assertNotIn('extra_body', resident_config(self.cfg, Path('v'), 'x' * 64)['dehydration'])
-
     def test_ombre_model_budget_blocks_before_the_backend(self):
         self.budget.daily = Decimal('0.0000001')
         before = len(self.backend.calls)
@@ -296,22 +278,6 @@ class MemoryTests(unittest.TestCase):
 
     def diagnostics_text(self):
         return (Path(self.temp.name) / 'data/fake/memory/_agent/diagnostics.jsonl').read_text(encoding='utf-8')
-
-    def test_runtime_monitor_receives_mcp_event_when_diagnostic_append_fails(self):
-        backend = MCP.__new__(MCP)
-        backend.call = Mock(return_value='')
-        monitor = Mock()
-        memory = Memory(self.cfg, self.store, self.budget, self.model, backend,
-                        runtime_monitor=monitor)
-        self.addCleanup(memory.__exit__, None, None, None)
-        facts = {'code': 'mcp_call', 'tool': 'hold', 'attempt': 1}
-        original_append = self.store.append
-        self.store.append = Mock(side_effect=OSError('fictional diagnostics disk failure'))
-        try:
-            backend.diagnostic(facts)
-        finally:
-            self.store.append = original_append
-        monitor.observe_memory.assert_called_once_with(facts)
 
     def test_failed_memory_tool_diagnostic_omits_arguments_and_memory_body(self):
         self.backend.fail = True

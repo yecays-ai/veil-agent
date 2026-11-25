@@ -296,7 +296,7 @@
     }
     if (chain.recall) {
       var recall = chain.recall;
-      steps.push('召回：Ombre ' + (recall.ombre || []).length + ' 条 · 不可见 ' +
+      steps.push('召回：记忆库 ' + (recall.ombre || []).length + ' 条 · 不可见 ' +
         (recall.hidden || []).length + ' · 判官选 ' + ((recall.judge || {}).picked || []).length +
         ' · 注入 ' + (recall.injected || []).length +
         ((recall.budget_dropped || []).length ? ' · 预算裁掉 ' + recall.budget_dropped.length : '') +

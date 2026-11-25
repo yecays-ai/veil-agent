@@ -66,7 +66,6 @@ if not exist ".venv\Scripts\python.exe" goto no_venv
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py
 if errorlevel 1 goto failed

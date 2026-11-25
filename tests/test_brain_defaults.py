@@ -1,9 +1,7 @@
-"""P3-0: the production character config must stay Brain-authoritative.
+"""P3-2: the production character config no longer carries a backend switch.
 
-The 2026-11-25 formal cutover made Brain the single memory write authority. That value used to
-live only in the local working tree, and update-main's stash + reset --hard silently reverted it.
-It is now committed to main, so this regression test fails if a future change reverts the
-transitional [memory.brain] table before P3 removes it.
+Brain is the memory backend by construction; the transitional [memory.brain] table and the
+retrieval backend switch must not return and silently reopen Ombre or shadow sync.
 """
 from __future__ import annotations
 
@@ -16,13 +14,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PeterBrainDefaultTests(unittest.TestCase):
-    def test_peter_config_keeps_brain_as_authority(self):
+    def test_peter_config_has_no_backend_switch(self):
         with (ROOT / 'characters' / 'peter' / 'character.toml').open('rb') as handle:
             cfg = tomllib.load(handle)
         memory = cfg['memory']
-        self.assertIs(memory['brain']['write_authority'], True)
-        self.assertIs(memory['brain']['shadow'], False)
-        self.assertEqual(memory['retrieval']['backend'], 'brain')
+        self.assertNotIn('brain', memory)
+        self.assertNotIn('ombre_port', memory)
+        self.assertNotIn('backend', memory.get('retrieval') or {})
 
 
 if __name__ == '__main__':

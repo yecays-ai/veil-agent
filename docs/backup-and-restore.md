@@ -2,10 +2,10 @@
 
 ## 备份了什么
 
-- 项目里的 `data\`（聊天、费用账本、Ombre 记忆、授权、长期任务、workspace……）、`characters\`、`persona\`、`.env`。
+- 项目里的 `data\`（聊天、费用账本、Brain 记忆与事件、授权、长期任务、workspace……）、`characters\`、`persona\`、`.env`。
 - 桌面版自己的设置：`%APPDATA%\VEIL Desktop\desktop.json`（窗口位置等）和你选的聊天背景图 `appearance-background.*`。
 - 不备份：`%APPDATA%\VEIL Desktop\attachments`（附件缓存，原件在 `data\<角色>\media`，已被备份）、`session-data`（浏览器缓存）、`.venv`、`.deps`、桌面 exe（都可重新生成）。
-- 不备份的运行残留：`data\web_service.json`、`data\` 与 `data\<角色>\` 下遗留的 `*.tmp`、锁文件、Ombre 进程标志和日志。
+- 不备份的运行残留：`data\web_service.json`、`data\` 与 `data\<角色>\` 下遗留的 `*.tmp`、锁文件和运行日志。
 
 ## 备份放哪里
 
@@ -35,7 +35,7 @@ $backup = "X:\VEIL-backups\VEIL-Agent-Backup-实际时间戳"
 ```
 
 - 桌面版设置只在「桌面版没有运行，并且当前位置还没有这些文件」时写回原位置；否则放进恢复目录所在文件夹里新建的 `restored-desktop-data-*` 文件夹，屏幕会写明；要使用就先完全关闭 VEIL，再手动复制进 `%APPDATA%\VEIL Desktop`。恢复不会覆盖正在使用的桌面配置。
-- 恢复旧备份后，聊天、记忆回到备份当时的样子；费用账本会自动与恢复前的账本对账，补回备份之后的花费（见 docs/data-repair-and-ledger.md）。供应商已收的费用不会撤销，恢复后请用 `/cost` 核对今日与本月花费。
+- 恢复旧备份后，旧记忆/事件回到备份当时的版本；备份之后新增的记忆和事件会合并回 live 库（同时保留 safety copy 与可读导出），不会被旧备份直接清空。费用账本会自动与恢复前的账本对账，补回备份之后的花费（见 docs/data-repair-and-ledger.md）。供应商已收的费用不会撤销，恢复后请用 `/cost` 核对今日与本月花费。
 
 ## 恢复被打断了怎么办
 
@@ -48,4 +48,17 @@ $backup = "X:\VEIL-backups\VEIL-Agent-Backup-实际时间戳"
 
 ## 看看哪些东西在堆积
 
-`.venv\Scripts\python.exe backup_restore.py usage` 只统计数字，不删除任何东西：Ombre 升级前留的 `memory.backup-*`、遗留 `.tmp`、`*.before-restore-*` 安全副本、备份位置里的备份和中断留下的临时目录。
+`.venv\Scripts\python.exe backup_restore.py usage` 只统计数字，不删除任何东西：旧版留下的 `memory.backup-*`、遗留 `.tmp`、`*.before-restore-*` 安全副本、备份位置里的备份和中断留下的临时目录。
+
+
+### Brain 数据库专用恢复（重要）
+
+官方恢复流程使用 `brain_backup.py` 的 SQLite 在线备份/恢复接口时：
+
+1. **停服与锁**：先完全退出 Peter，确认没有 VEIL 进程；恢复会检查 `brain-write.lock`，仍在运行会拒绝。
+2. **WAL**：检测到 `brain.db-wal` / `brain.db-shm` 时拒绝直接覆盖；先正常退出程序让 SQLite checkpoint，不能手工删除 WAL 后覆盖。
+3. **完整校验**：读取备份时重新计算 `quick_check`、canonical digest 和表计数，并核对备份内保存的 digest；只有全部通过才允许替换。
+4. **原子替换**：先写临时文件、fsync 并再次校验，再用原子 rename 替换目标；替换前自动保留 `brain.db.pre-restore-<时间>` 和一份可读导出 `...-export/`。
+5. **保留备份后新增数据**：恢复旧备份时，会把当前库里备份之后新增的 memory、事件、事件附账本和 state 合并回恢复后的 live 库；旧备份中的同一 ID 仍保持旧版本。新增数据也同时保留在 safety copy 和 export 里，冲突时可人工核对，**不会直接用旧备份清空后来产生的新记忆和事件**。
+
+如果恢复过程在替换阶段中断，目标会保持替换前状态或安全副本；不要删除临时/安全文件，先运行 `brain_backup.snapshot`/`verify` 检查，再重试。

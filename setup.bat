@@ -40,7 +40,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install-no
 if errorlevel 1 echo Warning: Nowhere is unavailable; the rest of VEIL setup will continue. Run setup.bat again after resolving the Nowhere installation error.
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" setup_memory.py
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" setup_fetch.py
 if errorlevel 1 goto failed

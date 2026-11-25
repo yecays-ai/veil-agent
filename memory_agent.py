@@ -1,4 +1,4 @@
-"""Thin Ombre integration. Memory content and scheduling stay in the role vault."""
+"""Brain memory facade: recall, pages, events and the legacy fake-backend test seam."""
 import asyncio
 import ast
 from concurrent.futures import Future
@@ -50,280 +50,6 @@ class MemoryToolError(RuntimeError):
         super().__init__(messages[code])
 
 
-class MCPStageError(RuntimeError):
-    """Classify a transport boundary without retaining its private details."""
-    def __init__(self, stage):
-        self.stage = stage
-        super().__init__(stage)
-
-
-class MCP:
-    """One async owner; each operation gets a fresh, bounded HTTP connection."""
-    # Ticket 427: only a read-only review may be replayed after a transport failure;
-    # search can invoke a metered embedding provider and must never be replayed.
-    RETRYABLE_READS = frozenset({'dream'})
-
-    def __init__(self, url, token, *, recovery=None):
-        self.url, self.token = url, token
-        self.recovery = recovery
-        self.recovery_count = 0
-        self.recovery_streak = 0  # recoveries since the last healthy reply
-        self.diagnostic = None
-        self.closed = False
-        self.state_lock = threading.Lock()
-        self.current_result = None
-        self.ready = Future()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-        try:
-            self.ready.result(timeout=90)
-        except Exception:
-            self.close()
-            raise
-
-    def _run(self):
-        try:
-            asyncio.run(self._serve())
-        except BaseException as exc:
-            with self.state_lock:
-                self.closed = True
-            self._diagnose('connection', exc, 0)
-            if not self.ready.done():
-                self.ready.set_exception(RuntimeError('Ombre startup failed'))
-            if hasattr(self, 'requests'):
-                if self.current_result is not None and not self.current_result.done():
-                    self.current_result.set_exception(MemoryToolError('unknown'))
-                while not self.requests.empty():
-                    job = self.requests.get_nowait()
-                    if job is not None and not job[2].done():
-                        job[2].set_exception(MemoryToolError('closed'))
-
-    @asynccontextmanager
-    async def _session(self):
-        from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
-        headers = {'Authorization': f'Bearer {self.token}'}
-        try:
-            async with streamablehttp_client(self.url, headers=headers) as (read, write, _):
-                body_error = None
-                try:
-                    async with ClientSession(read, write) as session:
-                        try:
-                            await session.initialize()
-                        except Exception as exc:
-                            raise MCPStageError('mcp_initialize') from exc
-                        try:
-                            yield session
-                        except BaseException as exc:
-                            body_error = exc
-                            raise
-                except MCPStageError:
-                    raise
-                except Exception as exc:
-                    if body_error is not None:
-                        raise body_error
-                    raise MCPStageError('mcp_session') from exc
-        except MCPStageError:
-            raise
-        except Exception as exc:
-            raise MCPStageError('http_session') from exc
-
-    @staticmethod
-    def _never_sent(exc):
-        """True only when the failure was a refused connection, before any request was sent."""
-        seen = set()
-        def refused(error):
-            if error is None or id(error) in seen:
-                return False
-            seen.add(id(error))
-            if isinstance(error, ConnectionRefusedError) or type(error).__name__ == 'ConnectError':
-                return True
-            children = getattr(error, 'exceptions', ())
-            if children:
-                # Every grouped failure must prove non-delivery; a mixed group is uncertain.
-                return all(refused(child) for child in children)
-            return refused(error.__cause__) or refused(error.__context__)
-        return refused(exc)
-
-    def _diagnose(self, name, exc, attempt):
-        kinds = []
-        stages = []
-        seen = set()
-        def visit(error):
-            if id(error) in seen:
-                return
-            seen.add(id(error))
-            kinds.append(type(error).__name__)
-            stage = getattr(error, 'stage', None)
-            if stage in {'http_session', 'mcp_session', 'mcp_initialize', 'mcp_tool',
-                         'mcp_verified', 'recovery'}:
-                stages.append(stage)
-            for child in getattr(error, 'exceptions', ()):
-                visit(child)
-            if error.__cause__ is not None:
-                visit(error.__cause__)
-            elif error.__context__ is not None:
-                visit(error.__context__)
-        visit(exc)
-        if self.diagnostic:
-            try:
-                facts = {'code': 'mcp_call', 'tool': name, 'attempt': attempt,
-                         'error_types': sorted(set(kinds))[:8]}
-                if stages:
-                    facts['stage'] = stages[0]
-                self.diagnostic(facts)
-            except Exception:
-                pass  # Logging must not mask the tool's safe failure message.
-
-    async def _perform(self, name, args):
-        response = None
-        try:
-            async with self._session() as session:
-                try:
-                    self.active_stage = 'mcp_tool'
-                    response = await session.call_tool(name, args)
-                except Exception as exc:
-                    raise MCPStageError('mcp_tool') from exc
-        except Exception as exc:
-            if response is None:
-                raise
-            # A confirmed reply remains evidence even if closing HTTP fails.
-            self._diagnose(name, exc, 0)
-        if response.isError:
-            raise MemoryToolError('tool')
-        return '\n'.join(c.text for c in response.content if hasattr(c, 'text'))
-
-    async def _recover(self, name, attempt):
-        if self.recovery is None or self.recovery_streak >= 2:
-            return False
-        self.recovery_count += 1
-        self.recovery_streak += 1
-        try:
-            recovery_result = await asyncio.to_thread(self.recovery)
-        except Exception as exc:
-            stage = getattr(exc, 'stage', 'recovery')
-            self._diagnose(name, exc, attempt)
-            if self.diagnostic:
-                try:
-                    self.diagnostic({'code': 'recovery_failed', 'stage': stage,
-                                     'tool': name, 'attempt': self.recovery_count})
-                except Exception:
-                    pass
-            return False
-        if self.diagnostic:
-            try:
-                facts = {'code': 'recovery_succeeded', 'stage': 'mcp_verified',
-                         'attempt': self.recovery_count}
-                if isinstance(recovery_result, dict):
-                    facts['state'] = recovery_result.get('state')
-                    facts['exit_code'] = recovery_result.get('exit_code')
-                self.diagnostic(facts)
-            except Exception:
-                pass
-        return True
-
-    async def _serve(self):
-        self.loop = asyncio.get_running_loop()
-        self.requests = asyncio.Queue()
-        async with asyncio.timeout(85):
-            async with self._session() as session:
-                self.tool_specs = (await session.list_tools()).tools
-        self.ready.set_result(True)
-        while True:
-            job = await self.requests.get()
-            if job is None:
-                return
-            name, args, result = job
-            if not result.set_running_or_notify_cancel():
-                continue
-            self.current_result = result
-            self.active_stage = None
-            try:
-                async with asyncio.timeout(200):
-                    attempts = 2 if name in self.RETRYABLE_READS else 1
-                    attempt = 0
-                    resent = False
-                    while attempt < attempts:
-                        attempt += 1
-                        try:
-                            async with asyncio.timeout(40 if attempts == 2 else 85):
-                                self.active_stage = 'mcp_session'
-                                text = await self._perform(name, args)
-                            break
-                        except MemoryToolError:
-                            raise
-                        except Exception as exc:
-                            self._diagnose(name, exc, attempt)
-                            if attempt == attempts and name in self.RETRYABLE_READS:
-                                raise MemoryToolError('connection') from exc
-                            restored = await self._recover(name, attempt)
-                            if restored and attempts == 1 and self._never_sent(exc):
-                                # Ombre refused the connection, so this call never
-                                # reached it; after a verified restart it is safe to send once.
-                                attempts = 2
-                                resent = True
-                                continue
-                            if attempt == attempts:
-                                # A failed resend may have reached Ombre, so its outcome stays unknown.
-                                raise MemoryToolError(
-                                    'connection' if attempts == 2 and not resent else 'unknown',
-                                    stage=('recovery' if self.recovery is not None and not restored
-                                           else getattr(exc, 'stage', None))) from exc
-                            if self.recovery is not None and not restored:
-                                raise MemoryToolError('connection', stage='recovery') from exc
-                    if attempt > 1 and self.diagnostic:
-                        try:
-                            self.diagnostic({'code': 'retry_succeeded', 'stage': 'mcp_verified',
-                                             'tool': name, 'attempt': attempt})
-                        except Exception:
-                            pass
-                    self.recovery_streak = 0  # A healthy reply restores the recovery allowance.
-                    result.set_result(text)
-            except TimeoutError as exc:
-                self._diagnose(name, exc, 0)
-                # Inner transport handling already attempted bounded recovery when eligible.
-                # A write timeout stays uncertain and is never replayed.
-                result.set_exception(MemoryToolError('timeout', stage=self.active_stage))
-            except MemoryToolError as exc:
-                self._diagnose(name, exc, 0)
-                # Do not hand another thread a live coroutine traceback (or its
-                # private transport cause). Consumers may clear its frames.
-                result.set_exception(MemoryToolError(exc.code, stage=exc.stage))
-            finally:
-                self.active_stage = None
-                self.current_result = None
-
-    def call(self, name, args):
-        result = Future()
-        with self.state_lock:
-            if self.closed or not self.thread.is_alive():
-                raise MemoryToolError('closed')
-            # Every request ahead is bounded by _serve's 200-second job timeout.
-            # Include one possible in-flight job and this request's own window.
-            wait_timeout = (self.requests.qsize() + 2) * 210
-            try:
-                self.loop.call_soon_threadsafe(self.requests.put_nowait, (name, args, result))
-            except RuntimeError as exc:
-                raise MemoryToolError('closed') from exc
-        try:
-            return result.result(timeout=wait_timeout)
-        except TimeoutError as exc:
-            raise MemoryToolError('closed' if result.cancel() else 'timeout') from exc
-
-    def list_tools(self):
-        return tuple(getattr(self, 'tool_specs', ()))
-
-    def close(self):
-        with self.state_lock:
-            self.closed = True
-            if self.thread.is_alive() and hasattr(self, 'loop') and not self.loop.is_closed():
-                self.loop.call_soon_threadsafe(self.requests.put_nowait, None)
-        if self.thread.is_alive():
-            self.thread.join(timeout=215)
-        if self.thread.is_alive():
-            raise RuntimeError('Ombre did not stop')
-
-
 # The exact line Ombre appends to a search result when the vector query was unavailable or failed.
 DEGRADED_NOTICE = '[检索降级：语义索引暂不可用'
 
@@ -356,84 +82,6 @@ def ombre_model_tokens(content, *, worst_case=False):
               if worst_case else OMBRE_OUTPUT_TOKENS)
     return (data // 2) * attempts, output * attempts
 
-
-@contextmanager
-def open_ombre(root, cfg, *, data_root=None, api_key_overrides=None, env_root=None):
-    from dotenv import dotenv_values
-    from ombre_resident import mark_ready, start_or_connect
-    root = Path(root)
-    env_root = Path(env_root) if env_root is not None else root
-    resident = None
-    backend = None
-    try:
-        settings = cfg.memory
-        if not settings['base_url'].startswith('https://'):
-            raise ValueError('HTTPS required')
-        rate = Decimal(str(settings['input_cny_per_million']))
-        if not rate.is_finite() or rate < 0:
-            raise ValueError('invalid embedding price')
-        api_key_overrides = api_key_overrides or {}
-        local_keys = None
-        needs_local_embed = (settings.get('embedding_enabled', True)
-                             and 'OMBRE_EMBED_API_KEY' not in api_key_overrides)
-        needs_local_model = (ombre_model_on(cfg)
-                             and 'OMBRE_COMPRESS_API_KEY' not in api_key_overrides)
-        if needs_local_embed or needs_local_model:
-            local_keys = dotenv_values(env_root / '.env', interpolate=False,
-                                       encoding='utf-8-sig')
-        if settings.get('embedding_enabled', True):
-            key = api_key_overrides.get('OMBRE_EMBED_API_KEY',
-                                        (local_keys or {}).get('EMBED_API_KEY'))
-            if not key or not key.strip():
-                raise UserError('本机 .env 缺少 EMBED_API_KEY，请填写后重开。')
-        vault = vault_path(data_root if data_root is not None else root / 'data', cfg.id)
-        dep = root / '.deps' / 'ombre'
-        executable = dep / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-        subprocess.run([str(executable), '-c',
-                        'import jieba, rank_bm25; from mcp.client.streamable_http import streamablehttp_client'],
-                       check=True, capture_output=True, timeout=20)
-        if ombre_model_on(cfg):
-            model_key = api_key_overrides.get('OMBRE_COMPRESS_API_KEY',
-                (local_keys or {}).get((getattr(cfg, 'background_provider', None) or cfg.provider)['api_key_env']))
-            if not model_key or not model_key.strip():
-                raise UserError('本机 .env 缺少聊天模型的 API Key（记忆打标和合并要用），请填写后重开。')
-        port, token, resident = start_or_connect(
-            root, cfg, data_root=data_root, api_key_overrides=api_key_overrides,
-            env_root=env_root)
-    except UserError:
-        raise
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
-        raise UserError('记忆依赖或配置缺失（含 jieba / rank-bm25），请先重新运行 setup.bat。') from exc
-    except Exception as exc:
-        raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
-    try:
-        try:
-            backend = MCP(f'http://127.0.0.1:{port}/mcp', token,
-                          recovery=getattr(resident, 'recover', None))
-            mark_ready(vault / '_agent')
-        except Exception as exc:
-            raise UserError('记忆进程启动失败，请重新运行 setup.bat；本机记录仍保留。') from exc
-        # Errors raised by the chat session itself keep their own message.
-        yield backend
-    finally:
-        close_error = None
-        if backend:
-            try:
-                backend.close()
-            except Exception as exc:
-                close_error = UserError('记忆连接未能正常退出，请保留记忆库后关闭窗口。')
-                close_error.__cause__ = exc
-        if resident:
-            try:
-                resident.close()
-            except Exception as exc:
-                if close_error is None:
-                    close_error = UserError('记忆进程未能正常退出，请保留记忆库后关闭窗口。')
-                    close_error.__cause__ = exc
-        if close_error:
-            raise close_error
-
-
 def blocks(text):
     matches = list(re.finditer(r'\[bucket_id:([\w-]+)\]', text))
     return [(m.group(1), text[m.start():matches[i + 1].start() if i + 1 < len(matches) else len(text)])
@@ -465,17 +113,23 @@ class Memory:
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
         brain_settings = (cfg.memory or {}).get('brain') or {}
         self.brain_authority = None
-        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True:
+        # P3-2: production always uses Brain (no backend is passed). The old config switch is
+        # accepted only so older tests/fixtures can still construct a fake-backend Memory.
+        use_authority = backend is None or (isinstance(brain_settings, dict)
+                                            and brain_settings.get('write_authority') is True)
+        if use_authority:
             from brain_authority import attach_authority
             try:
                 self.brain_authority = attach_authority(cfg, store)
             except Exception as exc:
-                raise UserError('Brain 写入权威启动失败：%s' % exc) from exc
+                raise UserError('Brain 记忆启动失败：%s' % exc) from exc
             from brain_store import BrainStore
             self.store = BrainStore(store, cfg.id, self.brain_authority.db_path)
-        if isinstance(brain_settings, dict) and brain_settings.get('write_authority') is True \
-                and brain_settings.get('shadow') is True:
-            raise UserError('记忆写入权威与影子同步不能同时开启；请先关闭 [memory.brain] shadow。')
+            from brain_migrate import migrate_role
+            try:
+                migrate_role(store, cfg.id)
+            except Exception as exc:
+                raise UserError('事件附账本迁移失败，已停止；原文件仍保留：%s' % exc) from exc
         self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
@@ -486,18 +140,6 @@ class Memory:
         self.write_reconciliation = f'{cfg.id}/memory/_agent/write-reconciliation.jsonl'
         self.write_fingerprint_key = vault_path(store.root, cfg.id) / '_agent' / 'write-reconciliation.key'
         self._fingerprint_key = self._load_fingerprint_key()
-        if isinstance(backend, MCP):
-            def diagnostic(facts):
-                try:
-                    if runtime_monitor:
-                        runtime_monitor.observe_memory(facts)
-                finally:
-                    try:
-                        self.store.append(self.diagnostics, facts)
-                    except Exception:
-                        pass  # Safety state is independent from best-effort diagnostics.
-            backend.diagnostic = diagnostic
-        self.shadow = None
         self.delete_asked = None  # number shown by /delete, waiting for its 确认
         states = store.read(self.path)
         if budget is not None:
@@ -534,8 +176,16 @@ class Memory:
         # Ticket 353: automatic-recall cooldown and rotation, by memory ID only; survives restarts.
         from recall_rotation import Cooldown, settings as recall_settings
         self.recall_settings = recall_settings(cfg.memory)
-        # Ticket 430: candidate source for automatic recall; Brain is opt-in and falls back to Ombre.
-        self.retrieval_settings = retrieval_settings(cfg.memory.get('retrieval'))
+        # P3-2: production (no backend) always uses Brain retrieval; fake-backend tests keep the
+        # old search stub unless they explicitly ask for Brain.
+        retrieval_raw = dict(cfg.memory.get('retrieval') or {})
+        if backend is None:
+            # Production is Brain-only; an old character config that still says backend=ombre
+            # must not silently disable semantic recall.
+            retrieval_raw['backend'] = 'brain'
+        elif 'backend' not in retrieval_raw:
+            retrieval_raw['backend'] = 'ombre'
+        self.retrieval_settings = retrieval_settings(retrieval_raw)
         self.rotation_path = f'{cfg.id}/memory/_agent/recall-rotation.jsonl'
         try:
             saved = store.read(self.rotation_path)
@@ -570,24 +220,11 @@ class Memory:
         if erased:
             self.messages.put(f'已彻底抹掉 {len(erased)} 条之前删除的记忆。')
 
-        # Ticket 429: attach the shadow worker only after everything else in __init__ succeeded, so
-        # a constructor failure cannot leave a daemon thread behind (Python will not call __exit__).
-        try:
-            from brain_sync import attach as attach_shadow
-            self.shadow = attach_shadow(cfg, store)
-        except Exception:
-            self.shadow = None
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_):
-        shadow = getattr(self, 'shadow', None)
-        if shadow is not None:
-            try:
-                shadow.close()
-            except Exception:
-                pass
         if getattr(self, 'judge', None) is not None:
             self.judge.close()
         embedder = getattr(self, '_embedder', None)
