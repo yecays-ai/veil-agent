@@ -68,8 +68,42 @@ def _frontmatter(record):
     for key in ('title', 'type', 'created', 'importance'):
         if record.get(key) not in (None, ''):
             lines.append('%s: %s' % (key, record[key]))
+    if record.get('pinned'):
+        lines.append('pinned: true')
+    if record.get('why_remembered'):
+        lines.append('why_remembered: %s' % record['why_remembered'])
     lines.append('---')
     return '\n'.join(lines) + '\n'
+
+
+def _with_metadata(raw, values):
+    """Keep raw_markdown's front matter in step with title/importance/pinned.
+    Recall and the memory page read these fields; a database-only update would leave them stale."""
+    if not isinstance(raw, str) or not raw.startswith('---\n'):
+        return raw
+    end = raw.find('\n---\n', 3)
+    if end < 0:
+        return raw
+    lines = raw[4:end].splitlines()
+    wanted = {key: value for key, value in values.items() if value is not None}
+    seen = set()
+    out = []
+    for line in lines:
+        key = line.partition(':')[0].strip()
+        if key in wanted:
+            value = wanted[key]
+            if key == 'pinned':
+                value = 'true' if value else 'false'
+            out.append('%s: %s' % (key, value))
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, value in wanted.items():
+        if key not in seen:
+            if key == 'pinned':
+                value = 'true' if value else 'false'
+            out.append('%s: %s' % (key, value))
+    return '---\n' + '\n'.join(out) + raw[end:]
 
 
 def _vector(record, vector, embedder):
@@ -105,7 +139,9 @@ def create_memory(connection, record, *, vector=None, embedder=None):
     created = record.get('created') or now()
     frontmatter = _frontmatter({'id': memory_id, 'title': title,
                                 'type': record.get('type') or 'dynamic',
-                                'created': created, 'importance': record.get('importance')})
+                                'created': created, 'importance': record.get('importance'),
+                                'pinned': record.get('pinned'),
+                                'why_remembered': record.get('why_remembered')})
     raw = frontmatter + body
     frontmatter_json = json.dumps({'id': memory_id, 'title': title,
                                    'type': record.get('type') or 'dynamic',
@@ -174,6 +210,9 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
                            (memory_id, now(), operation_reason[:500], why_remembered[:500],
                             json.dumps(fields), old_body, _sha(old_body)))
         raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
+        raw = _with_metadata(raw, {'title': changes.get('title'),
+                                   'importance': changes.get('importance'),
+                                   'pinned': changes.get('pinned')})
         connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
                            'title=COALESCE(?,title),importance=COALESCE(?,importance),'
                            'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'

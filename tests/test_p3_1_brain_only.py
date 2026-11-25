@@ -98,6 +98,9 @@ class BrainOnlyTests(unittest.TestCase):
         meta = self.memory._recall_meta([memory_id])[memory_id]
         self.assertEqual(meta['pinned'], '')
         self.assertEqual(meta['importance'], 3)
+        raw = self.memory.raw_content_for(memory_id)
+        self.assertIn('pinned: false', raw)
+        self.assertIn('importance: 3', raw)
 
     def test_keyword_only_fallback_works_when_configured_keyword_weight_is_zero(self):
         memory_id = self.memory.call('hold', {'content': 'unique keyword lantern', 'title': 'Lantern'}).split('→')[1]
