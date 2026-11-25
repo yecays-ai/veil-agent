@@ -145,6 +145,37 @@ class UnhideMigrationTests(unittest.TestCase):
         finally:
             memory.__exit__(None, None, None)
 
+    def test_pending_delete_stays_unreadable_after_hidden_removal(self):
+        from unittest.mock import Mock
+        from memory_agent import Memory
+        from veil_agent import Budget, Character
+        memory_id = self._create('pending runtime')
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute(
+                "INSERT INTO delete_requests(request_id,memory_id,reason,status) "
+                "VALUES('r2',?,'reason','pending')", (memory_id,))
+            connection.commit()
+        finally:
+            connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake',
+                        {'model': 'fake-embedding', 'input_cny_per_million': '0',
+                         'mode': 'native', 'events': {'enabled': False}})
+        memory = Memory(cfg, self.store, Budget(self.store), Mock())
+        try:
+            self.assertFalse(memory.refresh_visibility(memory_id))
+            self.assertTrue(memory.is_hidden(memory_id))
+            self.assertNotIn('pending runtime', memory.brain_authority.breath())
+            with BrainRead(self.db) as reader:
+                self.assertTrue(reader.memory(memory_id)['delete_pending'])
+                self.assertTrue(any(entry['memory_id'] == memory_id
+                                    and entry['delete_pending']
+                                    for entry in reader.panel_entries()))
+        finally:
+            memory.__exit__(None, None, None)
+
 
 class PageContractTests(unittest.TestCase):
     def test_page_uses_lifecycle_groups_and_does_not_search_domains_or_tags(self):

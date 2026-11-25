@@ -778,7 +778,7 @@ class Memory:
                     row = reader.memory(memory_id)
                     state = reader.state(memory_id)
                 allowed = bool(row and not row.get('is_tombstone')
-                               and not row.get('is_deleted')
+                               and not row.get('is_deleted') and not row.get('delete_pending')
                                and row.get('bucket') in ('dynamic', 'permanent')
                                and row.get('type') != 'archived')
             except Exception:
@@ -911,7 +911,7 @@ class Memory:
                     return 'archived'
                 if row.get('is_tombstone'):
                     return 'tombstone'
-                if row.get('is_deleted'):
+                if row.get('is_deleted') or row.get('delete_pending'):
                     return 'deleted'
             except Exception:
                 pass
@@ -975,6 +975,29 @@ class Memory:
         except (OSError, UserError):
             pass
 
+    def is_archived(self, memory_id):
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                return bool(row and (row.get('type') == 'archived'
+                                     or row.get('bucket') == 'archive'))
+            except Exception:
+                return False
+        raw = self.raw_content_for(memory_id)
+        if raw is None:
+            return False
+        lines = raw.splitlines()
+        end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), None)
+        if not lines or lines[0].strip() != '---' or end is None:
+            return False
+        for line in lines[1:end]:
+            key, sep, value = line.partition(':')
+            if sep and not line[:1].isspace() and key.strip() == 'type':
+                return self._frontmatter_scalar(value).casefold() == 'archived'
+        return False
+
     def is_hidden(self, memory_id):
         if getattr(self, 'brain_authority', None) is not None:
             from brain_read import BrainRead
@@ -982,7 +1005,7 @@ class Memory:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
                 return bool(not row or row.get('is_tombstone') or row.get('is_deleted')
-                            or row.get('type') == 'archived')
+                            or row.get('delete_pending') or row.get('type') == 'archived')
             except Exception:
                 return True
         if memory_id in self.hidden_ids():

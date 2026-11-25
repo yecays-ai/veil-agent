@@ -234,9 +234,18 @@ class RecallJudge:
             index = {}
             self._brain_rows = {}
             with BrainRead(authority.db_path) as reader:
-                rows = reader.connection.execute(
-                    'SELECT id,bucket,type,body,title,is_deleted,is_tombstone,'
-                    'source_tool FROM memories WHERE is_deleted=0 AND is_tombstone=0')
+                query = ('SELECT id,bucket,type,body,title,is_deleted,is_tombstone,'
+                         'source_tool')
+                try:
+                    rows = reader.connection.execute(
+                        query + ', EXISTS(SELECT 1 FROM delete_requests d WHERE '
+                                "d.memory_id=memories.id AND d.status='pending') AS delete_pending "
+                                'FROM memories WHERE is_deleted=0 AND is_tombstone=0')
+                except sqlite3.OperationalError as exc:
+                    if 'no such table: delete_requests' not in str(exc).casefold():
+                        raise
+                    rows = reader.connection.execute(
+                        query + ' FROM memories WHERE is_deleted=0 AND is_tombstone=0')
                 for row in rows:
                     item = dict(row)
                     self._brain_rows = getattr(self, '_brain_rows', None) or {}
@@ -277,7 +286,7 @@ class RecallJudge:
             if row is None:
                 return None
             if (row.get('type') in SKIPPED_TYPES + ('archived',) or row.get('bucket') not in ('dynamic', 'permanent')
-                    or row.get('is_deleted') or row.get('is_tombstone')
+                    or row.get('is_deleted') or row.get('is_tombstone') or row.get('delete_pending')
                     or (row.get('source_tool') or '').casefold() == 'letter'):
                 return None
             return {'body': row.get('body') or '', 'title': row.get('title') or ''}

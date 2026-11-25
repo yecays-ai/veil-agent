@@ -186,12 +186,20 @@ class BrainAuthority:
         """Opening list: the same pinned/important visible memories, rendered as Ombre blocks."""
         import brain_read
         with brain_read.BrainRead(self.db_path) as reader:
-            rows = reader.connection.execute(
-                'SELECT id,title,name,body,importance,pinned,created FROM memories '
-                'WHERE is_tombstone=0 AND is_deleted=0 '
-                "AND bucket IN ('dynamic','permanent') "
-                "AND (type IS NULL OR type NOT IN ('archived','letter','plan','i','feel')) "
-                'ORDER BY pinned DESC, importance DESC, created DESC LIMIT 8').fetchall()
+            query = ('SELECT id,title,name,body,importance,pinned,created FROM memories '
+                     'WHERE is_tombstone=0 AND is_deleted=0 '
+                     "AND bucket IN ('dynamic','permanent') "
+                     "AND (type IS NULL OR type NOT IN ('archived','letter','plan','i','feel')) ")
+            try:
+                rows = reader.connection.execute(
+                    query + "AND id NOT IN (SELECT memory_id FROM delete_requests "
+                            "WHERE status='pending') "
+                            'ORDER BY pinned DESC, importance DESC, created DESC LIMIT 8').fetchall()
+            except sqlite3.OperationalError as exc:
+                if 'no such table: delete_requests' not in str(exc).casefold():
+                    raise
+                rows = reader.connection.execute(
+                    query + 'ORDER BY pinned DESC, importance DESC, created DESC LIMIT 8').fetchall()
         return '\n\n'.join('[bucket_id:%s] %s\n%s' % (row['id'], row['title'] or row['name'] or row['id'],
                                                        row['body']) for row in rows)
 

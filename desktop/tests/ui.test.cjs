@@ -59,6 +59,7 @@ test('daily memory view reads Ombre catalog and exact records without the legacy
     read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', '..', 'memory_native.py'), 'utf8')
   ]);
+  assert.match(html, /data-memory-group="all"/);
   assert.match(html, /data-memory-group="recent"/);
   assert.match(main, /\/api\/memory\/panel/);
   assert.match(main, /'\/api\/memory\/edit', '\/api\/memory\/delete'/);
@@ -113,7 +114,7 @@ test('desktop redesign keeps real pages in one shell with a collapsible draggabl
   assert.match(html, /id="rail-approval"/);
   assert.match(html, /<h1>Peter<\/h1>/);
   assert.match(html, /data-page="chat"[^>]*><span data-lucide="message-square"><\/span><span class="nav-label">聊天<\/span>/);
-  assert.match(html, /data-memory-group="system">系统和能力<\/button><button data-memory-group="archived">已归档<\/button><button id="memory-reload"/);
+  assert.match(html, /data-memory-group="all">全部<\/button><button data-memory-group="recent">最近<\/button><button data-memory-group="events">经历<\/button><button data-memory-group="archived">已归档<\/button><button id="memory-reload"/);
   assert.doesNotMatch(html, /和 Peter 聊聊/);
   assert.match(css, /grid-template-columns:clamp\(176px,17vw,232px\) minmax\(0,1fr\) clamp\(250px,21vw,304px\)/);
   assert.match(css, /body\.detached-window \.topbar,body\.detached-window \.navigation,body\.detached-window \.desktop-rail/);

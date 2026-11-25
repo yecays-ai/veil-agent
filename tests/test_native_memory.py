@@ -350,6 +350,12 @@ class VersionedOmbreBackend(Backend):
                 tags = [item.strip() for item in args['tags'].split(',') if item.strip()]
                 raw = re.sub(r'^tags:.*$', 'tags: ' + json.dumps(tags, ensure_ascii=False), raw,
                              count=1, flags=re.M)
+            if args.get('archive'):
+                raw = re.sub(r'^type:.*$', 'type: archived', raw, count=1, flags=re.M)
+                if 'type:' not in raw.split('---', 2)[1]:
+                    raw = raw.replace('---\n', '---\ntype: archived\n', 1)
+            if args.get('restore'):
+                raw = re.sub(r'^type:\s*archived\s*$', 'type: dynamic', raw, count=1, flags=re.M)
             self.path.write_text(raw, encoding='utf-8')
             return 'updated'
         if name in ('dream', 'pulse', 'I'):
@@ -461,6 +467,18 @@ class OmbreToolGuardTests(unittest.TestCase):
         restored, state, _ = self.call('memory_history', {'memory_id': 'mem001'})
         self.assertEqual(state, '成功')
         self.assertIn('FICTIONAL_HIDDEN_HISTORY', restored)
+
+    def test_trace_archive_can_be_restored_through_the_same_tool(self):
+        result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'archive': True,
+                                               'edit_reason': 'archive it'})
+        self.assertEqual(state, '成功', result)
+        self.assertFalse(self.memory.refresh_visibility('mem001'))
+        self.assertTrue(self.memory.is_archived('mem001'))
+        result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'restore': True,
+                                               'edit_reason': 'bring it back'})
+        self.assertEqual(state, '成功', result)
+        self.assertTrue(self.memory.refresh_visibility('mem001'))
+        self.assertTrue(self.memory.is_archived('mem001') is False)
 
     def test_live_delete_requires_ui_approval_and_rejection_does_not_mutate(self):
         prompts = []

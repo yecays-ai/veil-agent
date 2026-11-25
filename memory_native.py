@@ -380,6 +380,8 @@ class NativeMemoryTools:
                     entries = reader.panel_entries(limit=10000)
                     records = {}
                     for entry in entries:
+                        if entry.get('delete_pending'):
+                            continue
                         if entry['bucket'] not in ('dynamic', 'permanent'):
                             continue
                         records[entry['memory_id']] = (entry['title'], reader.raw(entry['memory_id']) or '')
@@ -808,8 +810,14 @@ class NativeMemoryTools:
         banned = ('hard_delete', 'deletion_request_id', 'deletion_decision')
         if any(args.get(key) not in (None, False, '', [], {}) for key in banned):
             return 'This delete operation or argument combination is not available. Use the supported delete flow and its required confirmation.', '被拒绝', str(summary or 'trace')
-        if not summary or self.memory.is_hidden(memory_id):
+        restore_requested = args.get('restore') in (1, True)
+        if not summary:
             return 'The target memory does not exist, is archived, or is unavailable.', '被拒绝', str(memory_id or 'trace')
+        if self.memory.is_hidden(memory_id):
+            # P3-3: trace archive=True is reversible by trace restore=True. Tombstoned,
+            # deleted or missing memories still cannot be restored through this path.
+            if not (restore_requested and self.memory.is_archived(memory_id)):
+                return 'The target memory does not exist, is archived, or is unavailable.', '被拒绝', str(memory_id or 'trace')
         delete = args.get('delete', False)
         if type(delete) is not bool:
             return 'delete must be a Boolean.', '被拒绝', summary
