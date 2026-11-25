@@ -4,7 +4,8 @@
 
 - 已完成：`event_ledger`/`event_state` schema；BrainStore 7 类事件附账本映射；幂等迁移 + 原文件只读归档；导出完整事件生命周期；备份后 quick_check/digest/计数校验；全新 Brain 初始化含新表。
 - 已删除：`brain_sync.py`、`ombre_resident.py`、`setup_memory.py`、Ombre 锁/依赖/测试/一次性脚本；setup/update/CI 不再安装/测试 Ombre；`[memory.brain]`、`ombre_port`、`ombre_model`、`ombre_auto_merge` 和检索 backend 开关已移除。
-- 测试：新增 `tests/test_p3_2_event_ledger.py`；目标套件通过；本地全量排除外部 OpenCode 环境后 2184 项通过，剩余 22 项为既有 maintenance/冷备份环境依赖。
+- 复审修复：Tests workflow 重复/空 env；迁移保留重复行/原始顺序/全七类+状态，单文件事务 + import 标记，中断/重复启动/归档中断测试；备份重算 digest、原子替换、停服/锁/WAL、safety copy/export、恢复后合并新增 memory/事件。
+- 测试：`tests/test_p3_2_event_ledger.py` 11 项；目标套件通过；隔离副本完成实际迁移、启动、事件读写、导出、备份恢复和再次启动；本地全量排除外部 OpenCode 环境后 2192 项通过，剩余 22 项为既有 maintenance/冷备份环境依赖。
 - 未做：未部署正式环境；未在正式数据执行迁移；未合并；未做 P3-4 不可逆清理。
 - 下一步第一步：等 PR 复审/合并；合并后在维护窗口部署，首次启动自动迁移事件附账本并验证页面/导出/备份恢复。
 - 注意：正式 Peter 仍是 P2 运行状态；正式数据迁移前应有备份；测试只用新增专用测试记忆。

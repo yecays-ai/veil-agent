@@ -1,8 +1,10 @@
-"""P3-2: one-way, idempotent migration of event auxiliary ledgers into brain.db.
+"""P3-2: one-way, idempotent, lossless migration of event auxiliary ledgers.
 
-The legacy files were the source of truth before P3-2. Each row is copied losslessly into
-event_ledger / event_state, verified by its row hash, and only then is the file copied to a
-read-only archive directory and removed from the live role directory.
+Each legacy file is imported in one transaction. The transaction records the file SHA-256 and
+row count in event_ledger_imports; a crash rolls the whole file back, so a retry cannot duplicate
+rows. Rows keep their original line sequence and identical legal rows are kept as separate rows.
+Only after the database transaction is committed and verified is the file copied to a read-only
+archive and removed from the live role directory.
 """
 from __future__ import annotations
 
@@ -23,8 +25,67 @@ def _sha(data):
 
 
 def _archive_dir(role_dir):
-    stamp = time.strftime('%Y%m%dT%H%M%S')
-    return role_dir / 'archive' / ('pre-p3-2-event-ledgers-' + stamp)
+    return role_dir / 'archive' / ('pre-p3-2-event-ledgers-' + time.strftime('%Y%m%dT%H%M%S'))
+
+
+def _migrate_file(connection, source, name, kind):
+    data = source.read_bytes()
+    digest = _sha(data)
+    if brain_events.ledger_imported(connection, name, digest):
+        return 0, False
+    try:
+        rows = [json.loads(line) for line in data.decode('utf-8').splitlines() if line.strip()]
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError('无法解析事件账本 %s：%s' % (name, exc)) from exc
+    if any(not isinstance(row, dict) for row in rows):
+        raise RuntimeError('事件账本 %s 含有非对象行' % name)
+    # One transaction per file: interruption before commit leaves neither rows nor the import
+    # marker, so the next start imports the same file cleanly.
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        connection.execute('DELETE FROM event_ledger WHERE source_file=?', (name,))
+        connection.execute('DELETE FROM event_ledger_imports WHERE source_file=?', (name,))
+        for index, row in enumerate(rows):
+            brain_events.append_ledger(connection, kind, row, source_file=name,
+                                       source_seq=index, ledger_seq=index)
+        connection.execute(
+            'INSERT INTO event_ledger_imports(source_file,sha256,row_count,completed_at) '
+            'VALUES(?,?,?,?)',
+            (name, digest, len(rows), time.strftime('%Y-%m-%dT%H:%M:%S%z')))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    stored = connection.execute(
+        'SELECT COUNT(*) FROM event_ledger WHERE source_file=?', (name,)).fetchone()
+    if int(stored[0] if stored else 0) != len(rows):
+        raise RuntimeError('事件账本 %s 行数校验失败' % name)
+    return len(rows), True
+
+
+def _migrate_state(connection, source):
+    data = source.read_bytes()
+    digest = _sha(data)
+    if brain_events.ledger_imported(connection, brain_events.EVENT_STATE_FILE, digest):
+        return False
+    try:
+        value = json.loads(data.decode('utf-8'))
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError('无法解析 %s：%s' % (source.name, exc)) from exc
+    if not isinstance(value, dict):
+        raise RuntimeError('%s 不是对象' % source.name)
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        brain_events.write_state(connection, 'event-dream', value)
+        connection.execute(
+            'INSERT OR REPLACE INTO event_ledger_imports(source_file,sha256,row_count,completed_at) '
+            'VALUES(?,?,?,?)',
+            (brain_events.EVENT_STATE_FILE, digest, 1, time.strftime('%Y-%m-%dT%H:%M:%S%z')))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    return True
 
 
 def migrate_role(store, role, archive_root=None):
@@ -48,42 +109,15 @@ def migrate_role(store, role, archive_root=None):
             brain_events.ensure_schema(connection)
             for name, kind in files:
                 source = role_dir / name
-                data = source.read_bytes()
-                try:
-                    rows = [json.loads(line) for line in data.decode('utf-8').splitlines() if line.strip()]
-                except (UnicodeError, ValueError) as exc:
-                    raise RuntimeError('无法解析事件账本 %s：%s' % (name, exc)) from exc
-                for row in rows:
-                    if not isinstance(row, dict):
-                        raise RuntimeError('事件账本 %s 含有非对象行' % name)
-                    brain_events.append_ledger(connection, kind, row)
-                connection.commit()
-                # Verify every source row is now present by hash before the file may be archived.
-                for row in rows:
-                    payload = json.dumps(row, ensure_ascii=False, sort_keys=True)
-                    digest = _sha(payload.encode('utf-8'))
-                    found = connection.execute(
-                        'SELECT 1 FROM event_ledger WHERE kind=? AND row_sha256=?',
-                        (kind, digest)).fetchone()
-                    if not found:
-                        raise RuntimeError('事件账本 %s 校验失败，未归档原文件' % name)
-                manifest['files'][name] = {'rows': len(rows), 'sha256': _sha(data), 'kind': kind}
-                total += len(rows)
+                rows, _new = _migrate_file(connection, source, name, kind)
+                total += rows
+                manifest['files'][name] = {
+                    'rows': rows, 'sha256': _sha(source.read_bytes()), 'kind': kind}
             if state_path.is_file():
-                raw = state_path.read_bytes()
-                try:
-                    value = json.loads(raw.decode('utf-8'))
-                except (UnicodeError, ValueError) as exc:
-                    raise RuntimeError('无法解析 %s：%s' % (state_path.name, exc)) from exc
-                if not isinstance(value, dict):
-                    raise RuntimeError('%s 不是对象' % state_path.name)
-                brain_events.write_state(connection, 'event-dream', value)
+                _migrate_state(connection, state_path)
                 manifest['files'][state_path.name] = {
-                    'rows': 1, 'sha256': _sha(raw), 'kind': 'event-state'}
+                    'rows': 1, 'sha256': _sha(state_path.read_bytes()), 'kind': 'event-state'}
             brain_writer.refresh_digest(connection)
-        except Exception:
-            connection.rollback()
-            raise
         finally:
             connection.close()
         # DB is committed and verified; keep a read-only archive, then remove the live copy.
@@ -92,6 +126,8 @@ def migrate_role(store, role, archive_root=None):
             if not source.is_file():
                 continue
             target = archive / name
+            if target.exists():
+                os.chmod(target, 0o600)
             target.write_bytes(source.read_bytes())
             os.chmod(target, 0o444)
             source.unlink()

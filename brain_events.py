@@ -11,10 +11,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # P3-2: every remaining event-lifecycle ledger is a virtual JSONL path backed by brain.db.
-# The keys keep the old file names so BrainStore can preserve the existing read/append call sites.
+# Rows keep their source line position; identical legal rows are never collapsed.
 EVENT_LEDGER_FILES = {
     'stage-evidence.jsonl': 'stage-evidence',
     'event-versions.jsonl': 'event-version',
@@ -27,11 +27,21 @@ EVENT_LEDGER_FILES = {
 EVENT_STATE_FILE = 'event-dream.json'
 EVENT_LEDGER_SCHEMA = """
 CREATE TABLE IF NOT EXISTS event_ledger(
-    seq INTEGER PRIMARY KEY, at TEXT, kind TEXT NOT NULL, event_id TEXT, stage_id TEXT,
-    memory_id TEXT, payload_json TEXT NOT NULL, row_sha256 TEXT NOT NULL,
-    UNIQUE(kind, row_sha256));
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ledger_seq INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    source_seq INTEGER,
+    at TEXT, event_id TEXT, stage_id TEXT, memory_id TEXT,
+    payload_json TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS event_ledger_source
+    ON event_ledger(source_file, source_seq) WHERE source_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS event_ledger_kind
+    ON event_ledger(kind, ledger_seq, id);
 CREATE INDEX IF NOT EXISTS event_ledger_event ON event_ledger(event_id);
-CREATE INDEX IF NOT EXISTS event_ledger_kind ON event_ledger(kind, seq);
+CREATE TABLE IF NOT EXISTS event_ledger_imports(
+    source_file TEXT PRIMARY KEY, sha256 TEXT NOT NULL,
+    row_count INTEGER NOT NULL, completed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS event_state(
     key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, updated_at TEXT);
 """
@@ -78,25 +88,43 @@ def ledger_kind(path, role):
     return EVENT_LEDGER_FILES[name]
 
 
-def append_ledger(connection, kind, row):
-    """Append one lossless event-ledger row; duplicate rows are idempotent by hash."""
+def append_ledger(connection, kind, row, *, source_file='__live__', source_seq=None,
+                  ledger_seq=None):
+    """Append one lossless row. Legacy migration supplies source_seq so duplicate rows and
+    original order are preserved; live appends get the next per-ledger position."""
     ensure_schema(connection)
     payload = json.dumps(dict(row), ensure_ascii=False, sort_keys=True)
-    digest = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    if ledger_seq is None:
+        top = connection.execute(
+            'SELECT COALESCE(MAX(ledger_seq), -1) + 1 FROM event_ledger').fetchone()
+        ledger_seq = int(top[0] if top else 0)
     connection.execute(
-        'INSERT OR IGNORE INTO event_ledger(at,kind,event_id,stage_id,memory_id,payload_json,row_sha256) '
-        'VALUES(?,?,?,?,?,?,?)',
-        (row.get('at') or row.get('time'), kind, row.get('event_id'), row.get('stage_id'),
-         row.get('memory_id'), payload, digest))
-    return digest
+        'INSERT INTO event_ledger(ledger_seq,kind,source_file,source_seq,at,event_id,'
+        'stage_id,memory_id,payload_json) VALUES(?,?,?,?,?,?,?,?,?)',
+        (int(ledger_seq), kind, source_file, source_seq,
+         row.get('at') or row.get('time'), row.get('event_id'), row.get('stage_id'),
+         row.get('memory_id'), payload))
+    return payload
+
+
+def ledger_imported(connection, source_file, sha256=None):
+    try:
+        row = connection.execute(
+            'SELECT sha256,row_count,completed_at FROM event_ledger_imports WHERE source_file=?',
+            (source_file,)).fetchone()
+    except sqlite3.Error:
+        return False
+    if row is None or not row[2]:
+        return False
+    return sha256 is None or row[0] == sha256
 
 
 def read_ledger(connection, kind, limit=None):
-    sql = 'SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY seq'
+    sql = 'SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY ledger_seq,id'
     params = [kind]
     try:
         if limit is not None:
-            sql = ('SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY seq DESC LIMIT ?')
+            sql = ('SELECT payload_json FROM event_ledger WHERE kind=? ORDER BY ledger_seq DESC,id DESC LIMIT ?')
             params.append(int(limit))
             rows = list(reversed([json.loads(item[0]) for item in connection.execute(sql, params)]))
             return rows
