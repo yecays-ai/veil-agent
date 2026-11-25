@@ -1,19 +1,21 @@
 # HANDOFF
 
-## P3-3 取消隐藏 + 去标签/domain 依赖 + 页面兼容（2026-11-25，施工中）
+## P3-4 维护窗口数据清理 + 物理卸载 + 最终验收（2026-11-25，施工中）
 
-- 已完成：`unhide_legacy_rows` 启动迁移（旧 hidden/dont_surface 行恢复为 normal dynamic，正文/why/P6 不改，归档行保留）；移除 BrainAuthority/BrainRetrieval/RecallJudge/Memory/Native/BrainRead 面板的 hidden/dont_surface 过滤和工具参数；空事件改为归档；页面分组改为 全部/最近/经历/已归档，页面搜索/事实行去掉 domain/tag，移除 us/peter/system 分组依赖。
-- 测试：新增 `tests/test_p3_3_visibility.py` 6 项；更新 hidden/召回/判官/原生工具/事件/分页/页面目标测试；本地全量 2202 项，20 failures / 2 errors 为既有环境依赖，目标套件通过；最终以 PR CI 为准。
-- 复审补丁：修复 pending delete 与 `is_hidden` 冲突，自主删除申请可进入审批；同意删除/拒绝恢复均有集成测试。旧 surprise 标签不再隐藏页面正文/why/标题或禁止编辑。
-- 未做：不逐条改记忆内容、不自动删除/合并、不执行 P3-4；P3-3 尚未合并/部署。
-- 下一步第一步：等全量测试和 PR 复审；合并后按维护窗口部署，启动时自动 unhide；正式验收确认页面/召回/判官/编辑/归档/删除/事件关联一致。
-- 注意：正式 Peter 已运行 P3-2（f63e58a）；不要在正式目录开发或直接改正式 brain.db。
+- 已完成：新增手动清理工具 `scripts/p3_4_cleanup.py`；plan 绑定完整冷备清单和 brain.db 哈希，apply 需相同 plan + 确认词 + 停服/写锁/网页端口检查；清理已删除/墓碑内容、letters/plans DB 重复行、旧 vault/JSONL/备份副本、Ombre 运行目录；archive 保留安装包和 letters/plans JSON；正常记忆和 P6 字段不动。
+- 已完成：移除遗留 Ombre 入口源文件 `ombre_entry.py`/`ombre_host.py` 和 prompt allowlist 引用；新增隔离测试 `tests/test_p3_4_cleanup.py`（P6 保留、墓碑/letters-plans 清理、文件保护、错误计划拒绝）和 `docs/p3-4-maintenance-runbook.md`。
+- 未做：**未在正式数据执行任何清理**；未创建正式 plan、未删除正式文件、未物理卸载正式 Ombre。P3-4 必须在 Lan 维护窗口确认名单、完成冷备 + 恢复演练后执行。
+- 下一步：PR 复审；合并后在维护窗口按 runbook 先部署 P3-3，再 plan 复查/apply/启动/导出/恢复复验；P3-4 完成记录只在验收后写。
+- 正式状态：正式 Peter 仍运行 P3-2/f63e58a；P3-3 已合并未部署。
+
+## P3-3 取消隐藏 + 去标签/domain 依赖 + 页面兼容（已合并 #444，未部署）
+
+- 隐藏机制/旧 tags/domain 页面依赖已移除；旧 hidden 行启动迁移；自主删除审批与 surprise 页面隐藏已修。
+- 未部署；P3-4 维护窗口会先部署 P3-3。
 
 ## P3-2 旧系统清理 + 事件附账本统一（已合并 #443，已部署）
 
-- 已完成：事件附账本/状态进入 brain.db；迁移幂等且保留重复/顺序，原文件只读归档；导出/备份/恢复覆盖事件生命周期；Ombre 代码/安装/CI/旧配置清理。
-- 正式维护：2026-11-25 完整冷备份 + 预迁移 Brain 备份；更新到 f63e58a；首次启动迁移 720 行归档；正式数据逐 ID 对比无缺失；页面/事件 API 正常，无 18011/Ombre；未执行 P3-4。
-- 回退：完整冷备份 + 预迁移 Brain 备份；不要用旧备份直接覆盖 P3-2 后新增数据。
+- 事件附账本/状态进入 brain.db；正式维护已完成迁移和验收；未执行 P3-4。
 
 ## P3-1 启动解耦 + Brain-only 读路径（已合并 #442）
 

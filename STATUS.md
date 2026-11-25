@@ -8,14 +8,18 @@
 - **回退**：完整冷备份 + 预迁移 Brain 备份；brain_backup 恢复会保留 safety copy/export 并合并备份后新增记录；未执行 P3-4。
 - **状态**：正式 Peter 正在运行；Lan 可做 1–2 天观察（保存/想起/事件续写/页面/费用/无 pending）。
 
-## P3-3 取消隐藏 + 去标签/domain 依赖 + 页面兼容（施工中）
+## P3-3 取消隐藏 + 去标签/domain 依赖 + 页面兼容（已合并 #444，未部署）
 
-- **目标**：隐藏机制取消；唯一旧 hidden/archived 行恢复为正常可见/可召回；归档生命周期保留；页面改为 全部/最近/经历/已归档；页面/搜索/召回/判官不再依赖旧 tags/domain；数据列与 P6 字段保留。
-- **已完成**：启动迁移 `unhide_legacy_rows`（只改可见性/类型，正文/why/P6 不动）；BrainAuthority、BrainRetrieval、RecallJudge、Memory、Native tools、BrainRead 面板移除 hidden/dont_surface 行为；删除 dont_surface 工具参数；关闭空事件改为归档而非隐藏；页面移除 us/peter/system/domain/tag 分组与搜索依赖。
-- **复审补丁**：修复 `is_hidden(delete_pending)` 与自主删除审批的状态冲突——`process_pending_deletions` 改用 archived/deleted 生命周期判断，pending 请求会正常进入 Lan 审批；同意删除、拒绝后恢复可见/召回均有测试。旧 surprise 标签只保留历史数据，不再隐藏页面正文/why/标题或禁止编辑。
-- **未做**：不逐条改记忆内容、不自动删除/合并、不执行 P3-4；正式部署待本 PR 合并和维护窗口。
-- **测试**：新增 `tests/test_p3_3_visibility.py`（6 项）；隐藏/召回/判官/原生工具/事件/页面目标套件通过；本地全量排除外部 OpenCode 环境 2202 项，20 failures / 2 errors 均为既有 maintenance 假 git/gh 与冷备份 desktop-data 环境依赖（与 P3-2 基线同类），最终以 PR CI 为准。
-- **验收步骤**：记忆页 全部/最近/经历/已归档可用；旧 hidden 行正常显示并可召回；旧标签/domain 不再出现在页面/搜索；归档、编辑、删除、事件关联仍正常；P6 数据可查。
+- **代码**：#444 已合并于 `e7e7992`；隐藏机制、旧 tags/domain 页面依赖、自主删除审批与 surprise 页面隐藏均已完成。
+- **正式状态**：尚未执行 P3-3 维护部署；正式 Peter 仍运行 P3-2/f63e58a，第一次 P3-3 启动会执行 `unhide_legacy_rows`。
+- **测试**：P3-3 9 项、隐藏/召回/判官/原生工具/事件/页面目标套件通过；本地全量 2204 项，20 failures / 2 errors 为既有 maintenance/冷备份环境依赖。
+
+## P3-4 维护窗口数据清理 + 物理卸载 + 最终验收（施工中）
+
+- **目标**：维护窗口内对已确认名单执行不可逆清理：墓碑正文/raw/版本/向量、letters/plans DB 重复行、旧 JSONL/vault/embeddings、Ombre 运行目录/旧备份副本；只保留最小防复活标记和 P6 数据；最后复验导出/备份恢复。
+- **已完成**：新增手动清理工具 `scripts/p3_4_cleanup.py`（plan/apply，备份清单 + DB 哈希绑定，停服/写锁/网页端口检查，确认词）；移除遗留 Ombre 入口源文件；新增隔离测试；运行手册 `docs/p3-4-maintenance-runbook.md`。
+- **未做**：未在正式数据执行任何清理；未创建正式计划/未删除正式文件；需 Lan 在维护窗口确认名单、完成冷备和恢复演练后执行。P3-4 完成记录只能在维护窗口验收后写。
+- **下一步**：PR 复审；合并后在维护窗口执行 plan → 复查 → apply → 启动/导出/恢复复验，再更新 STATUS 为 P3 完成。
 
 ## P3-1 启动解耦 + Brain-only 读路径（已合并 #442）
 
@@ -33,6 +37,6 @@
 
 ## 下一步
 
-1. P3-2 PR 复审与 CI；不自行合并。
-2. 合并后按维护窗口部署：首次启动迁移事件附账本、确认页面/导出/备份恢复，观察 1–2 天。
-3. P3-3 页面/隐藏/domain；P3-4 不可逆清理需 Lan 维护窗口授权。
+1. P3-4 PR 复审；不自行合并。
+2. 合并后按维护窗口部署 P3-3，再执行 P3-4 冷备/恢复演练/名单复查/清理/最终验收。
+3. P3-4 不可逆清理必须由 Lan 在维护窗口确认名单后执行；不在开发窗口操作正式数据。
