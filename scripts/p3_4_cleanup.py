@@ -258,6 +258,9 @@ def _backup_coverage(root, backup, targets, role):
                 continue
             if not item.resolve().is_relative_to(root.resolve()):
                 raise RuntimeError('清理目标经联接点越出项目目录：%s' % item)
+            relative_root = item.relative_to(root).as_posix()
+            if backup_restore._entry_is_excluded(relative_root):
+                continue  # runtime locks/logs/tmp are deliberately not in the cold backup
             rel = 'payload/' + item.relative_to(root).as_posix()
             entry = files.get(rel)
             checked += 1
@@ -269,7 +272,10 @@ def _backup_coverage(root, backup, targets, role):
             if item.is_symlink():
                 raise RuntimeError('清理目标含符号链接/联接点，拒绝处理：%s' % item)
             if item.is_dir():
-                rel = 'payload/' + item.relative_to(root).as_posix()
+                relative_root = item.relative_to(root).as_posix()
+                if backup_restore._entry_is_excluded(relative_root):
+                    continue
+                rel = 'payload/' + relative_root
                 if rel not in dirs:
                     missing.append(rel)
     db = root / 'data' / role / 'brain.db'
@@ -713,12 +719,12 @@ def main(argv=None):
             raise SystemExit('--apply 需要 --plan')
         result = apply_plan(args.root, args.role, args.plan, backup=args.backup,
                              archive_dir=args.archive_dir, confirm=args.confirm)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0
     plan = _plan(args.root, args.role, args.backup, args.archive_dir)
     if args.plan:
         _write_json(args.plan, plan, exclusive=True)
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    print(json.dumps(plan, ensure_ascii=True, indent=2))
     return 0
 
 
