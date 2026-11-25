@@ -849,6 +849,12 @@ class ExperienceMemory:
                 if not self.events.revise(event_id, update['text'].strip(),
                                           self.memory.title_for(memory_id) or 'Event',
                                           seen=previous, why='经历整理：按后来的变化重写'):
+                    status = getattr(self.events, 'last_revise_status', '')
+                    if status in ('fact_mismatch', 'locked'):
+                        return status
+                    if status == 'closed':
+                        self._preserve_rejected_update(update, seen, source_key, 'event closed')
+                        return 'closed'
                     return False
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
                                               'time': self.budget.clock(), 'event_id': event_id,
@@ -860,11 +866,13 @@ class ExperienceMemory:
         document = self.memory.raw_content_for(memory_id)
         if document is None:
             return False
-        # Same archive Peter's own edits use, so Lan can see and restore the earlier wording.
-        self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
-            'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：按后来的变化重写',
-            'why_remembered': '', 'old_content': document})
-        self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
+        if getattr(self.memory, 'brain_authority', None) is None:
+            # Legacy fake-backend path only; BrainAuthority.trace writes a single versions row.
+            self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
+                'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：按后来的变化重写',
+                'why_remembered': '', 'old_content': document})
+        self.memory.call('trace', {'bucket_id': memory_id, 'content': text,
+                                   'edit_reason': '经历整理：按后来的变化重写'})
         getattr(self.memory, 'bucket_details_cache', {}).pop(memory_id, None)
         stored = self.memory.content_for(memory_id, refresh=True)
         if stored is None or stored.strip() != text:
@@ -993,11 +1001,35 @@ class ExperienceMemory:
                        'problem': item['problem']} for item in pending]
             dropped += len(pending)
             for item in pending:
-                # Ticket 386: a draft that could not be fixed is not saved, but its text is not lost either.
+                # Ticket 386 / P6-S2: preserve unfixed drafts in both failure log and durable review queue
+                # so nothing is silently lost when the cursor advances.
                 self._record_failure('fix', 'unfixed_draft', kind=item['kind'], problem=item['problem'],
                                      draft=item['text'], **({'title': item['title']} if item['kind'] == 'entry'
                                                              else {'id': item['id']}))
-            for update in updates:
+            if pending:
+                self.store.append(self.path, {
+                    'kind': 'manual-review',
+                    'source_key': source_key,
+                    'covers': span,
+                    'message_ids': message_ids,
+                    'items': [{'kind': item['kind'],
+                               'id': item.get('id'),
+                               'title': item.get('title'),
+                               'continues': item.get('continues'),
+                               'problem': item['problem'],
+                               'draft': item['text']} for item in pending],
+                    'time': self.budget.clock(),
+                })
+                if self.events is not None:
+                    try:
+                        self.store.append(f'{self.cfg.id}/event-review.jsonl', {
+                            'at': self.budget.clock(),
+                            'event_id': '',
+                            'reason': f'experience manual-review ({len(pending)} unfixed draft(s), source_key={source_key})',
+                        })
+                    except Exception:
+                        pass
+            for update_idx, update in enumerate(updates):
                 if self.sidecar.locked(update['id']):
                     # Ticket 421: Lan locked the reviewed story; the new development is not dropped.
                     # It is written down once per batch and applied on a later run after she unlocks it.
@@ -1021,6 +1053,23 @@ class ExperienceMemory:
                     # Ticket 421 review: a closed experience is a terminal rejection, not a transient
                     # failure. The draft is preserved by _save_update; advance the cursor and keep going.
                     rejected.append({'memory_id': update['id'], 'reason': 'event closed'})
+                    continue
+                if saved == 'fact_mismatch':
+                    # P6-S2: fact check mismatch is NOT a concurrency conflict; preserve draft for review
+                    # and fall back to appending as a new stage so the experience is never silently dropped.
+                    self.store.append(self.path, {
+                        'kind': 'update-pending-review',
+                        'memory_id': update['id'],
+                        'source_key': update_key,
+                        'covers': span,
+                        'draft': update['text'],
+                        'time': self.budget.clock(),
+                    })
+                    fallback_title = self.memory.title_for(update['id']) or '后续进展'
+                    if self._save_entry({'title': fallback_title, 'text': update['text'],
+                                         'continues': update['id']},
+                                        span, source, source_key, 100 + update_idx) is not None:
+                        written += 1
                     continue
                 if not saved:
                     self.store.append(self.path, {'kind': 'update-conflict', 'memory_id': update['id'],

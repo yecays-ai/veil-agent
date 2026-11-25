@@ -656,10 +656,13 @@ def canonical_digest(connection):
     """Deterministic fingerprint of every stored row; used by import and by check."""
     parts = []
     for table in ('memories', 'versions', 'sidecar_events', 'sidecar_state', 'relations',
-                  'sources', 'quotes', 'vectors', 'events', 'event_sources', 'event_stages'):
+                  'sources', 'quotes', 'vectors', 'events', 'event_sources', 'event_stages',
+                  'experience_recoveries'):
         columns = [row[1] for row in connection.execute('PRAGMA table_info(%s)' % table)]
-        rows = connection.execute('SELECT * FROM %s ORDER BY %s' %
-                                  (table, ', '.join(columns))).fetchall()
+        if not columns:
+            continue
+        rows = [tuple(row) for row in connection.execute(
+            'SELECT * FROM %s ORDER BY %s' % (table, ', '.join(columns))).fetchall()]
         parts.append([table, columns, rows])
     blob = json.dumps(parts, ensure_ascii=False, default=_json_default,
                       separators=(',', ':')).encode('utf-8')

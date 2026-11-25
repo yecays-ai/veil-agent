@@ -210,6 +210,93 @@ class BrainAuthority:
             settings={'backend': 'brain', 'weight_vector': 0.65, 'weight_keyword': 0.35})
         return text
 
+    def commit_event_bundle(self, *, event, stage=None, projection=None, title='',
+                            importance=None, pinned=None, embedder=None,
+                            old_story='', operation_reason='事件故事更新',
+                            ledger_rows=(), quotes=(), seen_projection=None):
+        """P6-S2: atomically commit memory projection (single version), event, stage, and ledgers."""
+        import brain_events
+        embed = self._embed_callable(embedder)
+        with write_lock(self.store, self.cfg.id):
+            if self.freeze_path.exists():
+                raise RuntimeError('memory writes are frozen for cutover')
+            with self.mutex:
+                connection = self._connect()
+                try:
+                    brain_events.ensure_schema(connection)
+                    memory_id = event.get('memory_id')
+                    result = None
+                    vector, state = (None, None)
+                    if projection is not None and str(projection).strip():
+                        vector, state = brain_writer._prepare_memory_vector(projection, None, embed)
+                    connection.execute('BEGIN IMMEDIATE')
+                    if memory_id and seen_projection is not None:
+                        current = connection.execute(
+                            'SELECT body FROM memories WHERE id=? AND is_deleted=0 AND is_tombstone=0',
+                            (memory_id,)).fetchone()
+                        if current is None or current[0].strip() != str(seen_projection).strip():
+                            raise RuntimeError('event projection changed concurrently')
+                    if projection is not None and str(projection).strip():
+                        if memory_id:
+                            changes = {'body': projection}
+                            if title:
+                                changes['title'] = title[:100]
+                            result = brain_writer.apply_update_memory(
+                                connection, memory_id, changes, vector=vector, state=state,
+                                operation_reason=operation_reason)
+                        else:
+                            record = {
+                                'body': projection,
+                                'title': (title or event.get('title') or 'Event')[:100],
+                                'type': 'dynamic',
+                                'importance': 10 if pinned is True else (importance or 5),
+                                'pinned': bool(pinned is True),
+                                'domain': [], 'tags': [],
+                            }
+                            result = brain_writer.apply_create_memory(
+                                connection, record, vector=vector, state=state)
+                            memory_id = result['memory_id']
+                            event = {**event, 'memory_id': memory_id}
+                    brain_events.upsert_event(connection, dict(event), commit=False, ensure=False)
+                    if stage is not None:
+                        brain_events.upsert_stage(connection, dict(stage), commit=False, ensure=False)
+                        if memory_id:
+                            connection.execute(
+                                'INSERT OR IGNORE INTO event_sources(event_id,ord,memory_id,part) '
+                                'VALUES(?,?,?,?)',
+                                (event['event_id'], 0, memory_id, 'projection'))
+                    if old_story and old_story != event.get('story'):
+                        brain_events.append_ledger(
+                            connection, 'event-version',
+                            {'event_id': event['event_id'], 'memory_id': memory_id,
+                             'old_story': old_story, 'old_content': None,
+                             'at': brain_writer.now()})
+                    for kind, row in ledger_rows:
+                        brain_events.append_ledger(connection, kind, dict(row))
+                    if memory_id:
+                        next_quote = connection.execute(
+                            'SELECT COALESCE(MAX(ord), -1) + 1 FROM quotes WHERE memory_id=?',
+                            (memory_id,)).fetchone()[0]
+                        for offset, quote in enumerate(quotes):
+                            connection.execute(
+                                'INSERT INTO quotes(memory_id,ord,speaker,text) VALUES(?,?,?,?)',
+                                (memory_id, int(next_quote) + offset,
+                                 quote.get('speaker'), quote.get('text')))
+                    brain_writer.apply_digest(connection)
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+                finally:
+                    connection.close()
+        if embed is not None:
+            self._retry_pending(embed)
+        return {
+            'memory_id': (result or {}).get('memory_id') or event.get('memory_id'),
+            'index_pending': (result or {}).get('vector_state') == 'pending',
+            'changed': bool(result and result.get('changed', True)),
+        }
+
 def _split(value):
     if isinstance(value, str):
         return [part.strip() for part in value.split(',') if part.strip()]
