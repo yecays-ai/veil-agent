@@ -22,7 +22,7 @@ Lan 要求不读代码、不找开发 Agent，也能看清并调整 VEIL 的行�
 ## 交付物
 
 - `docs/reports/config-audit/2026-11-25-global-config-audit.md`：主报告（结论、架构、实际值、分域要点、问题清单、分类、统一中心设计、施工拆分）。
-- `docs/reports/config-audit/config-inventory.csv`：全量 661 项清单。
+- `docs/reports/config-audit/config-inventory.csv`：全量 668 项清单。
 - `docs/reports/config-audit/evidence/`：八份分域取证底稿（逐项 `file:line`）。
 - 本工单；同 PR 更新 `STATUS.md`、`HANDOFF.md`。
 
