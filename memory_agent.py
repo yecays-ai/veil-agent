@@ -461,7 +461,7 @@ class Memory:
     # a real budgeter just because getattr creates an attribute.
     budgets_recall = True
 
-    def __init__(self, cfg, store, budget, model, backend, runtime_monitor=None):
+    def __init__(self, cfg, store, budget, model, backend=None, runtime_monitor=None):
         self.cfg, self.store, self.budget, self.model, self.backend = cfg, store, budget, model, backend
         brain_settings = (cfg.memory or {}).get('brain') or {}
         self.brain_authority = None
@@ -749,6 +749,8 @@ class Memory:
                     embedder = None
                 result = authority.call(name, args, embedder=embedder)
             else:
+                if self.backend is None:
+                    raise MemoryToolError('no memory backend')
                 result = self.backend.call(name, args)
         except Exception as exc:
             # A child-process timeout or disconnect can happen after the provider
@@ -759,6 +761,13 @@ class Memory:
                 budget.settle_estimate(model_reservation, accounting='ombre-model-estimate')
             if hasattr(self, 'tool_failure'):
                 self.tool_failure(name, exc)
+            if getattr(self, 'runtime_monitor', None) is not None and name in {'hold', 'trace', 'breath_search'}:
+                try:
+                    self.runtime_monitor.observe_memory({
+                        'code': 'memory_operation_failed', 'tool': name,
+                        'error_code': 'known' if isinstance(exc, (ValueError, KeyError)) else 'unknown'})
+                except Exception:
+                    pass
             if name in {'hold', 'trace'} and write_operation is not None and hasattr(self, 'write_failure'):
                 self.write_failure(write_operation, exc)
             raise
@@ -949,6 +958,14 @@ class Memory:
         return []
 
     def deleted_for(self, memory_id):
+        if getattr(self, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.brain_authority.db_path) as reader:
+                    row = reader.memory(memory_id)
+                return bool(row and (row.get('is_deleted') or row.get('is_tombstone')))
+            except Exception:
+                return False
         raw = self.raw_content_for(memory_id)
         if raw is None:
             return False
@@ -973,11 +990,22 @@ class Memory:
         The ledger is a long-lived data boundary: `source_memory_ids` is accepted only as a list of
         non-empty strings, other shapes are ignored row-locally so one bad row cannot disable recall.
         A failed read is never cached as an empty ledger — it fails closed for this turn and is retried."""
-        try:
-            stat = (self.store.root / f'{self.cfg.id}/events.jsonl').stat()
-            signature = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            signature = None
+        authority = getattr(self, 'brain_authority', None) is not None
+        if authority:
+            try:
+                probe = self.store.read(f'{self.cfg.id}/events.jsonl')
+                signature = ('brain', hashlib.sha256(json.dumps([
+                    (row.get('event_id'), row.get('memory_id'), row.get('source_memory_ids'))
+                    for row in probe if isinstance(row, dict)], ensure_ascii=False,
+                    sort_keys=True).encode('utf-8')).hexdigest())
+            except Exception:
+                signature = None
+        else:
+            try:
+                stat = (self.store.root / f'{self.cfg.id}/events.jsonl').stat()
+                signature = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                signature = None
         cached = getattr(self, '_event_ledger_cache', None)
         if cached is not None and getattr(self, '_event_ledger_signature', object()) == signature:
             return cached
@@ -1042,12 +1070,24 @@ class Memory:
 
         The complete reviewed story is what automatic recall should prefer over one old fragment;
         an absent or damaged ledger only means no upgrade, never a failed recall."""
-        path = self.store.root / f'{self.cfg.id}/events.jsonl'
-        try:
-            stat = path.stat()
-            signature = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            return {}
+        authority = getattr(self, 'brain_authority', None) is not None
+        if authority:
+            try:
+                probe = self.store.read(f'{self.cfg.id}/events.jsonl')
+                signature = ('brain', hashlib.sha256(json.dumps([
+                    (row.get('event_id'), row.get('story'), row.get('title'),
+                     row.get('story_source'), row.get('first_at'))
+                    for row in probe if isinstance(row, dict)], ensure_ascii=False,
+                    sort_keys=True).encode('utf-8')).hexdigest())
+            except Exception:
+                return {}
+        else:
+            path = self.store.root / f'{self.cfg.id}/events.jsonl'
+            try:
+                stat = path.stat()
+                signature = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                return {}
         cached = getattr(self, '_event_stories_cache', None)
         if cached and cached[0] == signature:
             return cached[1]
@@ -1358,6 +1398,8 @@ class Memory:
         A failure here never changes the answer by hiding it: the caller gets Ombre's result and
         the diagnostic keeps the reason. The authoritative read/write path is untouched.
         """
+        if getattr(self, 'last_recall_debug', None) is None:
+            self.last_recall_debug = {}
         settings = getattr(self, 'retrieval_settings', None) or {'backend': 'ombre'}
         brain_db = self.store.root / self.cfg.id / 'brain.db'
         if settings['backend'] == 'brain' and not brain_db.is_file():
@@ -1406,10 +1448,26 @@ class Memory:
                 except Exception:
                     pass
         if getattr(self, 'brain_authority', None) is not None:
-            # Never route the fallback back into Brain; go straight to the legacy backend, but keep
-            # the same budget lifecycle as a normal breath_search (no unaccounted paid call).
-            return self.call('breath_search', {
-                'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked}, legacy=True)
+            # P3-1: never fall back to the Ombre backend. If the vector side is unavailable,
+            # use the local BM25 channel and say so in diagnostics instead of silently returning
+            # nothing or spending a second paid search in another process.
+            try:
+                text, meta = brain_retrieval_search(
+                    brain_db, query, limit=asked, embedder=None, settings=settings)
+                self.last_recall_debug['retrieval'] = {
+                    'backend': 'brain', 'degraded': 'keyword_only', **meta}
+                return text
+            except Exception as exc:
+                self.last_recall_debug['retrieval'] = {'backend': 'brain',
+                                                       'failed': type(exc).__name__}
+                try:
+                    self.store.append(self.diagnostics, {
+                        'time': self.budget.clock() if getattr(self, 'budget', None) else '',
+                        'code': 'brain_retrieval_unavailable',
+                        'error_type': type(exc).__name__})
+                except Exception:
+                    pass
+                return ''
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
 
@@ -1551,10 +1609,23 @@ class Memory:
         return adjacency
 
     def _ombre_event_sources(self):
-        """Ticket 365: {memory_id: ids whose Ombre relation_links point at it with an event type}. Ombre writes a
-        link on the newer memory, so reading only a memory's own links would never find the stages after it. The
-        vault is re-read only when a file was added, removed or changed."""
+        """Ticket 365: {memory_id: ids whose links point at it with an event type}. Ombre wrote the link on
+        the newer memory; under Brain authority the same information lives in the relations table."""
         from recall_rotation import EVENT_LINKS, front_matter
+        authority = getattr(self, 'brain_authority', None)
+        if authority is not None:
+            from brain_read import BrainRead
+            sources = {}
+            try:
+                with BrainRead(authority.db_path) as reader:
+                    for memory_id, target_id, kind in reader.connection.execute(
+                            'SELECT memory_id,target_id,type FROM relations WHERE status="active"'):
+                        if kind in EVENT_LINKS and isinstance(memory_id, str) and isinstance(target_id, str):
+                            sources.setdefault(target_id, set()).add(memory_id)
+            except Exception as exc:
+                self.retrieval_failure('event_sources', exc)
+                return {}
+            return sources
         vault = self.store.root / self.cfg.id / 'memory'
         try:
             files = [path for path in vault.rglob('*.md') if not path.is_symlink()]
@@ -1582,8 +1653,23 @@ class Memory:
         own front matter. The sidecar only began noting Peter's saves recently, so this is what finds the older
         ones. Any failure only means none."""
         from recall_rotation import created_key, front_matter
-        vault = self.store.root / self.cfg.id / 'memory'
         floor = created_key(since.isoformat())
+        authority = getattr(self, 'brain_authority', None)
+        if authority is not None:
+            try:
+                from brain_read import BrainRead
+                rows = []
+                with BrainRead(authority.db_path) as reader:
+                    for memory_id, created in reader.connection.execute(
+                            'SELECT id,created FROM memories WHERE is_deleted=0 AND is_tombstone=0'):
+                        key = created_key(created)
+                        if key[0] == 0 and key >= floor:
+                            rows.append((key, memory_id))
+                return [memory_id for _, memory_id in sorted(rows, reverse=True)[:limit]]
+            except Exception as exc:
+                self.retrieval_failure('recently_created', exc)
+                return []
+        vault = self.store.root / self.cfg.id / 'memory'
         try:
             rows = []
             for path in vault.rglob('*.md'):

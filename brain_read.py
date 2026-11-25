@@ -57,6 +57,11 @@ class BrainRead:
                 for row in self.connection.execute(
                     'SELECT * FROM versions WHERE memory_id=? ORDER BY seq DESC', (memory_id,))]
 
+    def pinned_ids(self):
+        """IDs currently pinned; opening order uses this same column."""
+        return [row[0] for row in self.connection.execute(
+            'SELECT id FROM memories WHERE pinned=1 AND is_deleted=0 AND is_tombstone=0')]
+
     def panel_entries(self, limit=100):
         rows = self.connection.execute(
             'SELECT m.id, m.title, m.name, m.created, m.importance, m.bucket, m.type, '

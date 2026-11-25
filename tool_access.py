@@ -14,7 +14,6 @@ TOOL_ACCESS = {
     'create_directory': 'w',
     'delete_file': 'w',
     'directory_tree': 'rd',
-    'dream': 'r',
     'edit_file': 'w',
     'get_file_info': 'rd',
     'github_read': 'd',

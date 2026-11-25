@@ -116,7 +116,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
             'INSERT INTO memories(id,bucket,file_rel,title,name,body,body_sha256,raw_markdown,'
             'raw_sha256,frontmatter_raw,frontmatter_json,created,last_active,type,importance,'
             'domain_json,tags_json,why_remembered,meaning,is_hidden,is_tombstone,is_deleted,'
-            'extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'pinned,extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (memory_id, record.get('bucket') or 'dynamic',
              record.get('file_rel') or ('dynamic/%s.md' % memory_id), title, title, body,
              _sha(body), raw, _sha(raw), frontmatter, frontmatter_json, created, created,
@@ -124,7 +124,8 @@ def create_memory(connection, record, *, vector=None, embedder=None):
              json.dumps(record.get('domain') or [], ensure_ascii=False),
              json.dumps(record.get('tags') or [], ensure_ascii=False),
              record.get('why_remembered') or '', record.get('meaning') or '',
-             int(bool(record.get('hidden'))), 0, 0, '{}', state))
+             int(bool(record.get('hidden'))), 0, 0,
+             int(bool(record.get('pinned'))), '{}', state))
         if vector:
             connection.execute(
                 'INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,updated_at,content_hash) '
@@ -167,10 +168,12 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
                             json.dumps(fields), old_body, _sha(old_body)))
         raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
         connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
-                           'title=COALESCE(?,title),importance=COALESCE(?,importance),vector_state=? '
-                           'WHERE id=?',
+                           'title=COALESCE(?,title),importance=COALESCE(?,importance),'
+                           'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'
+                           'vector_state=? WHERE id=?',
                            (body, _sha(body), raw, _sha(raw), changes.get('title'),
-                            changes.get('importance'), state, memory_id))
+                            changes.get('importance'), changes.get('pinned'),
+                            why_remembered or None, state, memory_id))
         if state == 'ready':
             connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
                                'updated_at,content_hash) VALUES(?,?,?,?,?,?)',

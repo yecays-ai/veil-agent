@@ -1,0 +1,116 @@
+"""P3-1: Brain works as the only memory backend; no Ombre process is needed."""
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import Mock
+
+import brain_writer
+import veil_brain
+from brain_read import BrainRead
+from memory_agent import Memory
+from memory_native import NativeMemoryTools
+from recall_judge import RecallJudge, load_settings
+from veil_agent import Budget, Character, Store
+
+
+class FakeEmbedder:
+    usage_tokens = None
+
+    def embed(self, _text):
+        return [0.4] * 1024
+
+
+class BrainOnlyTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = Store(self.temp.name + '/data')
+        self.db = self.store.root / 'fake' / 'brain.db'
+        self.db.parent.mkdir(parents=True)
+        connection = sqlite3.connect(str(self.db))
+        connection.executescript(veil_brain.SCHEMA)
+        brain_writer.ensure_schema(connection)
+        connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        settings = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
+                    'base_url': 'https://example.invalid/v1',
+                    'brain': {'write_authority': True, 'shadow': False},
+                    'retrieval': {'backend': 'brain'}}
+        self.cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake', settings)
+        # No backend argument: P3-1 startup must work without an Ombre client at all.
+        self.memory = Memory(self.cfg, self.store, Budget(self.store), Mock())
+        self.memory._embedder = FakeEmbedder()
+        self.addCleanup(self.memory.__exit__, None, None, None)
+
+    def test_hold_search_and_tools_work_without_ombre(self):
+        text = self.memory.call('hold', {'content': 'pineapple pizza evening', 'title': 'Pizza'})
+        self.assertRegex(text, r'^新建→[0-9a-f]{12}$')
+        memory_id = text.split('→')[1]
+        found = self.memory.search_candidates('pineapple', 5)
+        self.assertIn(memory_id, found)
+        tools = NativeMemoryTools(self.memory, 8192, model=Mock())
+        names = {tool.name for tool in tools.tools}
+        self.assertIn('trace', names)
+        self.assertNotIn('dream', names)
+
+    def test_pinned_and_importance_are_written_to_brain(self):
+        text = self.memory.call('hold', {'content': 'always remember this', 'title': 'Core',
+                                         'pinned': True, 'why_remembered': 'core promise'})
+        memory_id = text.split('→')[1]
+        with BrainRead(self.db) as reader:
+            row = reader.memory(memory_id)
+        self.assertEqual(row['pinned'], 1)
+        self.assertEqual(row['importance'], 10)
+        opening = self.memory.call('breath', {})
+        self.assertIn('Core', opening)
+        self.memory.call('trace', {'bucket_id': memory_id, 'pinned': False, 'importance': 4,
+                                   'edit_reason': 'no longer a core promise'})
+        with BrainRead(self.db) as reader:
+            row = reader.memory(memory_id)
+        self.assertEqual(row['pinned'], 0)
+        self.assertEqual(row['importance'], 4)
+
+    def test_event_caches_follow_brain_updates(self):
+        path = 'fake/events.jsonl'
+        self.memory.store.append(path, {
+            'event_id': 'e-test', 'memory_id': 'm-own', 'title': 'Old', 'story': 'old story',
+            'status': 'open', 'first_at': '2026-01-01', 'last_at': '2026-01-01',
+            'source_memory_ids': ['m-source']})
+        self.assertEqual(self.memory._event_stories()['e-test']['story'], 'old story')
+        self.assertIn('m-source', self.memory._event_ledger()['owners'])
+        self.memory.store.append(path, {
+            'event_id': 'e-test', 'memory_id': 'm-own', 'title': 'New', 'story': 'new story',
+            'status': 'open', 'first_at': '2026-01-01', 'last_at': '2026-01-02',
+            'source_memory_ids': ['m-source', 'm-source-2']})
+        self.assertEqual(self.memory._event_stories()['e-test']['story'], 'new story')
+        self.assertIn('m-source-2', self.memory._event_ledger()['owners'])
+
+    def test_autonomous_delete_request_does_not_depend_on_tags(self):
+        memory_id = self.memory.call('hold', {'content': 'delete me', 'title': 'Delete'}).split('→')[1]
+        tools = NativeMemoryTools(self.memory, 8192, model=Mock())
+        tools.autonomy_mode = True
+        result = tools.invoke('trace', {'bucket_id': memory_id, 'delete': True,
+                                        'delete_reason': 'duplicate'})
+        self.assertEqual(result[1], '成功')
+        rows = self.memory.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[-1]['status'], 'pending')
+        tools.autonomy_mode = False
+        tools.process_pending_deletions(lambda _: 'n')
+        rows = self.memory.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[-1]['status'], 'rejected')
+        self.assertIsNotNone(self.memory.raw_content_for(memory_id))
+
+    def test_recall_judge_scans_brain_visibility(self):
+        visible = self.memory.call('hold', {'content': 'visible blue lamp', 'title': 'Lamp'}).split('→')[1]
+        hidden = self.memory.call('hold', {'content': 'hidden blue lamp', 'title': 'Hidden'}).split('→')[1]
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute('UPDATE memories SET is_hidden=1 WHERE id=?', (hidden,))
+            connection.commit()
+        finally:
+            connection.close()
+        judge = RecallJudge(self.memory, self.cfg, Mock(), load_settings({}))
+        judge._scan()
+        self.assertIsNotNone(judge._eligible(visible))
+        self.assertIsNone(judge._eligible(hidden))

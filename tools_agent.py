@@ -51,7 +51,7 @@ OWN_WORK = {'create_directory', 'move_lab_file', 'lab_file_digest', 'edit_file',
 LAB_ONLY = {'preview_lab_page', 'open_lab_game', 'run_lab_python'}
 # Memory tools (ticket 007) are offered by memory_native.ToolSet, never by the filesystem server.
 # Ticket 427: letters, plan, pulse, I, anchor and release are gone from Ombre's toolbox.
-NATIVE = {'hold', 'breath_search', 'trace', 'dream',
+NATIVE = {'hold', 'breath_search', 'trace',
           'memory_history', 'memory_catalog', 'memory_read', 'memory_timeline'}
 AUTONOMY_DIRECT = {'set_next_wake', 'set_wake_rhythm'}
 

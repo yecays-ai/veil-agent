@@ -306,7 +306,7 @@ class NativeMemoryTests(unittest.TestCase):
 
     def test_only_the_two_memory_tools_are_offered_and_delete_is_not_one_of_them(self):
         self.assertEqual({t['function']['name'] for t in permitted_tools(self.tools.tools)},
-                         {'hold', 'breath_search', 'memory_history', 'memory_catalog', 'memory_read'})
+                         {'hold', 'breath_search', 'trace', 'memory_history', 'memory_catalog', 'memory_read'})
         result, state, _ = self.tools.invoke('trace', {'bucket_id': 'x', 'delete': True})
         self.assertEqual(state, '被拒绝')
 
@@ -503,25 +503,22 @@ class OmbreToolGuardTests(unittest.TestCase):
                          [{'bucket_id': 'mem001', 'delete': True}])
         self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'approved')
 
-    def test_autonomous_delete_is_queued_and_refusal_removes_pending_tag(self):
+    def test_autonomous_delete_is_queued_and_refusal_closes_request(self):
         self.tools.set_autonomy(True)
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'delete': True,
                                                'delete_reason': 'duplicate'})
         self.assertEqual(state, '成功')
-        self.assertIn('待删除', self.memory.tags_for('mem001'))
         self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'pending')
         self.tools.set_autonomy(False)
         notes = self.tools.native.process_pending_deletions(lambda _: 'n')
         self.assertTrue(notes)
-        self.assertNotIn('待删除', self.memory.tags_for('mem001'))
         self.assertEqual(self.store.read('fake/delete-requests.jsonl')[-1]['status'], 'rejected')
 
-    def test_autonomous_delete_recognizes_manual_ombre_deletion(self):
+    def test_autonomous_delete_recognizes_manual_deletion(self):
         self.tools.set_autonomy(True)
         self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'duplicate'})
         self.path.write_text(self.path.read_text(encoding='utf-8').replace(
-            'tags: ["keep", "待删除"]', 'tags: ["keep", "待删除"]\ndeleted_at: 2026-10-21'),
-            encoding='utf-8')
+            '---\n', '---\ndeleted_at: 2026-10-21\n', 1), encoding='utf-8')
         prompts = []
         self.backend.calls.clear()
         self.tools.native.process_pending_deletions(lambda prompt: prompts.append(prompt) or 'y')
@@ -529,19 +526,6 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(rows[-1]['status'], 'approved_external')
         self.assertEqual(prompts, [])
         self.assertEqual(self.backend.calls, [])
-
-    def test_autonomous_delete_stops_if_pending_tag_was_removed_in_ombre(self):
-        self.tools.set_autonomy(True)
-        self.call('trace', {'bucket_id': 'mem001', 'delete': True, 'delete_reason': 'duplicate'})
-        self.backend.call('trace', {'bucket_id': 'mem001', 'tags': 'keep'})
-        prompts = []
-        self.backend.calls.clear()
-        notes = self.tools.native.process_pending_deletions(lambda prompt: prompts.append(prompt) or 'y')
-        rows = self.store.read('fake/delete-requests.jsonl')
-        self.assertEqual(rows[-1]['status'], 'rejected')
-        self.assertEqual(prompts, [])
-        self.assertEqual(self.backend.calls, [])
-        self.assertTrue(any('pending deletion marker' in note for note in notes))
 
     def test_disallowed_ombre_delete_parameters_never_reach_server(self):
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'hard_delete': True})
@@ -572,34 +556,10 @@ class OmbreToolGuardTests(unittest.TestCase):
                 'bucket_id': 'mem001', 'content': 'safe edit', **extra}, approval)[1], '成功')
             self.assertIs(self.backend.calls[-1][1]['delete'], False)
 
-    def test_dream_reflection_questions_become_a_neutral_note(self):
-        # Ticket 147: Ombre's questions push self-review and name hold(feel=True), which VEIL lacks.
-        self.backend.result = ('=== Dreaming · 过去 48 小时全量记忆（1 个桶）===\n'
-                               '以下是你最近的记忆。用第一人称想：\n- 有什么还没想清楚？\n'
-                               '想完之后：值得放下的用 trace(bucket_id, resolved=1)；\n'
-                               '有沉淀的用 hold(content="...", feel=True) 写下来。\n\n'
-                               '[a memory]\nID: visible\nvisible body')
-        dream = self.call('dream', {})[0]
-        self.assertTrue(dream.startswith('=== Dreaming'))
-        self.assertIn('nothing needs to be written', dream)
-        self.assertNotIn('还没想清楚', dream)
-        self.assertNotIn('feel=True', dream)
-        self.assertIn('ID: visible\nvisible body', dream)
-
-    def test_dream_does_not_forward_hidden_memory_blocks(self):
-        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
-        self.backend.result = ('=== Dreaming · 过去 48 小时全量记忆（2 个桶）===\nID: mem001\nhidden body\n---\n'
-                              'ID: visible\nvisible body')
-        dream = self.call('dream', {})[0]
-        self.assertNotIn('hidden body', dream)
-        self.assertIn('（1 个桶）', dream)
-
-    def test_connection_failure_reaches_model_as_safe_actionable_message(self):
-        self.backend.call = Mock(side_effect=MemoryToolError('connection'))
+    def test_dream_is_no_longer_offered(self):
+        self.assertNotIn('dream', {tool.name for tool in self.tools.native.tools})
         result, state, _ = self.call('dream', {})
-        self.assertEqual(state, '出错')
-        self.assertIn('The memory connection is unavailable', result)
-        self.assertEqual(self.backend.call.call_count, 1)
+        self.assertNotEqual(state, '成功')
 
     def test_lost_hold_reply_is_persisted_and_never_replayed_after_restart(self):
         original_call = self.backend.call
@@ -683,7 +643,8 @@ class OmbreToolGuardTests(unittest.TestCase):
 
     def test_upstream_schemas_are_selected_by_name(self):
         names = {tool.name for tool in self.tools.native.tools}
-        self.assertTrue(set(('trace', 'dream')).issubset(names))
+        self.assertIn('trace', names)
+        self.assertNotIn('dream', names)
         for removed in ('letter_write', 'letter_read', 'letter_lock_update', 'anchor', 'release',
                         'plan', 'pulse', 'I'):
             self.assertNotIn(removed, names)
@@ -692,7 +653,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         # Ticket 145: short English description instead of Ombre's docstring; same parameters.
         self.assertNotIn('upstream trace', trace.description)
         self.assertLess(len(trace.description.encode('utf-8')), 2200)
-        self.assertIn('meaning_append/meaning_replace', trace.description)
+        self.assertIn('edit_reason', trace.description)
         self.assertIn('why_remembered', trace.description)
         self.assertIn('edit_reason', trace.inputSchema['properties'])
         for refused in ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason'):

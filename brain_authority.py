@@ -111,9 +111,11 @@ class BrainAuthority:
             # P2-C: Brain is the write authority; free tags are not generated here.
             # domain/tags from callers are silently dropped so that Brain never accumulates
             # free-text tags.  category defaults to 'unclassified'; governance runs separately.
+            pinned = args.get('pinned') is True
             record = {'body': content, 'title': args.get('title') or '',
                       'type': args.get('type') or 'dynamic',
-                      'importance': args.get('importance') or 5,
+                      'importance': 10 if pinned else (args.get('importance') or 5),
+                      'pinned': pinned,
                       'why_remembered': args.get('why_remembered') or '',
                       'meaning': args.get('meaning') or '',
                       'domain': [],
@@ -158,6 +160,12 @@ class BrainAuthority:
             changes['body'] = body
         if isinstance(args.get('title'), str):
             changes['title'] = args['title']
+        if isinstance(args.get('importance'), int):
+            changes['importance'] = args['importance']
+        if 'pinned' in args and isinstance(args['pinned'], bool):
+            changes['pinned'] = args['pinned']
+            if args['pinned']:
+                changes['importance'] = 10
         if changes:
             result = brain_writer.update_memory(connection, memory_id, changes, embedder=embedder,
                                                 operation_reason=args.get('edit_reason') or 'trace',

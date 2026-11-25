@@ -6911,16 +6911,15 @@ def main():
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
                     if use_memory:
-                        from memory_agent import Memory, open_ombre
-                        with open_ombre(ROOT, cfg) as backend:
-                            with Memory(cfg, store, budget, model, backend) as memory:
-                                # Ticket 382: Peter's background model judges which memories fit what she just said.
-                                memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
-                                from memory_native import NativeMemoryTools, ToolSet
-                                tools = ToolSet(tools, NativeMemoryTools(
-                                    memory, cfg.tools['max_result_bytes'], model=model))
-                                run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
-                                              background_model=background_model))
+                        from memory_agent import Memory
+                        with Memory(cfg, store, budget, model) as memory:
+                            # Ticket 382: Peter's background model judges which memories fit what she just said.
+                            memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
+                            from memory_native import NativeMemoryTools, ToolSet
+                            tools = ToolSet(tools, NativeMemoryTools(
+                                memory, cfg.tools['max_result_bytes'], model=model))
+                            run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
+                                          background_model=background_model))
                             for notice in memory.notices():
                                 print(notice)
                     else:
