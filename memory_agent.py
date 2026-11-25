@@ -179,7 +179,11 @@ class Memory:
         # P3-2: production (no backend) always uses Brain retrieval; fake-backend tests keep the
         # old search stub unless they explicitly ask for Brain.
         retrieval_raw = dict(cfg.memory.get('retrieval') or {})
-        if backend is not None and 'backend' not in retrieval_raw:
+        if backend is None:
+            # Production is Brain-only; an old character config that still says backend=ombre
+            # must not silently disable semantic recall.
+            retrieval_raw['backend'] = 'brain'
+        elif 'backend' not in retrieval_raw:
             retrieval_raw['backend'] = 'ombre'
         self.retrieval_settings = retrieval_settings(retrieval_raw)
         self.rotation_path = f'{cfg.id}/memory/_agent/recall-rotation.jsonl'

@@ -132,21 +132,37 @@ class BrainStore:
     def replace(self, path, value):
         name = str(path).replace('\\', '/')
         if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
-            connection = self._connect()
-            try:
-                brain_events.write_state(connection, 'event-dream', dict(value or {}))
-                brain_writer.refresh_digest(connection)
-            finally:
-                connection.close()
+            from brain_lock import write_lock
+            with write_lock(self.base, self.role):
+                if self.freeze_path.exists():
+                    raise RuntimeError('memory writes are frozen for cutover')
+                connection = self._connect()
+                try:
+                    brain_events.write_state(connection, 'event-dream', dict(value or {}))
+                    brain_writer.refresh_digest(connection)
+                finally:
+                    connection.close()
             return None
         return self.base.replace(path, value)
 
     def read_state(self, path):
         name = str(path).replace('\\', '/')
         if name == '%s/%s' % (self.role, brain_events.EVENT_STATE_FILE):
-            connection = self._connect()
+            # Read-only: a busy writer must not make a missing lease look like an empty state.
+            connection = self._read_connect()
             try:
-                return brain_events.read_state(connection, 'event-dream') or {}
+                try:
+                    row = connection.execute(
+                        'SELECT payload_json FROM event_state WHERE key=?',
+                        ('event-dream',)).fetchone()
+                except sqlite3.OperationalError as exc:
+                    if 'no such table' in str(exc).casefold():
+                        return None  # pre-P3-2 DB has no event state yet
+                    raise
+                if row is None:
+                    return None
+                value = json.loads(row[0])
+                return value if isinstance(value, dict) else None
             finally:
                 connection.close()
         return None

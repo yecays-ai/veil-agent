@@ -84,9 +84,6 @@ class EventLedgerTests(unittest.TestCase):
         self.assertEqual(restored['digest'], saved['digest'])
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class StartupMigrationTests(unittest.TestCase):
     def test_memory_startup_migrates_legacy_event_files(self):
@@ -291,3 +288,132 @@ class BackupSafetyTests(unittest.TestCase):
                 brain_backup.restore(self.backup, self.db)
         self.assertEqual(self.db.read_bytes(), before)
         self.assertTrue(list(self.root.glob('brain.db.pre-restore-*')))
+
+    def test_restore_merges_full_new_memory_and_event_lifecycle(self):
+        import brain_writer
+        connection = sqlite3.connect(str(self.db))
+        try:
+            created = brain_writer.create_memory(
+                connection, {'body': 'new full lifecycle', 'title': 'Full'},
+                embedder=lambda _: [0.2] * 1024)
+            memory_id = created['memory_id']
+            brain_writer.update_memory(connection, memory_id, {'body': 'new full lifecycle v2'},
+                                       embedder=lambda _: [0.2] * 1024, operation_reason='edit')
+            connection.execute(
+                'INSERT INTO sources(memory_id,ord,kind,ref,status,ranges_json) VALUES(?,?,?,?,?,?)',
+                (memory_id, 0, 'chat', 'fictional-ref', 'active', '[]'))
+            connection.execute(
+                'INSERT INTO quotes(memory_id,ord,speaker,text) VALUES(?,?,?,?)',
+                (memory_id, 0, 'Lan', 'fictional quote'))
+            connection.execute(
+                'INSERT INTO sidecar_state(memory_id,locked,lan_edited,peter_after_lan,links_json,'
+                'sources_json,merged_into) VALUES(?,?,?,?,?,?,?)',
+                (memory_id, 0, None, None, '[]', '[]', None))
+            connection.execute(
+                'INSERT INTO sidecar_events(memory_id,kind,time,to_id,via,raw_json) VALUES(?,?,?,?,?,?)',
+                (memory_id, 'link', '2026-01-01', 'old-memory', 'test', '{}'))
+            connection.execute(
+                'INSERT INTO relations(memory_id,ord,target_id,type,score,status,auto,label) '
+                'VALUES(?,?,?,?,?,?,?,?)',
+                (memory_id, 0, 'old-memory', 'related_to', 0.8, 'active', 0, 'fictional'))
+            brain_events.upsert_event(connection, {'event_id': 'E-full', 'memory_id': memory_id,
+                                                   'story': 'full event', 'title': 'Full event'})
+            brain_events.upsert_stage(connection, {'stage_id': 'S-full', 'event_id': 'E-full',
+                                                   'text': 'full stage'})
+            brain_events.append_ledger(connection, 'stage-evidence',
+                                       {'event_id': 'E-full', 'stage_id': 'S-full',
+                                        'text': 'full evidence'})
+            connection.commit()
+        finally:
+            connection.close()
+        result = brain_backup.restore(self.backup, self.db)
+        self.assertEqual(result['preserved_new']['memories'], 1)
+        self.assertEqual(result['preserved_new']['versions'], 1)
+        self.assertEqual(result['preserved_new']['vectors'], 1)
+        self.assertEqual(result['preserved_new']['events'], 1)
+        self.assertEqual(result['preserved_new']['event_stages'], 1)
+        self.assertGreaterEqual(result['preserved_new']['event_ledger'], 1)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            for table, column, value in (
+                    ('versions', 'memory_id', memory_id), ('vectors', 'memory_id', memory_id),
+                    ('sources', 'memory_id', memory_id), ('quotes', 'memory_id', memory_id),
+                    ('sidecar_state', 'memory_id', memory_id), ('sidecar_events', 'memory_id', memory_id),
+                    ('relations', 'memory_id', memory_id), ('event_stages', 'event_id', 'E-full'),
+                    ('event_ledger', 'event_id', 'E-full')):
+                self.assertGreaterEqual(connection.execute(
+                    'SELECT COUNT(*) FROM %s WHERE %s=?' % (table, column), (value,)).fetchone()[0],
+                    1, table)
+        finally:
+            connection.close()
+
+    def test_failed_merge_does_not_replace_live_database(self):
+        self._add_new()
+        before = self.db.read_bytes()
+        with mock.patch.object(brain_backup, '_merge_new_rows',
+                               side_effect=RuntimeError('fictional merge failure')):
+            with self.assertRaises(RuntimeError):
+                brain_backup.restore(self.backup, self.db)
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertFalse(list(self.root.glob('brain.db.restore-*')))
+        self.assertTrue(list(self.root.glob('brain.db.pre-restore-*')))
+
+    def test_legacy_events_and_full_stage_rows_are_imported(self):
+        import json
+        from brain_events import read_rows
+        from brain_migrate import migrate_role
+        from veil_agent import Store
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = Store(temp.name + '/data')
+        role_dir = store.root / 'peter'
+        role_dir.mkdir(parents=True)
+        initialize(role_dir / 'brain.db')
+        (role_dir / 'events.jsonl').write_text(
+            json.dumps({'event_id': 'E-file', 'memory_id': 'M-file', 'story': 'legacy story',
+                        'title': 'Legacy'}) + '\n', encoding='utf-8')
+        (role_dir / 'event-stages.jsonl').write_text(
+            json.dumps({'stage_id': 'S-file', 'event_id': 'E-file', 'text': 'legacy stage',
+                        'event_row': {'kept': True}}) + '\n', encoding='utf-8')
+        migrate_role(store, 'peter')
+        connection = sqlite3.connect(str(role_dir / 'brain.db'))
+        try:
+            events = read_rows(connection, 'events')
+            stages = read_rows(connection, 'event-stages')
+            self.assertEqual(events[0]['story'], 'legacy story')
+            self.assertEqual(stages[0]['event_row'], {'kept': True})
+        finally:
+            connection.close()
+        self.assertFalse((role_dir / 'events.jsonl').exists())
+        self.assertFalse((role_dir / 'event-stages.jsonl').exists())
+
+    def test_reused_export_directory_removes_stale_dream_state(self):
+        connection = sqlite3.connect(str(self.db))
+        try:
+            brain_events.write_state(connection, 'event-dream', {'status': 'idle'})
+            connection.commit()
+        finally:
+            connection.close()
+        out = Path(self.temp.name) / 'reused-export'
+        brain_export.export_vault(self.db, out)
+        self.assertTrue((out / 'event-dream.json').is_file())
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute("DELETE FROM event_state WHERE key='event-dream'")
+            connection.commit()
+        finally:
+            connection.close()
+        brain_export.export_vault(self.db, out)
+        self.assertFalse((out / 'event-dream.json').exists())
+
+    def test_backup_path_with_hash_is_opened_exactly(self):
+        import brain_backup
+        target = Path(self.temp.name) / 'brain#1.db'
+        brain_backup.backup(self.db, target)
+        self.assertTrue(target.is_file())
+        result = brain_backup.snapshot(target)
+        self.assertTrue(result['digest_ok'])
+
+
+if __name__ == '__main__':
+    unittest.main()

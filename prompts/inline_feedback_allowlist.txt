@@ -4,8 +4,8 @@
 # Format: <sha1-12> <reason:...> <file>:<line> <preview>
 41590b0a0670 feedback:runtime executor_opencode.py:1063 set -eu; mkdir -p /tmp/home; export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp
 2bd781f4790b feedback:runtime executor_opencode.py:1162 The workbench image lacks the network-isolation tools. Rebuild veil-workbench fr
-4127627e9424 feedback:runtime memory_agent.py:872 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
-45240802e8c9 feedback:runtime memory_agent.py:2131  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
+4127627e9424 feedback:runtime memory_agent.py:876 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
+45240802e8c9 feedback:runtime memory_agent.py:2135  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
 eec368d84360 feedback:runtime memory_native.py:323 . Deletion through trace requires explicit UI approval; requests made during aut
 1fdb5f8687a8 feedback:runtime memory_native.py:368 This tool is not authorized for the current role. Choose an available tool; perm
 819880ff86d9 feedback:runtime memory_native.py:827 This delete operation or argument combination is not available. Use the supporte

@@ -20,6 +20,10 @@ COUNTS = ('memories', 'versions', 'vectors', 'events', 'event_stages', 'event_le
           'event_state', 'delete_requests', 'write_journal', 'tombstones')
 
 
+def _ro_uri(path):
+    return Path(path).resolve().as_uri() + '?mode=ro'
+
+
 def _tables(connection):
     return {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -32,7 +36,7 @@ def _actual_digest(connection):
 
 def snapshot(db_path):
     """Recompute quick_check, canonical digest and lifecycle counts from the database itself."""
-    connection = sqlite3.connect('file:%s?mode=ro' % Path(db_path).as_posix(), uri=True)
+    connection = sqlite3.connect(_ro_uri(db_path), uri=True)
     try:
         check = connection.execute('PRAGMA quick_check').fetchone()
         result = {'quick_check': check[0] if check else 'missing', 'counts': {}}
@@ -90,7 +94,7 @@ def _assert_stopped(target):
 
 
 def backup(db_path, out_path):
-    source = sqlite3.connect('file:%s?mode=ro' % Path(db_path).as_posix(), uri=True)
+    source = sqlite3.connect(_ro_uri(db_path), uri=True)
     target = sqlite3.connect(str(out_path))
     try:
         source.backup(target)
@@ -113,7 +117,7 @@ def restore(backup_path, db_path):
     validation = snapshot(backup_path)
     if validation['quick_check'] != 'ok':
         raise ValueError('backup database failed quick_check')
-    connection = sqlite3.connect('file:%s?mode=ro' % backup_path.as_posix(), uri=True)
+    connection = sqlite3.connect(_ro_uri(backup_path), uri=True)
     try:
         if 'memories' not in _tables(connection):
             raise ValueError('backup database has no memories table')
@@ -128,7 +132,7 @@ def restore(backup_path, db_path):
     safety_export = None
     if target.exists():
         # Never let an old backup silently erase memories/events created after it. Keep both a
-        # byte-identical database copy and a readable export before the atomic replacement.
+        # byte-identical database copy and a readable export before any replacement.
         safety = target.with_name(target.name + '.pre-restore-' + stamp)
         shutil.copy2(target, safety)
         import brain_export
@@ -138,29 +142,28 @@ def restore(backup_path, db_path):
     try:
         data = backup_path.read_bytes()
         temp.write_bytes(data)
+        local = snapshot(temp)
+        if local['quick_check'] != 'ok' or not local['digest_ok']:
+            raise ValueError('restored copy failed local verification')
+        preserved = {}
+        if safety is not None:
+            # Merge into the candidate, never into the live target. A failed merge leaves the
+            # current database byte-for-byte untouched.
+            preserved = _merge_new_rows(safety, temp)
+            local = snapshot(temp)
+            if local['quick_check'] != 'ok' or not local['digest_ok']:
+                raise ValueError('merged candidate failed local verification')
         fd = os.open(temp, os.O_RDWR)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
-        local = snapshot(temp)
-        if local['quick_check'] != 'ok' or not local['digest_ok']:
-            raise ValueError('restored copy failed local verification')
         os.replace(temp, target)
     finally:
         try:
             temp.unlink()
         except OSError:
             pass
-    preserved = {}
-    if safety is not None:
-        preserved = _merge_new_rows(safety, target)
-        from brain_writer import refresh_digest
-        connection = sqlite3.connect(str(target))
-        try:
-            refresh_digest(connection)
-        finally:
-            connection.close()
     result = {'path': str(target), 'bytes': len(data),
               'sha256': hashlib.sha256(data).hexdigest(),
               'pre_restore': str(safety) if safety else '',
@@ -174,63 +177,68 @@ def _table_columns(connection, table):
     return [row[1] for row in connection.execute('PRAGMA table_info(%s)' % table)]
 
 
-def _copy_missing(connection, table, key, where, *, ignore=False, exclude=()):
+def _in(ids):
+    ids = list(ids)
+    return '(' + ','.join('?' for _ in ids) + ')' if ids else '(NULL)'
+
+
+def _copy_missing(connection, table, column, ids, *, ignore=False, exclude=()):
+    ids = list(ids)
+    if not ids:
+        return 0
     columns = [name for name in _table_columns(connection, table) if name not in exclude]
     select = ', '.join(columns)
     verb = 'INSERT OR IGNORE' if ignore else 'INSERT'
     connection.execute(
-        '%s INTO main.%s(%s) SELECT %s FROM old.%s WHERE %s'
-        % (verb, table, select, select, table, where))
+        '%s INTO main.%s(%s) SELECT %s FROM old.%s WHERE %s IN %s'
+        % (verb, table, select, select, table, column, _in(ids)), ids)
     return connection.execute('SELECT changes()').fetchone()[0]
 
 
 def _merge_new_rows(current_db, target_db):
     """Keep memories/events created after the backup in the restored live database.
 
-    The safety database stays untouched; only rows whose primary identity is absent from the
-    backup are copied, so the rollback keeps its old state for existing records without erasing
-    later additions.
+    All IDs are fixed before any copy runs: inserting the new memories/events must not change the
+    predicate that selects their versions, vectors, links and stages. The safety database stays
+    untouched; only rows whose primary identity is absent from the backup are copied.
     """
-    current = sqlite3.connect('file:%s?mode=ro' % Path(current_db).as_posix(), uri=True)
+    current = sqlite3.connect(_ro_uri(current_db), uri=True)
     target = sqlite3.connect(str(target_db))
     counts = {}
     try:
         target.execute('ATTACH DATABASE ? AS old', (str(Path(current_db)),))
-        new_mem = 'SELECT id FROM old.memories WHERE id NOT IN (SELECT id FROM main.memories)'
-        new_ev = 'SELECT event_id FROM old.events WHERE event_id NOT IN (SELECT event_id FROM main.events)'
         new_memory_ids = {row[0] for row in target.execute(
-            'SELECT id FROM old.memories WHERE id IN (%s)' % new_mem)}
+            'SELECT id FROM old.memories WHERE id NOT IN (SELECT id FROM main.memories)')}
         new_event_ids = {row[0] for row in target.execute(
-            'SELECT event_id FROM old.events WHERE event_id IN (%s)' % new_ev)}
-        counts['memories'] = _copy_missing(target, 'memories', 'id',
-                                          'id IN (%s)' % new_mem)
+            'SELECT event_id FROM old.events WHERE event_id NOT IN (SELECT event_id FROM main.events)')}
+        counts['memories'] = _copy_missing(target, 'memories', 'id', new_memory_ids)
         counts['versions'] = _copy_missing(
-            target, 'versions', 'seq',
-            'memory_id IN (%s)' % new_mem, exclude=('seq',))
+            target, 'versions', 'memory_id', new_memory_ids, exclude=('seq',))
         counts['vectors'] = _copy_missing(
-            target, 'vectors', 'memory_id', 'memory_id IN (%s)' % new_mem, ignore=True)
-        for table in ('sidecar_state', 'relations', 'sources', 'quotes'):
+            target, 'vectors', 'memory_id', new_memory_ids, ignore=True)
+        for table in ('sidecar_state', 'sidecar_events', 'relations', 'sources', 'quotes'):
             try:
                 counts[table] = _copy_missing(
-                    target, table, '', 'memory_id IN (%s)' % new_mem, ignore=True)
+                    target, table, 'memory_id', new_memory_ids, ignore=True)
             except sqlite3.Error:
                 counts[table] = 0
-        counts['events'] = _copy_missing(target, 'events', 'event_id',
-                                         'event_id IN (%s)' % new_ev)
+        counts['events'] = _copy_missing(target, 'events', 'event_id', new_event_ids)
         counts['event_stages'] = _copy_missing(
-            target, 'event_stages', 'stage_id', 'event_id IN (%s)' % new_ev, ignore=True)
+            target, 'event_stages', 'event_id', new_event_ids, ignore=True)
         try:
             counts['event_sources'] = _copy_missing(
-                target, 'event_sources', '', 'event_id IN (%s)' % new_ev, ignore=True)
+                target, 'event_sources', 'event_id', new_event_ids, ignore=True)
         except sqlite3.Error:
             counts['event_sources'] = 0
         try:
             counts['event_state'] = _copy_missing(
-                target, 'event_state', 'key', 'key NOT IN (SELECT key FROM main.event_state)',
-                ignore=True)
+                target, 'event_state', 'key',
+                [row[0] for row in target.execute(
+                    'SELECT key FROM old.event_state WHERE key NOT IN '
+                    '(SELECT key FROM main.event_state)')], ignore=True)
         except sqlite3.Error:
             counts['event_state'] = 0
-        # Later event-lifecycle rows that belong to new memories/events.
+        # Later event-lifecycle rows that belong to the fixed new IDs.
         try:
             columns = _table_columns(current, 'event_ledger')
         except sqlite3.Error:
@@ -254,6 +262,8 @@ def _merge_new_rows(current_db, target_db):
             copied += 1
         counts['event_ledger'] = copied
         target.commit()
+        from brain_writer import refresh_digest
+        refresh_digest(target)
         return counts
     except Exception:
         target.rollback()

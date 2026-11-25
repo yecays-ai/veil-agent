@@ -24,6 +24,7 @@ import prompts
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
+_DREAM_UNREADABLE = object()
 
 
 def _lock_for(role_id):
@@ -1425,7 +1426,9 @@ class EventMemory:
         state_path = f'{self.cfg.id}/event-dream.json'
         report_path = f'{self.cfg.id}/event-dream-report.jsonl'
         now = datetime.now().astimezone()
-        state = self._dream_state()
+        state = self._dream_state(strict=True)
+        if state is _DREAM_UNREADABLE:
+            return 0  # A failed read cannot prove there is no lease; skip this tick.
         lease = _when(state.get('lease_until'))
         if state.get('status') == 'running' and lease and now < lease:
             return 0
@@ -1448,21 +1451,28 @@ class EventMemory:
                                         'fixed': fixed, 'error': error})
         return fixed
 
-    def _dream_state(self):
+    def _dream_state(self, strict=False):
         path = f'{self.cfg.id}/event-dream.json'
         reader = getattr(self.store, 'read_state', None)
         if callable(reader):
             try:
-                return reader(path) or {}
+                state = reader(path)
+                if state is None:
+                    return {}
+                return state if isinstance(state, dict) else (
+                    _DREAM_UNREADABLE if strict else {})
             except Exception:
-                return {}
+                return _DREAM_UNREADABLE if strict else {}
         try:
             return json.loads((self.store.root / path).read_text(encoding='utf-8'))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return {}
+        except (OSError, ValueError):
+            return _DREAM_UNREADABLE if strict else {}
 
     def dream_state(self):
-        return self._dream_state()
+        state = self._dream_state()
+        return {} if state is _DREAM_UNREADABLE else state
 
     @_serialized
     def auto_correct(self):
