@@ -26,7 +26,7 @@
 ## P3-2 旧系统清理 + 事件附账本统一（已合并 #443，已部署）
 
 - **代码**：#443 合并于 `f63e58a`；正式目录已通过维护窗口更新到该提交。
-- **正式部署**：2026-11-25 停服 → 完整冷备份（D:\Peter backup\VEIL-Agent-Backup-20261125T084139.218764Z-4688aa1f，verify 5427 文件）→ 更新 → 首次启动迁移 → 验收。事件附账本、events/stages、dream 状态已进入 brain.db；原文件归档到 `data/peter/archive/pre-p3-2-event-ledgers-20261125T164654`（只读，manifest 720 行）。
+- **正式部署**：2026-11-25 停服 → 完整冷备份（本机备份盘：VEIL-Agent-Backup-20261125T084139.218764Z-4688aa1f，verify 5427 文件）→ 更新 → 首次启动迁移 → 验收。事件附账本、events/stages、dream 状态已进入 brain.db；原文件归档到 `data/peter/archive/pre-p3-2-event-ledgers-20261125T164654`（只读，manifest 720 行）。
 - **正式数据**：289 memories / 286 versions / 250 vectors / 75 events / 76 stages / 566 event_ledger / 1 state；quick_check ok、digest ok；与预迁移备份逐 ID 对比无缺失。页面/事件 API 正常，无 18011、无 Ombre。
 - **回退**：完整冷备份 + 预迁移 Brain 备份；brain_backup 恢复会保留 safety copy/export 并合并备份后新增记录。
 - **状态**：正式 Peter 正在运行；Lan 可做 1–2 天观察（保存/想起/事件续写/页面/费用/无 pending）。

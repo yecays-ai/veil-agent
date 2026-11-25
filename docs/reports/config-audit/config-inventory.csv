@@ -663,7 +663,7 @@ BUD-062,预算,记忆后台,经历整理费用类目,experience_memory.COST_CATE
 AUT-089,交互,语音,MiniMax 音色 ID,MINIMAX_VOICE_ID,voice_output.py:44-58,.env,无（缺则整体禁用语音）,已设置（只读判断）,字符串,仅改 .env；重启,[voice] provider 只决定厂商；缺任一 MINIMAX 键整体禁用,重启,是（.env，随备份）,语音身份；缺失时静默不可用,A,交互
 AUT-090,交互,语音,MiniMax 模型,MINIMAX_MODEL,voice_output.py:44-58,.env,无,已设置,字符串,仅改 .env；重启,同上,重启,是,音质/价格随模型变化,A,交互
 AUT-091,交互,语音,MiniMax 区域,MINIMAX_REGION,voice_output.py:44-58,.env,无,已设置,字符串（服务商区域）,仅改 .env；重启,同上,重启,是,区域错→请求失败,A,交互
-MOD-076,模型,模型设置,接口密钥（页面写入 .env）,VEIL_KEY_<endpoint_id>,"model_settings.py:394,574-579,736-758",.env（每个接口一个键）,无,4 个接口均已设置（只读判断）,≤500 字符、无空格/引号,设置页→接口→API Key；保存即写 .env,models.json 的 key_env 指向该键；内置模型用 api_key_env,下一次请求（每次读 .env 判存在）,是（.env，随备份；明文）,凭据；泄露=被刷额度,S,模型
+MOD-076,模型,模型设置,接口密钥（每个接口一个，如 VEIL_KEY_E7B0584 / VEIL_KEY_E9336DB / VEIL_KEY_EA0DCDA / VEIL_KEY_EEC29EA）,VEIL_KEY_<endpoint_id>,"model_settings.py:394,574-579,736-758",.env（每个接口一个键）,无,4 个接口均已设置（只读判断）,≤500 字符、无空格/引号,设置页→接口→API Key；保存即写 .env,models.json 的 key_env 指向该键；内置模型用 api_key_env,下一次请求（每次读 .env 判存在）,是（.env，随备份；明文）,凭据；泄露=被刷额度,S,模型
 TOO-120,工具权限,工具别名,工具别名表（47 项）,[tool_aliases],characters/peter/character.toml:239-286；tool_aliases.py:14-32,character.toml（TOML 字符串映射）,无（空=用英文原名）,47 项已配置（见附录 D）,键必须是已注册工具名；值必须是安全别名,仅改文件；重启,展示名覆盖；不改变权限与工具集合,重启,是（git 跟踪）,别名冲突/非法名启动失败,A,权限
 SAF-105,安全维护,数据文件,data/<角色>/*.json 文件分类（32 个）,data/peter/*.json,各模块（见附录 C）,data/<角色>/,按需创建,32 个（配置/状态/数据三类，见附录 C）,—,多数由程序写；配置类见对应条目,—,运行时,是（随备份）,误删会丢状态；数据类不应进配置中心,R,总览
 SAF-106,安全维护,页面路由,页面/API 路由清单（78 条）,web_agent.py HTTP 路由,"web_agent.py:2417-2480,3361-3455 等",代码,—,78 条（见附录 B）,—,代码改动；无配置,—,—,—,路由分类错会把数据操作误当配置,R,总览
