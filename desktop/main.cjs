@@ -475,7 +475,7 @@ function allowedChatRequest(pathname, method) {
     if (url.pathname === '/api/memory/event') {
       return keys.length === 1 && keys[0] === 'id' && /^[A-Za-z0-9_-]{1,80}$/.test(url.searchParams.get('id') || '');
     }
-    if (url.pathname === '/api/memory/panel') return keys.length === 0;
+    if (url.pathname === '/api/memory/panel' || url.pathname === '/api/config/overview') return keys.length === 0;
     if (url.pathname === '/api/instructions') return keys.length === 0;
     if (url.pathname === '/api/request-snapshots')
       return keys.length <= 1 && keys.every(key => key === 'limit') &&
@@ -535,7 +535,7 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
       (body && MEMORY_POSTS.includes(pathname)))) ||
     (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
-    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/workbench' || pathname === '/api/windows-apps')) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname)))) ||
+    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || ['/api/config/overview', '/api/workbench', '/api/windows-apps'].includes(pathname))) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname)))) ||
     (detachedView === 'peter' && pathname === '/api/peter-page');
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };

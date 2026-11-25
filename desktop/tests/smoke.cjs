@@ -64,6 +64,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
         notes: { active: [{ status: '进行中', text: 'Fictional user ordered takeout.', created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(), fades_at: new Date(Date.now() + 3600000).toISOString() }], recent: [],
           next_extraction_at: new Date(Date.now() + 1800000).toISOString() } } });
+    } else if (url.pathname === '/api/config/overview') {
+      assert.equal(req.method, 'GET');
+      json(res, { schema_version: 1, entries: [{ label: 'Fictional background',
+        configured: { status: 'known', value: 'builtin:next', source: 'saved' },
+        effective: { status: 'known', value: 'builtin:current', source: 'startup' },
+        apply_mode: 'restart', pending_restart: true, readiness: 'missing' }] });
     } else if (url.pathname === '/api/send') {
       const body = await readBody(req);
       if (body.text.includes('fictional quoted draft')) {
@@ -180,6 +186,11 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await detachedChat.webContents.executeJavaScript('(()=>{const trayEl=document.querySelector("#composer-tray"),tray=trayEl.getBoundingClientRect(),shell=document.querySelector(".chat-input-shell").getBoundingClientRect(),mic=document.querySelector("#voice-hold").getBoundingClientRect(),reply=document.querySelector("#request-reply").getBoundingClientRect();const ok=tray.top>=shell.bottom&&mic.right<=shell.right&&reply.left>=shell.right&&trayEl.scrollWidth<=trayEl.clientWidth;if(ok)return true;return JSON.stringify({trayTop:Math.round(tray.top),shellBottom:Math.round(shell.bottom),micRight:Math.round(mic.right),shellRight:Math.round(shell.right),replyLeft:Math.round(reply.left),scrollWidth:trayEl.scrollWidth,clientWidth:trayEl.clientWidth,hidden:trayEl.hidden,replyPos:getComputedStyle(reply).position});})()'),true,'narrow detached composer must keep the tray below the input and reply outside it');
   await detachedChat.webContents.executeJavaScript('document.querySelector("#composer-more").click();setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
   await wait(()=>detachedChat.isDestroyed()&&chat.webContents.executeJavaScript('!document.body.dataset.detachedViews.includes("chat")'),'detached chat did not merge cleanly');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=more]").click();document.querySelector("#config-overview-refresh").click()');
+  await wait(() => chat.webContents.executeJavaScript(`(() => {
+    const rows=document.querySelector('#config-overview-rows');
+    return rows.getClientRects().length>0 && ['builtin:next','builtin:current','待重启','缺少凭据'].every(text=>rows.textContent.includes(text));
+  })()`), 'model config overview did not display its read-only runtime evidence');
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=life]").click()');
   await wait(()=>chat.webContents.executeJavaScript('!document.querySelector("#life-view").hidden && document.querySelector(".life-overview .life-calendar") && document.querySelector(".life-agenda").textContent.includes("Fictional afternoon walk")'),'life calendar and agenda did not render');
   assert.equal(await chat.webContents.executeJavaScript('getComputedStyle(document.querySelector(".agenda-title")).fontSize'), '15px','life agenda text must remain readable at desktop size');
