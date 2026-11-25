@@ -171,13 +171,6 @@ class PinnedTests(Base):
         self.assertIn(str(PINNED_LIMIT), result)
         self.assertNotIn('trace', [n for n, _ in self.backend.calls])
 
-    def test_trace_cannot_hide_a_pinned_memory_before_unpinning(self):
-        self.write('p0', folder='permanent', extra='pinned: true\ntype: permanent\n')
-        self.memory.state['entries']['p0'] = {'title': 'T p0', 'time': 'x', 'signature': None, 'hidden': False, 'text': 'body p0'}
-        result, state, _ = self.tools.invoke('trace', {'bucket_id': 'p0', 'dont_surface': 1})
-        self.assertEqual(state, '被拒绝')
-        self.assertIn('Unpin', result)
-        self.assertNotIn('trace', [n for n, _ in self.backend.calls])
 
 
 class CatalogBrowseTests(Base):
@@ -236,12 +229,12 @@ class CatalogBrowseTests(Base):
         # A cursor that is no longer in the listing asks to restart instead of silently skipping.
         self.assertEqual(self.native.invoke('memory_catalog', {'order': 'newest', 'after': 'gone'})[1], '被拒绝')
 
-    def test_hidden_memories_stay_out_of_time_browsing(self):
+    def test_legacy_dont_surface_stays_in_time_browsing(self):
         self.write('secret', created='2026-10-20T10:00:00+08:00', extra='dont_surface: true\n')
         self.write('open', created='2026-10-20T11:00:00+08:00')
         rows, total = self.walk(order='newest', created_from='2026-10-20', created_to='2026-10-20')
-        self.assertEqual([row['memory_id'] for row in rows], ['open'])
-        self.assertEqual(total, 1)
+        self.assertEqual([row['memory_id'] for row in rows], ['open', 'secret'])
+        self.assertEqual(total, 2)
 
 
 class SearchDateTests(Base):

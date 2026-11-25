@@ -40,7 +40,7 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.memory._embedder = FakeEmbedder()
         self.addCleanup(self.memory.__exit__, None, None, None)
 
-    def test_is_hidden_includes_dont_surface(self):
+    def test_is_hidden_ignores_legacy_dont_surface(self):
         connection = sqlite3.connect(str(self.db))
         try:
             row = brain_writer.create_memory(connection, {'body': 'surface off'}, embedder=None)
@@ -48,7 +48,8 @@ class MemoryAuthorityTests(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
-        self.assertTrue(self.memory.is_hidden(row['memory_id']))
+        self.assertFalse(self.memory.is_hidden(row['memory_id']))
+        self.assertTrue(self.memory.refresh_visibility(row['memory_id']))
 
     def test_brain_search_failure_never_falls_back_to_ombre(self):
         self.memory.backend = SimpleNamespace(call=lambda name, args: 'OMBRE_FALLBACK')

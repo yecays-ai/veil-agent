@@ -28,7 +28,7 @@ class Backend:
         (folder / f'{key}.md').write_text(
             f'---\nid: {key}\ntitle: Fictional memory\n'
             f'dont_surface: {str(bool(row.get("hidden"))).lower()}\n'
-            f'type: {"archived" if row.get("deleted") else "dynamic"}\n---\n{row["content"]}',
+            f'type: {"archived" if row.get("deleted") or row.get("archived") else "dynamic"}\n---\n{row["content"]}',
             encoding='utf-8')
 
     def call(self, name, args):
@@ -47,10 +47,11 @@ class Backend:
                 self.rows[args['bucket_id']]['deleted'] = True
             elif args.get('restore'):
                 self.rows[args['bucket_id']]['deleted'] = False
+                self.rows[args['bucket_id']]['archived'] = False
+            elif args.get('archive'):
+                self.rows[args['bucket_id']]['archived'] = True
             elif 'content' in args:
                 self.rows[args['bucket_id']]['content'] = args['content']
-            else:
-                self.rows[args['bucket_id']]['hidden'] = bool(args['dont_surface'])
             self.write_row(args['bucket_id'])
             return 'updated'
         if name == 'feel':
@@ -59,7 +60,8 @@ class Backend:
                 for k, v in self.rows.items() if v.get('feel'))
         if name == 'breath_search':
             rows = [(k, v) for k, v in self.rows.items()
-                    if not v.get('hidden') and not v.get('deleted') and not v.get('feel')]
+                    if not v.get('hidden') and not v.get('deleted') and not v.get('archived')
+                    and not v.get('feel')]
             return '\n'.join(f'[bucket_id:{k}] {v["content"]}' for k, v in rows) + (
                 '\n=== ombre:result-ids ===\n```json\n' + json.dumps({'bucket_ids': [k for k, _ in rows]}) + '\n```')
         raise AssertionError(name)

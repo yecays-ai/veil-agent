@@ -274,8 +274,8 @@ class ContinuationTests(Fixture):
         self.assertEqual(state, '成功', result)
         event_id = next(iter(self.events.events()))
         key = self.events.events()[event_id]['memory_id']
-        # Hidden target: an explicit link_to must not silently write into something Lan cannot see.
-        self.memory.call('trace', {'bucket_id': key, 'dont_surface': True})
+        # Archived target: an explicit link_to must not silently write into something Lan cannot see.
+        self.memory.call('trace', {'bucket_id': key, 'archive': True})
         self.assertFalse(self.memory.refresh_visibility(key))
         self.native.native.search_results[key] = self.backend.rows[key]['content']
         result, state, _ = self.save('A hidden continuation.', 'The blue lamp', link_to=key)
@@ -619,7 +619,7 @@ class RepairTests(Fixture):
         self.assertEqual(len(events), 2)
         first, second = list(events.values())
         key = first['memory_id']
-        self.memory.call('trace', {'bucket_id': key, 'dont_surface': True})
+        self.memory.call('trace', {'bucket_id': key, 'archive': True})
         self.assertIsNone(self.events.detail(first['event_id']))
         self.assertIsNone(self.events.timeline(first['event_id']))
         stage_id = self.events.stages(first['event_id'])[0]['stage_id']

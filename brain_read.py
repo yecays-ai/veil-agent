@@ -24,11 +24,21 @@ class BrainRead:
     def __exit__(self, *_):
         self.close()
 
+    def is_pending_delete(self, memory_id):
+        try:
+            return self.connection.execute(
+                "SELECT 1 FROM delete_requests WHERE memory_id=? AND status='pending'",
+                (memory_id,)).fetchone() is not None
+        except sqlite3.OperationalError:
+            return False
+
     def memory(self, memory_id):
         row = self.connection.execute('SELECT * FROM memories WHERE id=?', (memory_id,)).fetchone()
         if row is None:
             return None
-        return dict(row)
+        item = dict(row)
+        item['delete_pending'] = self.is_pending_delete(memory_id)
+        return item
 
     def content(self, memory_id):
         row = self.memory(memory_id)
@@ -65,15 +75,18 @@ class BrainRead:
     def panel_entries(self, limit=100):
         rows = self.connection.execute(
             'SELECT m.id, m.title, m.name, m.created, m.importance, m.bucket, m.type, '
-            'm.is_hidden, m.is_tombstone, m.is_deleted, s.locked, s.merged_into, '
+            'm.is_tombstone, m.is_deleted, s.locked, s.merged_into, '
+            'EXISTS(SELECT 1 FROM delete_requests d WHERE d.memory_id=m.id '
+            "AND d.status='pending') AS delete_pending, "
             '(SELECT COUNT(*) FROM versions v WHERE v.memory_id=m.id) AS versions '
             'FROM memories m LEFT JOIN sidecar_state s ON s.memory_id=m.id '
             'WHERE m.is_tombstone=0 AND m.is_deleted=0 ORDER BY m.created DESC LIMIT ?',
             (limit,)).fetchall()
         return [{'memory_id': row['id'], 'title': row['title'] or row['name'] or row['id'],
                  'time': row['created'], 'importance': row['importance'], 'bucket': row['bucket'],
-                 'type': row['type'], 'hidden': bool(row['is_hidden']),
+                 'type': row['type'],
                  'locked': bool(row['locked']), 'merged_into': row['merged_into'],
+                 'delete_pending': bool(row['delete_pending']),
                  'versions': row['versions']} for row in rows]
 
     def archived(self, limit=100):

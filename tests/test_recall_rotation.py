@@ -386,12 +386,12 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('one stage of a longer experience', self.recall(self.story(recall={'association_enabled': False}),
                                                                           'teapots lone')[0])
 
-    def test_experience_stages_gives_the_other_stages_both_ways_and_skips_hidden_ones(self):
+    def test_experience_stages_gives_the_other_stages_both_ways_and_skips_deleted_ones(self):
         """Ticket 368: the tidying asks for the same chain the recall directory uses."""
         memory = self.story(recall={'association_enabled': False})
         self.assertEqual(sorted(memory.experience_stages('story_a')), ['story_b', 'story_c'])
         self.assertEqual(sorted(memory.experience_stages('story_c')), ['story_a', 'story_b'])
-        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
+        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'deleted': True, 'text': ''}
         self.assertNotIn('story_b', memory.experience_stages('story_a'))
         self.assertEqual(memory.experience_stages('nobody'), [])
 
@@ -413,9 +413,9 @@ class RecallRotationTests(unittest.TestCase):
         self.assertNotIn('spiral', text)
         self.assertNotIn('one stage of a longer experience', text)   # nothing left to list
 
-    def test_a_stage_hidden_on_the_memory_page_is_not_listed(self):
+    def test_a_stage_deleted_on_the_memory_page_is_not_listed(self):
         memory = self.story(recall={'association_enabled': False})
-        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'hidden': True, 'text': ''}
+        memory.state['entries']['story_b'] = {'title': 'The letter', 'time': 'x', 'deleted': True, 'text': ''}
         text, _ = self.recall(memory, 'domino stacked')
         self.assertNotIn('The letter', text)
         self.assertIn('Waking up to the spiral', text)     # the other stage is still there

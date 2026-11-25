@@ -1356,7 +1356,7 @@ class EventMemory:
                 try:
                     self.memory.call('trace', {'bucket_id': memory_id,
                                                'content': '这段经历已全部移到别处，不再从这里想起。'})
-                    self.memory.call('trace', {'bucket_id': memory_id, 'dont_surface': True})
+                    self.memory.call('trace', {'bucket_id': memory_id, 'archive': True})
                 except Exception:
                     pass
             self.store.append(self.events_path, event)

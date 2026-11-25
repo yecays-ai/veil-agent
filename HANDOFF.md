@@ -1,19 +1,24 @@
 # HANDOFF
 
-## P3-2 旧系统清理 + 事件附账本统一（2026-11-25，本 PR，施工中）
+## P3-3 取消隐藏 + 去标签/domain 依赖 + 页面兼容（2026-11-25，施工中）
 
-- 已完成：`event_ledger`/`event_state` schema；BrainStore 7 类事件附账本映射；幂等迁移 + 原文件只读归档；导出完整事件生命周期；备份后 quick_check/digest/计数校验；全新 Brain 初始化含新表。
-- 已删除：`brain_sync.py`、`ombre_resident.py`、`setup_memory.py`、Ombre 锁/依赖/测试/一次性脚本；setup/update/CI 不再安装/测试 Ombre；`[memory.brain]`、`ombre_port`、`ombre_model`、`ombre_auto_merge` 和检索 backend 开关已移除。
-- 复审修复：Tests workflow 重复/空 env；迁移保留重复行/原始顺序/全七类+状态，单文件事务 + import 标记，中断/重复启动/归档中断测试；备份重算 digest、原子替换、停服/锁/WAL、safety copy/export、恢复后合并新增 memory/事件。
-- 测试：`tests/test_p3_2_event_ledger.py` 16 项；目标套件通过；隔离副本完成实际迁移、启动、事件读写、导出、备份恢复和再次启动；本地全量排除外部 OpenCode 环境后 2192 项通过，剩余 22 项为既有 maintenance/冷备份环境依赖。
-- 未做：未部署正式环境；未在正式数据执行迁移；未合并；未做 P3-4 不可逆清理。
-- 下一步第一步：等 PR 复审/合并；合并后在维护窗口部署，首次启动自动迁移事件附账本并验证页面/导出/备份恢复。
-- 注意：正式 Peter 仍是 P2 运行状态；正式数据迁移前应有备份；测试只用新增专用测试记忆。
+- 已完成：`unhide_legacy_rows` 启动迁移（旧 hidden/dont_surface 行恢复为 normal dynamic，正文/why/P6 不改，归档行保留）；移除 BrainAuthority/BrainRetrieval/RecallJudge/Memory/Native/BrainRead 面板的 hidden/dont_surface 过滤和工具参数；空事件改为归档；页面分组改为 全部/最近/经历/已归档，页面搜索/事实行去掉 domain/tag，移除 us/peter/system 分组依赖。
+- 测试：新增 `tests/test_p3_3_visibility.py` 6 项；更新 hidden/召回/判官/原生工具/事件/分页/页面目标测试；本地全量 2202 项，20 failures / 2 errors 为既有环境依赖，目标套件通过；最终以 PR CI 为准。
+- 复审补丁：修复 pending delete 与 `is_hidden` 冲突，自主删除申请可进入审批；同意删除/拒绝恢复均有集成测试。旧 surprise 标签不再隐藏页面正文/why/标题或禁止编辑。
+- 未做：不逐条改记忆内容、不自动删除/合并、不执行 P3-4；P3-3 尚未合并/部署。
+- 下一步第一步：等全量测试和 PR 复审；合并后按维护窗口部署，启动时自动 unhide；正式验收确认页面/召回/判官/编辑/归档/删除/事件关联一致。
+- 注意：正式 Peter 已运行 P3-2（f63e58a）；不要在正式目录开发或直接改正式 brain.db。
+
+## P3-2 旧系统清理 + 事件附账本统一（已合并 #443，已部署）
+
+- 已完成：事件附账本/状态进入 brain.db；迁移幂等且保留重复/顺序，原文件只读归档；导出/备份/恢复覆盖事件生命周期；Ombre 代码/安装/CI/旧配置清理。
+- 正式维护：2026-11-25 完整冷备份 + 预迁移 Brain 备份；更新到 f63e58a；首次启动迁移 720 行归档；正式数据逐 ID 对比无缺失；页面/事件 API 正常，无 18011/Ombre；未执行 P3-4。
+- 回退：完整冷备份 + 预迁移 Brain 备份；不要用旧备份直接覆盖 P3-2 后新增数据。
 
 ## P3-1 启动解耦 + Brain-only 读路径（已合并 #442）
 
 - 启动不再依赖 Ombre；Brain-only 读写/召回/页面/事件；修复 pinned/importance、自主删除、判官、事件缓存、BM25 降级；首次初始化/缺库拒建/损坏库不替换；CI 全绿。
-- 合并后未自动部署；正式 Peter 仍按 P2 方式运行，待维护窗口更新。
+- 已随 P3-2 维护窗口部署；正式 Peter 当前运行 P3-2 代码。
 
 ## P3-0 配置持久化与前置准备（已合并 #441）
 

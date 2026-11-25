@@ -85,12 +85,17 @@ class BrainIndex:
     def _load(self):
         connection = self._connect()
         try:
-            rows = connection.execute(
-                'SELECT id, title, body, created, importance, bucket, type, is_tombstone, '
-                'is_deleted, is_hidden, dont_surface FROM memories '
-                'WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0 AND is_hidden=0 '
-                'AND (dont_surface IS NULL OR dont_surface=0)',
-                VISIBLE_BUCKETS).fetchall()
+            query = ('SELECT id, title, body, created, importance, bucket, type, is_tombstone, '
+                     'is_deleted FROM memories '
+                     'WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0')
+            try:
+                rows = connection.execute(
+                    query + " AND id NOT IN (SELECT memory_id FROM delete_requests "
+                            "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
+            except sqlite3.OperationalError as exc:
+                if 'no such table: delete_requests' not in str(exc).casefold():
+                    raise
+                rows = connection.execute(query, VISIBLE_BUCKETS).fetchall()
             visible = [row for row in rows if (row[6] or '') not in HIDDEN_TYPES]
             vectors = {}
             for memory_id, dim, blob in connection.execute(

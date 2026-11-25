@@ -178,16 +178,13 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.backend.rows), 1)
         self.assertEqual(len(self.native.events.stages()), 2)
 
-    def test_hidden_event_cannot_be_read_through_the_timeline(self):
+    def test_archived_event_cannot_be_read_through_the_timeline(self):
         result, state, _ = self.save('She wrote meh on the charcoal note after the file list argument.',
                                      'The charcoal note')
         self.assertEqual(state, '成功', result)
         event = next(iter(self.native.events.events().values()))
         key = event['memory_id']
-        path = self.store.root / 'fake' / 'memory' / 'dynamic' / f'{key}.md'
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'---\nid: {key}\ntitle: hidden\ndont_surface: true\n---\nsecret',
-                        encoding='utf-8')
+        self.memory.call('trace', {'bucket_id': key, 'archive': True})
         self.assertIsNone(self.native.events.timeline(event['event_id']))
         self.assertIsNone(self.native.events.detail(event['event_id']))
         self.assertEqual(self.native.events.visible_events(), [])
@@ -504,7 +501,7 @@ class EventMemoryTests(unittest.TestCase):
         old = self.native.events.events()[event_id]
         self.assertEqual(old.get('status'), 'closed')
         self.assertEqual(old.get('story'), '')
-        self.assertTrue(self.backend.rows[key].get('hidden'))
+        self.assertTrue(self.backend.rows[key].get('archived'))
 
     def test_split_and_move_rebuild_both_events(self):
         for text in ('First part of the charcoal note day.',
