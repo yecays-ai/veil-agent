@@ -6,7 +6,7 @@
 
 ## 目标
 
-同步 P3-4 维护窗口已验证的 `scripts/p3_4_cleanup.py` 确定性排序补丁、P3-4 最终验收报告、P6-0 / P6-4 审计与整合设计报告及统一的 `STATUS.md` / `HANDOFF.md`。
+同步 P3-4 维护窗口已验证的 `scripts/p3_4_cleanup.py` 确定性排序补丁、P3-4 验收报告、P6-0～P6-4 脱敏审计与整合设计报告及统一的 `STATUS.md` / `HANDOFF.md`。
 
 ## 当前状态
 

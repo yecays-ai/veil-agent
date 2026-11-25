@@ -5,7 +5,7 @@
 > **审计基准与分支截面**：
 > - **远端 `origin/main` 最新提交**：`2408bb6`（`#448` *Add read-only model configuration overview and desktop regression coverage*，含 `#446` *工单 446：全局配置审计（只读）+ 全量配置清单* `0a688ad`）。
 > - **正式运行目录 `<formal-runtime-dir>` 当前 `HEAD`**：`160b0ec`（`#447` *P3-4：同步维护窗口清理兼容修复*），工作区含 P3-4 与 P6 本地状态同步；经 `git diff --stat 160b0ec..origin/main` 与 `config_registry.py`、`web_agent.py` 源码比对，`#446` 与 `#448` 均为只读配置审计、只读概览接口（`GET /api/config/overview`）及桌面回归测试，**未修改任何 Brain、记忆读写、检索、判官、自然联想、事件演化或上下文预算核心 Python 模块**，P6-0～P6-3 全部源码与运行结论在最新 `origin/main`（`2408bb6`）上依然成立。
-> - **输入依据**：[P6-0 报告](p6-0-memory-audit-20261126.md)、`<local-p6-reports>/p6-1-retrieval-judge-association-audit-20261126.md`、`<local-p6-reports>/p6-2-relationship-weight-evolution-audit-20261126.md`、`<local-p6-reports>/p6-3-context-budget-audit-20261126.md`、[PRODUCT_PREMISE.md](../PRODUCT_PREMISE.md)、`<local-deliverables>/VEIL-全局管理设计.md` 及对应源码逐行核查。
+> - **输入依据**：[P6-0 报告](p6-0-memory-audit-20261126.md)、[P6-1 报告](p6-1-retrieval-judge-association-audit-20261126.md)、[P6-2 报告](p6-2-relationship-weight-evolution-audit-20261126.md)、[P6-3 报告](p6-3-context-budget-audit-20261126.md)、[PRODUCT_PREMISE.md](../PRODUCT_PREMISE.md)、`<local-deliverables>/VEIL-全局管理设计.md` 及对应源码逐行核查。
 
 ---
 

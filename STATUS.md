@@ -9,7 +9,11 @@
 
 ## P6-4｜VEIL Brain 全局架构整合与施工设计（定稿完成，已批准按序推进）
 
-- **交付**：[p6-4-brain-architecture-integration-20261126.md](docs/reports/p6-4-brain-architecture-integration-20261126.md)、[p6-0-memory-audit-20261126.md](docs/reports/p6-0-memory-audit-20261126.md)；P6-1/P6-2/P6-3 专项只读审计留存本地只读报告目录（含真实运行日志采样，不入 Git）。
+- **交付**：[p6-4-brain-architecture-integration-20261126.md](docs/reports/p6-4-brain-architecture-integration-20261126.md)（架构整合定稿），完整引用以下已同步入库的脱敏专项审计依据：
+  - [p6-0-memory-audit-20261126.md](docs/reports/p6-0-memory-audit-20261126.md)（开源调研与差距审计）
+  - [p6-1-retrieval-judge-association-audit-20261126.md](docs/reports/p6-1-retrieval-judge-association-audit-20261126.md)（检索、判官与自然联想审计）
+  - [p6-2-relationship-weight-evolution-audit-20261126.md](docs/reports/p6-2-relationship-weight-evolution-audit-20261126.md)（关系认知、记忆权重与动态演化审计）
+  - [p6-3-context-budget-audit-20261126.md](docs/reports/p6-3-context-budget-audit-20261126.md)（上下文组装、注入与预算审计）
 - **核定路线**：`P6-S0`（基线同步）→ `P6-S2`（单事务写入/版本契约 + 防丢稿 + 证据链 + 协同备份与故障恢复演练 + `2026-11-25` 58 条丢稿幂等恢复）→ `P6-S1`（检索/卡片/元数据确定性修复）→ `P6-S4`（21 项严格单变量原子消融，`¥20` 总预算硬上限）→ 依据实验结果实施 `P6-S3` / `P6-S5` → `P6-S6` → `P6-S7`。
 - **边界**：严格分离 P6 与 M2（`input_token_ratio` 校准与 `tool_groups` 瘦身）、M3（`parse_cache_usage` 与 `tools` 缓存边界）及后续聊天体验专项调优（完整保留瞄一眼与弹幕连续性及时间感知，本阶段不削减）。
 

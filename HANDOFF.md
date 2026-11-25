@@ -5,9 +5,9 @@
 - **基线**：基于 `origin/main`（`2408bb6`，含 `#446` 全局配置审计与 `#448` 全局管理中心首批只读配置总览及桌面回归）。
 - **本单交付**：
   - 将 P3-4 维护窗口已验证的确定性排序补丁同步入 `scripts/p3_4_cleanup.py`，并在 `tests/test_p3_4_cleanup.py` 补充排序确定性单元测试；
-  - 同步脱敏后的 `docs/reports/p3-4-final-acceptance-20261125.md`、`docs/reports/p6-0-memory-audit-20261126.md`、`docs/reports/p6-4-brain-architecture-integration-20261126.md` 与 `docs/tickets/449-p6-s0-baseline-sync.md`；
+  - 同步脱敏后的 `docs/reports/p3-4-final-acceptance-20261125.md`、`docs/reports/p6-0-memory-audit-20261126.md`、`docs/reports/p6-1-retrieval-judge-association-audit-20261126.md`、`docs/reports/p6-2-relationship-weight-evolution-audit-20261126.md`、`docs/reports/p6-3-context-budget-audit-20261126.md`、`docs/reports/p6-4-brain-architecture-integration-20261126.md` 与 `docs/tickets/449-p6-s0-baseline-sync.md`；
   - 统一 `STATUS.md` 与 `HANDOFF.md`（对齐 `#446`/`#448`、P3-4 完成态与 P6-4 批准施工路线）。
-- **本地边界提醒**：P6-1/P6-2/P6-3 专项审计报告因含真实日志与记忆采样，保存在本地 P6 审计文件夹而不提交进仓库。
+- **仓库基线**：P6-4 所引用的全部 P6-0～P6-3 审计依据均已脱敏入库，后续开发窗口可直接从 `docs/reports/` 读取完整证据链。
 
 ## 下一阶段已批准路线（`P6-4` 定稿）
 
