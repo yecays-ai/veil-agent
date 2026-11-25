@@ -82,7 +82,10 @@ class BrainAuthority:
 
     def _retry_pending(self, embed):
         now = time.monotonic()
-        if now - self._last_pending_retry < self._pending_retry_seconds:
+        # 0 means "no retry has happened yet" (and tests use it to force a retry). A fresh
+        # runner can have monotonic() below the 60 s interval, so checking 0 as a timestamp
+        # would wrongly skip the first retry on the CI machine.
+        if self._last_pending_retry and now - self._last_pending_retry < self._pending_retry_seconds:
             return
         self._last_pending_retry = now
         connection = self._connect()
