@@ -29,7 +29,6 @@ PROMPT_MODULES = (
     'user_persona.py',
     'voice_style.py',
     'executor_opencode.py',
-    'ombre_entry.py',
     'windows_observer.py',
 )
 
