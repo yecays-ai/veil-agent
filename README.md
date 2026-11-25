@@ -17,6 +17,8 @@ Windows 桌面版 0.1：透明 Peter 可拖动、调整大小，点击收放原 
 
 ## 首次安装（Windows）
 
+> 当前 `main` 处于 P2→P3 过渡：记忆已由 VEIL Brain 接管（`[memory.brain] write_authority=true`，`shadow=false`），Ombre 只作临时回退；本机已有 `data/<角色>/brain.db` 才能启动记忆。全新机器的 Brain 初始化和 Ombre 移除在 P3-1/P3-2 完成，进度见 `STATUS.md` 与 `docs/tickets/p3/`。
+
 1. 准备 Python 3.11 或 3.12。安装器的自定义安装可选择其他盘；不要把 Microsoft Store 的空启动入口当成已安装 Python。双击 `setup.bat` 按 `requirements.lock.txt` 安装固定版本的项目依赖，并在隔离环境安装固定版本的网页读取 MCP 服务；需要联网，只下载软件，不调用模型。项目更新后也要重新运行 `setup.bat` 以安装新增或更新的依赖；聊天、人设和记忆数据会保留。已安装过旧版也要重新运行一次；它会在项目 `.deps/ombre/` 安装固定提交、未修改的 [Ombre-Brain](https://github.com/P0luz/Ombre-Brain/tree/115d831d979bf67efc7150f976e2cb34c333c935)（MIT）及锁定依赖：Python 3.11 使用仓库精确版本锁（NumPy 2.4.6、SciPy 1.17.1）；两版 Ombre 锁均固定 MCP 1.30.0、PyJWT 2.15.1；固定 Ombre 源码归档本身由 SHA-256 校验。不复制实现到本项目，不安装本地大模型。下载使用固定哈希校验，启动不会自动下载安装。其他 Python 版本不在支持范围内。
 2. 将 `.env.example` 复制为 `.env`，在 `DEEPSEEK_API_KEY=` 后填写自己的密钥。将 `persona/peter.example.md` 复制为 `persona/peter.md`，再替换成本机真实人设；保留默认英文、需要时翻译成中文的规则。程序不会替你创建或覆盖这两份私有文件。人设缺失或为空会直接停止。
 3. 在本机 `.env` 添加 `EMBED_API_KEY=` 并填入硅基流动密钥（不要发给别人）。双击 `start.bat`。用中文聊几句、说“翻译一下”，关掉再开，问“我们刚才聊到哪了”。没有真实人设或密钥前，只能运行离线测试，不能宣称已完成真实聊天验收。

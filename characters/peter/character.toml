@@ -116,21 +116,22 @@ enabled = true
 # evidence_minutes = 30
 
 [memory.brain]
-# Ticket 429 / P0-B: mirror confirmed memory writes into VEIL Brain's own SQLite file as a shadow.
-# Ombre stays the only authority: the shadow only follows, compares and reports. It never writes a
-# memory, never repairs one and never blocks a save; failures are logged and caught up by reconcile.
-# The database is seeded once with "python brain_sync.py init --source <isolated copy>"; without it
-# the shadow stays off. Switch off at runtime with "python brain_sync.py shadow off" (or the
-# brain-shadow-off file); turning it back on makes the next reconcile catch up.
-shadow = true
+# P2 formal cutover (2026-11-25): VEIL Brain is the single memory write authority. This value is
+# committed to main on purpose: update-main resets tracked files to GitHub, so a local-only edit
+# would silently fall back to the retired Ombre shadow after the next update.
+# P3-2 removes this transitional table and makes Brain the only memory backend.
+write_authority = true
+# Shadow sync (P0-B) is transitional and must stay off while Brain is authoritative.
+shadow = false
+# Kept only until P3-2 deletes brain_sync; unused while shadow = false.
 reconcile_seconds = 600
 
 # Ticket 430 / P1: automatic-recall candidate source. "ombre" keeps today's search; "brain" uses
 # VEIL Brain's own vector + jieba/BM25 index (brain.db). Brain is opt-in in the shipped config and
 # the recall judge, dedup, cooldown, budget and write path are unchanged either way.
 [memory.retrieval]
-# 2026-11-24 Lan approved the real-use trial: Brain retrieval for automatic recall only.
-# Writes and the authority stay with Ombre; rollback is this one line back to "ombre" + restart.
+# P2 formal cutover: automatic recall uses Brain retrieval. P3-2 removes the Ombre backend option.
+# Rollback from here is backup/offline-export based, not a runtime Ombre switch.
 backend = "brain"
 # weight_vector = 0.65
 # weight_keyword = 0.35
