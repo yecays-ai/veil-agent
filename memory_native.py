@@ -363,7 +363,10 @@ class NativeMemoryTools:
                 return self._history(args)
             if name == 'memory_timeline':
                 return self._timeline(args)
-            return self._trace(args, approval)
+            if name == 'trace':
+                return self._trace(args, approval)
+            return ('This tool is not authorized for the current role. Choose an available tool; '
+                    'permissions cannot be bypassed.'), '被拒绝', self.preview_summary(name, args)
         except MemoryToolError as exc:
             return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
