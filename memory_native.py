@@ -75,8 +75,8 @@ SEARCH = SimpleNamespace(name='breath_search', inputSchema={
                 'date_from / date_to narrow the search to memories created in that period.')
 
 DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
-               'breath_search to find a known memory; use the listed Ombre tools for edits, reflection, '
-               'and library status. Every hidden memory is blocked by the program. ')
+               'breath_search to find a known memory; use trace for edits and the catalog/timeline tools '
+               'for library status. Every hidden memory is blocked by the program. ')
 TRACE = SimpleNamespace(name='trace', inputSchema={
     'type': 'object', 'required': ['bucket_id'], 'additionalProperties': False,
     'properties': {
@@ -567,10 +567,10 @@ class NativeMemoryTools:
         try:
             self.memory.call('trace', {'bucket_id': memory_id, 'restore': True})
         except Exception:
-            return False, 'Ombre 这次没有恢复成功，记忆还在归档里。'
+            return False, '记忆服务这次没有恢复成功，记忆还在归档里。'
         self.memory.bucket_details_cache.pop(memory_id, None)
         if not self.memory.refresh_visibility(memory_id):
-            return False, 'Ombre 回答了，但这条还没回到记忆里；稍后刷新再看。'
+            return False, '记忆服务回答了，但这条还没回到记忆里；稍后刷新再看。'
         self.sidecar.unarchived(memory_id)
         return True, '已恢复，它会重新被想起。'
 
@@ -608,7 +608,7 @@ class NativeMemoryTools:
             return False, '这条记忆不存在或已经删除。'
         title = self.memory.title_for(memory_id) or memory_id
         failure = self._delete(memory_id, title)
-        return (False, '这次没能确认 Ombre 的删除；这条已经不会再被想起，稍后可以再删一次。') if failure \
+        return (False, '这次没能确认删除结果；这条已经不会再被想起，稍后可以再删一次。') if failure \
             else (True, '已删除。')
 
     @staticmethod
