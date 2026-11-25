@@ -354,6 +354,18 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual(safe, [])
         self.assertEqual(len(external), 1)
 
+    def test_plan_output_is_deterministic_across_target_order(self):
+        resolved_root = self.root.resolve()
+        first = p3_4_cleanup._plan(resolved_root, 'peter', self.backup, self.archive)
+        original_targets = p3_4_cleanup._targets(resolved_root, 'peter')
+        with mock.patch.object(p3_4_cleanup, '_targets', return_value=list(reversed(original_targets))):
+            plan_rev = p3_4_cleanup._plan(resolved_root, 'peter', self.backup, self.archive)
+        self.assertEqual(first['file_targets'], plan_rev['file_targets'])
+        self.assertEqual(first['p6_before'], plan_rev['p6_before'])
+        self.assertEqual(first['tombstones'], plan_rev['tombstones'])
+        self.assertEqual(first['letters_plans'], plan_rev['letters_plans'])
+        self.assertEqual(first['plan_hash'], plan_rev['plan_hash'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -137,7 +137,13 @@ def _targets(root, role):
 def _safe_targets(root, role):
     root = Path(root)
     seen, safe, external = set(), [], []
-    for path in _targets(root, role):
+    def _key(item):
+        try:
+            return str(item.relative_to(root)).replace('\\', '/')
+        except ValueError:
+            return str(item)
+
+    for path in sorted(_targets(root, role), key=_key):
         if not path.exists():
             continue
         resolved = path.resolve()
@@ -152,7 +158,7 @@ def _safe_targets(root, role):
         if rel not in seen:
             seen.add(rel)
             safe.append(path)
-    return safe, external
+    return sorted(safe), sorted(external)
 
 
 def _assert_stopped(root, role):
@@ -193,13 +199,14 @@ def _assert_stopped(root, role):
 def _tombstone_rows(connection):
     return [dict(row) for row in connection.execute(
         'SELECT id,title,type,deleted_at,created FROM memories '
-        'WHERE is_tombstone=1 OR is_deleted=1')]
+        'WHERE is_tombstone=1 OR is_deleted=1 ORDER BY id')]
 
 
 def _letter_plan_rows(connection):
     return [dict(row) for row in connection.execute(
         "SELECT id,title,bucket,type,file_rel,source_tool,created FROM memories "
-        "WHERE type IN ('letter','plan') OR bucket IN ('letters','plans') ORDER BY created")]
+        "WHERE type IN ('letter','plan') OR bucket IN ('letters','plans') "
+        'ORDER BY type, created, id')]
 
 
 def _count(connection, query, params=()):
@@ -289,7 +296,7 @@ def _backup_coverage(root, backup, targets, role):
     if 'payload/data' not in dirs:
         missing.append('payload/data')
     return {'ok': not missing and not mismatched, 'checked': checked,
-            'missing': missing[:100], 'mismatched': mismatched[:100]}
+            'missing': sorted(missing)[:100], 'mismatched': sorted(mismatched)[:100]}
 
 
 def _row_hash(row):
@@ -307,19 +314,18 @@ def _snapshot(connection, exclude_memory_ids, removed_event_ids=()):
         except sqlite3.Error:
             return []
     def hashed(items, key=None, skip=()):
-        out = {}
+        out = []
         for item in items:
             if key and item.get(key) in skip:
                 continue
-            value = _row_hash(item)
-            out[item.get(key) or len(out)] = value
-        return out
+            out.append((str(item.get(key)), _row_hash(item)))
+        return dict(sorted(out))
     snap['memories'] = hashed(rows('memories'), 'id', exclude)
     for table in ('versions', 'vectors', 'relations', 'sources', 'quotes',
                   'sidecar_state', 'sidecar_events'):
         items = rows(table)
-        snap[table] = [(_row_hash(item)) for item in items
-                       if item.get('memory_id') not in exclude]
+        snap[table] = sorted(_row_hash(item) for item in items
+                             if item.get('memory_id') not in exclude)
     event_items = []
     for item in rows('events'):
         if item.get('event_id') in removed_events:
@@ -327,23 +333,23 @@ def _snapshot(connection, exclude_memory_ids, removed_event_ids=()):
         item = {key: value for key, value in item.items() if key != 'source_count'}
         event_items.append(item)
     snap['events'] = hashed(event_items, 'event_id')
-    snap['event_stages'] = [(_row_hash(item)) for item in rows('event_stages')
-                            if item.get('event_id') not in removed_events]
-    snap['event_sources'] = [(_row_hash(item)) for item in rows('event_sources')
-                             if item.get('event_id') not in removed_events
-                             and item.get('memory_id') not in exclude]
+    snap['event_stages'] = sorted(_row_hash(item) for item in rows('event_stages')
+                                  if item.get('event_id') not in removed_events)
+    snap['event_sources'] = sorted(_row_hash(item) for item in rows('event_sources')
+                                   if item.get('event_id') not in removed_events
+                                   and item.get('memory_id') not in exclude)
     if _table(connection, 'event_ledger'):
-        snap['event_ledger'] = [(_row_hash(item)) for item in rows('event_ledger')
-                                if item.get('memory_id') not in exclude
-                                and item.get('event_id') not in removed_events]
+        snap['event_ledger'] = sorted(_row_hash(item) for item in rows('event_ledger')
+                                      if item.get('memory_id') not in exclude
+                                      and item.get('event_id') not in removed_events)
     if _table(connection, 'event_state'):
         snap['event_state'] = hashed(rows('event_state'), 'key')
     if _table(connection, 'delete_requests'):
-        snap['delete_requests'] = [(_row_hash(item)) for item in rows('delete_requests')
-                                   if item.get('memory_id') not in exclude]
+        snap['delete_requests'] = sorted(_row_hash(item) for item in rows('delete_requests')
+                                         if item.get('memory_id') not in exclude)
     if _table(connection, 'write_journal'):
-        snap['write_journal'] = [(_row_hash(item)) for item in rows('write_journal')
-                                 if item.get('memory_id') not in exclude]
+        snap['write_journal'] = sorted(_row_hash(item) for item in rows('write_journal')
+                                       if item.get('memory_id') not in exclude)
     return snap
 
 
