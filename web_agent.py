@@ -33,7 +33,8 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
 from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        background_cfg, load_character, memory_available, now, make_model, make_voice, run_chat,
+                        background_cfg, brain_authority_ready, load_character, memory_available, now,
+                        make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
 import persona_versions
@@ -3751,6 +3752,9 @@ def main(argv=None):
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:
+                        if use_memory and not brain_authority_ready(cfg):
+                            hub.push('notice', '记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
+                            use_memory = False
                         if use_memory:
                             from memory_agent import Memory
                             with Memory(cfg, store, budget, model,

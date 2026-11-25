@@ -1521,7 +1521,28 @@ class Memory:
         return kept
 
     def _recall_meta(self, keys):
-        """Front matter of the candidates (importance, date, title, relation links), read locally."""
+        """Business metadata of the candidates. Under Brain authority it comes from brain.db
+        columns, so a trace that changes pinned/importance is visible to the next opening."""
+        authority = getattr(self, 'brain_authority', None)
+        if authority is not None:
+            from brain_read import BrainRead
+            metas = {}
+            try:
+                with BrainRead(authority.db_path) as reader:
+                    for key in dict.fromkeys(keys):
+                        row = reader.memory(key)
+                        if row is None:
+                            metas[key] = {'links': []}
+                            continue
+                        metas[key] = {
+                            'id': row['id'], 'title': row['title'] or row['name'] or '',
+                            'created': row['created'] or '', 'type': row['type'] or '',
+                            'importance': row['importance'],
+                            'pinned': 'true' if row['pinned'] else '',
+                            'body': row['body'] or '', 'links': []}
+            except Exception:
+                return {}
+            return metas
         from recall_rotation import front_matter
         metas = {}
         for key in dict.fromkeys(keys):

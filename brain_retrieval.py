@@ -166,11 +166,16 @@ class BrainIndex:
         vector_top = max((vector_scores.get(memory_id, 0.0) for memory_id in visible_ids), default=0.0)
         vector_top = vector_top or 1.0
         keyword_top = max(keyword_scores.values(), default=0.0) or 1.0
+        # A keyword-only call has no query vector. If the operator set weight_keyword=0 for the
+        # normal vector search, still give the only available channel a real weight; otherwise
+        # every BM25 hit would score 0 and the documented local fallback would return nothing.
+        vector_weight = self.weight_vector if query_vector else 0.0
+        keyword_weight = self.weight_keyword if (query_vector or self.weight_keyword) else 1.0
         scored = []
         for row in rows:
             memory_id = row[0]
-            score = (self.weight_vector * vector_scores.get(memory_id, 0.0) / vector_top
-                     + self.weight_keyword * keyword_scores.get(memory_id, 0.0) / keyword_top)
+            score = (vector_weight * vector_scores.get(memory_id, 0.0) / vector_top
+                     + keyword_weight * keyword_scores.get(memory_id, 0.0) / keyword_top)
             if score <= 0:
                 continue
             try:

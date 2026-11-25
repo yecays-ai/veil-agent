@@ -5,7 +5,7 @@
 41590b0a0670 feedback:runtime executor_opencode.py:1063 set -eu; mkdir -p /tmp/home; export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/tmp
 2bd781f4790b feedback:runtime executor_opencode.py:1162 The workbench image lacks the network-isolation tools. Rebuild veil-workbench fr
 4127627e9424 feedback:runtime memory_agent.py:1239 unavailable content was not treated as memory. See memory/_agent/diagnostics.jso
-45240802e8c9 feedback:runtime memory_agent.py:2477  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
+45240802e8c9 feedback:runtime memory_agent.py:2498  确认。删除后它不再出现在 /memory 里，也不再被想起，也不能恢复：记忆文件和程序保存的旧版本会从硬盘抹掉。
 eec368d84360 feedback:runtime memory_native.py:323 . Deletion through trace requires explicit UI approval; requests made during aut
 1fdb5f8687a8 feedback:runtime memory_native.py:368 This tool is not authorized for the current role. Choose an available tool; perm
 819880ff86d9 feedback:runtime memory_native.py:827 This delete operation or argument combination is not available. Use the supporte
@@ -13,20 +13,20 @@ eec368d84360 feedback:runtime memory_native.py:323 . Deletion through trace requ
 2887c0f920ed feedback:runtime memory_native.py:874  memories are already pinned. Unpin one first (trace pinned=0 with importance 1-
 f9e5aef21634 feedback:runtime memory_native.py:879 This memory is pinned. Unpin it first (trace pinned=0 with importance 1-10) befo
 99d7b27f3b9a feedback:runtime memory_native.py:902 This memory update is still unconfirmed after its earlier connection failure. It
-b8e963293f59 feedback:runtime memory_native.py:1028 The deletion was not confirmed; this memory remains hidden. Check its state befo
-5769618de057 feedback:runtime memory_native.py:1091  on the memory page, so you cannot change, merge or archive it. Save what is new
-8b9f0aff0d51 feedback:runtime memory_native.py:1211 link_to must be a memory you were shown: an automatic recall, a breath_search re
-d38ed0950086 feedback:runtime memory_native.py:1222  Choose one: the same event -> hold with target_id=<ID> and the whole memory rew
-3a265e1d39cd feedback:runtime memory_native.py:1236 This save is still unconfirmed after its earlier connection failure. It was not 
-b4d5ca4417bc feedback:runtime memory_native.py:1242 The memory service was closed before this save was submitted. No memory was save
-f6ba72405a98 feedback:runtime memory_native.py:1244 The save result is unconfirmed. Do not claim the memory was saved; it was not se
-66d97036ada9 feedback:runtime memory_native.py:1252 The save was confirmed, but its local memory index could not be updated. Do not 
-b1441e1b4b44 feedback:runtime memory_native.py:1272 target_id must be a memory you were shown: an automatic recall or a breath_searc
-6b2eac58245e feedback:runtime memory_native.py:1279 merge_ids must be a list of distinct IDs of memories you were shown. Search agai
-df0562a45219 feedback:runtime memory_native.py:1282 Every merge_id must be a memory you were shown (automatic recall or breath_searc
-1acb926da4af feedback:runtime memory_native.py:1296 A source memory changed after search, so nothing was updated. Run breath_search 
-d4cca9895e89 feedback:runtime memory_native.py:1303 . If what happened then still matters, put it back. If leaving it out is right, 
-e3cc8b638e2b feedback:runtime memory_native.py:1322 The rewrite could not be verified. Check this memory before continuing; its prev
+b8e963293f59 feedback:runtime memory_native.py:1035 The deletion was not confirmed; this memory remains hidden. Check its state befo
+5769618de057 feedback:runtime memory_native.py:1098  on the memory page, so you cannot change, merge or archive it. Save what is new
+8b9f0aff0d51 feedback:runtime memory_native.py:1218 link_to must be a memory you were shown: an automatic recall, a breath_search re
+d38ed0950086 feedback:runtime memory_native.py:1229  Choose one: the same event -> hold with target_id=<ID> and the whole memory rew
+3a265e1d39cd feedback:runtime memory_native.py:1243 This save is still unconfirmed after its earlier connection failure. It was not 
+b4d5ca4417bc feedback:runtime memory_native.py:1249 The memory service was closed before this save was submitted. No memory was save
+f6ba72405a98 feedback:runtime memory_native.py:1251 The save result is unconfirmed. Do not claim the memory was saved; it was not se
+66d97036ada9 feedback:runtime memory_native.py:1259 The save was confirmed, but its local memory index could not be updated. Do not 
+b1441e1b4b44 feedback:runtime memory_native.py:1279 target_id must be a memory you were shown: an automatic recall or a breath_searc
+6b2eac58245e feedback:runtime memory_native.py:1286 merge_ids must be a list of distinct IDs of memories you were shown. Search agai
+df0562a45219 feedback:runtime memory_native.py:1289 Every merge_id must be a memory you were shown (automatic recall or breath_searc
+1acb926da4af feedback:runtime memory_native.py:1303 A source memory changed after search, so nothing was updated. Run breath_search 
+d4cca9895e89 feedback:runtime memory_native.py:1310 . If what happened then still matters, put it back. If leaving it out is right, 
+e3cc8b638e2b feedback:runtime memory_native.py:1329 The rewrite could not be verified. Check this memory before continuing; its prev
 6674dde40ca3 feedback:runtime veil_agent.py:285 true also sends this message to Lan by email, for when she is away from the comp
 1f7fadc00a41 feedback:runtime veil_agent.py:2558 ，实际按用量结算并计入共享预算，超限时请求会被拦截。根据任务所需能力和预计总成本决定是否委派；无需因为单价较低就委派，主聊天模型与工具审批保持不变。
 d4196477b101 feedback:runtime veil_agent.py:2758 An autonomous wake may send at most three messages. A card with words is two mes

@@ -6587,8 +6587,14 @@ def models_available(cfg):
 
 
 def memory_available(cfg):
-    """Model-dependent Ombre must not start while Lan still has to choose an API model."""
+    """Model-dependent memory must not start while Lan still has to choose an API model."""
     return bool((getattr(cfg, 'memory', None) or {}).get('enabled')) and models_available(cfg)
+
+
+def brain_authority_ready(cfg):
+    """P3-1: memory now requires the Brain write authority instead of an Ombre backend."""
+    brain = ((getattr(cfg, 'memory', None) or {}).get('brain') or {})
+    return isinstance(brain, dict) and brain.get('write_authority') is True
 
 
 def make_voice(root, cfg, store, budget):
@@ -6910,6 +6916,9 @@ def main():
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
+                    if use_memory and not brain_authority_ready(cfg):
+                        print('记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
+                        use_memory = False
                     if use_memory:
                         from memory_agent import Memory
                         with Memory(cfg, store, budget, model) as memory:

@@ -71,6 +71,60 @@ class BrainOnlyTests(unittest.TestCase):
         self.assertEqual(row['pinned'], 0)
         self.assertEqual(row['importance'], 4)
 
+    def test_metadata_trace_keeps_the_existing_vector(self):
+        memory_id = self.memory.call('hold', {'content': 'metadata only body', 'title': 'Old'}).split('→')[1]
+        with BrainRead(self.db) as reader:
+            before = reader.all_vectors().get(memory_id)
+        self.memory.call('trace', {'bucket_id': memory_id, 'title': 'New', 'importance': 7,
+                                   'edit_reason': 'rename only'})
+        with BrainRead(self.db) as reader:
+            after = reader.all_vectors().get(memory_id)
+            row = reader.memory(memory_id)
+        self.assertIsNotNone(before)
+        self.assertEqual(before, after)
+        self.assertEqual(row['title'], 'New')
+        self.assertEqual(row['importance'], 7)
+        self.assertEqual(row['vector_state'], 'ready')
+
+    def test_recall_meta_reads_pinned_and_importance_from_brain(self):
+        memory_id = self.memory.call('hold', {'content': 'core promise', 'title': 'Core',
+                                              'pinned': True,
+                                              'why_remembered': 'core'}).split('→')[1]
+        meta = self.memory._recall_meta([memory_id])[memory_id]
+        self.assertEqual(meta['pinned'], 'true')
+        self.assertEqual(meta['importance'], 10)
+        self.memory.call('trace', {'bucket_id': memory_id, 'pinned': False, 'importance': 3,
+                                   'edit_reason': 'not core anymore'})
+        meta = self.memory._recall_meta([memory_id])[memory_id]
+        self.assertEqual(meta['pinned'], '')
+        self.assertEqual(meta['importance'], 3)
+
+    def test_keyword_only_fallback_works_when_configured_keyword_weight_is_zero(self):
+        memory_id = self.memory.call('hold', {'content': 'unique keyword lantern', 'title': 'Lantern'}).split('→')[1]
+        self.memory.retrieval_settings = {'backend': 'brain', 'weight_vector': 1.0,
+                                          'weight_keyword': 0.0}
+        self.memory._embedder = Mock()
+        self.memory._embedder.embed.side_effect = RuntimeError('embedding down')
+        found = self.memory.search_candidates('lantern', 5)
+        self.assertIn(memory_id, found)
+
+    def test_hidden_delete_request_does_not_leak_into_model_notes(self):
+        memory_id = self.memory.call('hold', {'content': 'hidden secret', 'title': 'Hidden secret'}).split('→')[1]
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute('UPDATE memories SET is_hidden=1 WHERE id=?', (memory_id,))
+            connection.commit()
+        finally:
+            connection.close()
+        self.memory.store.append('fake/delete-requests.jsonl', {
+            'request_id': 'r-hidden', 'memory_id': memory_id, 'title': 'Hidden secret',
+            'reason': 'private reason', 'status': 'pending'})
+        tools = NativeMemoryTools(self.memory, 8192, model=Mock())
+        notes = tools.process_pending_deletions(lambda _: 'y')
+        self.assertEqual(notes, [])
+        rows = self.memory.store.read('fake/delete-requests.jsonl')
+        self.assertEqual(rows[-1]['status'], 'rejected')
+
     def test_event_caches_follow_brain_updates(self):
         path = 'fake/events.jsonl'
         self.memory.store.append(path, {

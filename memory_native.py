@@ -990,6 +990,13 @@ class NativeMemoryTools:
                 notes.append(f'Memory {memory_id} ({title}) was already handled in the memory panel; '
                              'no duplicate deletion was performed.')
                 continue
+            if self.memory.is_hidden(memory_id):
+                # Hidden memories must not leak their title/reason back into the model through
+                # pending_deletion_context. Close the request silently; Lan still sees it on the
+                # memory page, where hidden items belong.
+                self.memory.store.append(path, {**row, 'status': 'rejected',
+                                                'decision_reason': '目标记忆已隐藏'})
+                continue
             prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
             accepted = approval is not None and approval(prompt).strip().casefold() == 'y'

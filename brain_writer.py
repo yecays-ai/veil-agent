@@ -150,15 +150,22 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
                   operation_reason='', why_remembered=''):
     """Rewrite a memory, archiving the old body first, in one transaction."""
     ensure_schema(connection)
-    row = connection.execute('SELECT body,raw_markdown,file_rel FROM memories WHERE id=? AND '
+    row = connection.execute('SELECT body,raw_markdown,file_rel,vector_state FROM memories WHERE id=? AND '
                              'is_deleted=0 AND is_tombstone=0', (memory_id,)).fetchone()
     if row is None:
         raise KeyError(memory_id)
-    old_body, old_raw, file_rel = row
-    body = changes.get('body', old_body)
+    old_body, old_raw, file_rel, old_state = row
+    body_changed = 'body' in changes
+    body = changes.get('body', old_body) if body_changed else old_body
     if not isinstance(body, str) or not body.strip():
         raise ValueError('empty memory body')
-    vector, state = _vector({'body': body}, vector, embedder)
+    if body_changed:
+        vector, state = _vector({'body': body}, vector, embedder)
+    else:
+        # A metadata-only trace (title/pinned/importance) must not re-embed the unchanged body:
+        # Memory.call reserved no embedding budget, and a failed embedding must not drop the
+        # existing vector. The stored vector and state stay exactly as they were.
+        vector, state = None, old_state
     fields = sorted(changes)
     try:
         connection.execute('BEGIN IMMEDIATE')
@@ -170,16 +177,16 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
         connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
                            'title=COALESCE(?,title),importance=COALESCE(?,importance),'
                            'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'
-                           'vector_state=? WHERE id=?',
+                           'vector_state=COALESCE(?,vector_state) WHERE id=?',
                            (body, _sha(body), raw, _sha(raw), changes.get('title'),
                             changes.get('importance'), changes.get('pinned'),
-                            why_remembered or None, state, memory_id))
-        if state == 'ready':
+                            why_remembered or None, state if body_changed else None, memory_id))
+        if body_changed and state == 'ready':
             connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
                                'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
                                (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)),
                                 now(), _sha(body)))
-        else:
+        elif body_changed:
             connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
         _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
