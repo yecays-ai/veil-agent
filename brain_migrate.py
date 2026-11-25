@@ -146,6 +146,44 @@ def _migrate_events(connection, role_dir):
     return {'events': len(events), 'stages': len(stages)}
 
 
+def unhide_legacy_rows(store, role):
+    """P3-3: old hidden/dont_surface rows return to normal visibility.
+
+    Only visibility metadata changes; body/title/why and the P6 cognitive fields are untouched.
+    A hidden row that had been folded into archive is moved back to a normal dynamic memory so it
+    is visible and recall-eligible. Digested/resolved values are kept as legacy data but ignored.
+    """
+    role_dir = Path(store.root) / role
+    db_path = role_dir / 'brain.db'
+    if not db_path.is_file():
+        return 0
+    with write_lock(store, role):
+        connection = sqlite3.connect(str(db_path), timeout=30)
+        try:
+            brain_events.ensure_schema(connection)
+            try:
+                pending = {row[0] for row in connection.execute(
+                    "SELECT memory_id FROM delete_requests WHERE status='pending'")}
+            except sqlite3.Error:
+                pending = set()
+            rows = [row for row in connection.execute(
+                'SELECT id,bucket,type FROM memories WHERE is_tombstone=0 AND is_deleted=0 '
+                'AND (is_hidden=1 OR dont_surface=1)').fetchall()
+                    if row[0] not in pending]
+            for memory_id, bucket, kind in rows:
+                normal = bucket in ('dynamic', 'permanent') and kind not in ('archived',)
+                connection.execute(
+                    'UPDATE memories SET is_hidden=0, dont_surface=0, bucket=?, type=? '
+                    'WHERE id=?',
+                    (bucket if normal else 'dynamic', kind if normal else 'note', memory_id))
+            if rows:
+                brain_writer.refresh_digest(connection)
+            connection.commit()
+            return len(rows)
+        finally:
+            connection.close()
+
+
 def migrate_role(store, role, archive_root=None):
     """Migrate this role's remaining event JSONL/state files; safe to call on every start."""
     role_dir = Path(store.root) / role

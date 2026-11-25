@@ -12,9 +12,9 @@ let pollFailures=0;
 const recentErrors=new Map();
 const displayedErrorRequests=new Set();
 const displayedEventIds=new Set();
-let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='recent',memoryShown=50;
-// Display-only groups over Ombre's own categories; Ombre's files keep their tags and categories.
-const MEMORY_GROUPS={recent:{label:'最近',domains:null},events:{label:'经历',domains:null,events:true},us:{label:'我们俩',domains:['恋爱','人际']},peter:{label:'他自己',domains:['内心','心理','兴趣','游戏']},system:{label:'系统和能力',domains:['数字','AI','编程','工作']},archived:{label:'已归档',domains:null,archived:true}};
+let memoryAvailable=false,memoryLoaded=false,memoryLoading=false,memoryCursor='',memoryItems=[],memoryGroup='all',memoryShown=50;
+// Ticket P3-3: browse by memory lifecycle, not by legacy tags/domains.
+const MEMORY_GROUPS={all:{label:'全部'},recent:{label:'最近'},events:{label:'经历',events:true},archived:{label:'已归档',archived:true}};
 let eventItems=[];
 let pendingQuote=null;
 let quietEnabled=false;
@@ -760,9 +760,14 @@ function memoryTime(created){
   const date=new Date(created);if(!created||Number.isNaN(date.getTime()))return '';
   return `${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
 }
+function isRecentMemory(created){
+  const date=new Date(created);if(!created||Number.isNaN(date.getTime()))return false;
+  const cutoff=new Date();cutoff.setDate(cutoff.getDate()-30);cutoff.setHours(0,0,0,0);
+  return date>=cutoff;
+}
 function memoryMatches(item,query){
   if(!query)return true;
-  const fields=[item.title,...item.domain,...item.tags,item.why,item.body];
+  const fields=[item.title,item.why,item.body];
   return fields.some(text=>String(text||'').toLocaleLowerCase().includes(query));
 }
 async function loadEvents(){
@@ -865,7 +870,7 @@ function renderMemoryList(){
   if(MEMORY_GROUPS[memoryGroup].archived){renderArchivedList();return}
   const list=$('memory-list'),query=$('memory-search').value.trim().toLocaleLowerCase(),group=MEMORY_GROUPS[memoryGroup];list.replaceChildren();
   $('memory-heading').textContent=group.label;
-  const filtered=memoryItems.filter(item=>!item.source_record&&(!group.domains||item.domain.some(name=>group.domains.includes(name)))&&memoryMatches(item,query));
+  const filtered=memoryItems.filter(item=>!item.source_record&&(memoryGroup!=='recent'||isRecentMemory(item.created))&&memoryMatches(item,query));
   if(!filtered.length){const empty=document.createElement('p');empty.className='muted';empty.textContent=query?'没有匹配的记忆。':'还没有记忆';list.appendChild(empty)}
   let lastDay='';
   for(const item of filtered.slice(0,memoryShown)){
@@ -883,7 +888,7 @@ function renderMemoryList(){
   }
   if(filtered.length>memoryShown){const more=document.createElement('button');more.type='button';more.className='memory-entry more';more.textContent=`看更早的（还有 ${filtered.length-memoryShown} 条）`;more.onclick=()=>{memoryShown+=50;renderMemoryList()};list.appendChild(more)}
   const total=memoryItems.filter(item=>!item.source_record).length;
-  $('memory-count').textContent=group.domains||query?`显示 ${filtered.length} 条 · 共 ${total} 条记忆`:`共 ${total} 条记忆`;
+  $('memory-count').textContent=query?`显示 ${filtered.length} 条 · 共 ${total} 条记忆`:`共 ${total} 条记忆`;
 }
 // Ticket 363: memories folded into another one (or let fade by Ombre) are archived, not deleted; Lan can bring one back.
 async function renderArchivedList(){
@@ -1004,7 +1009,7 @@ function readMemory(item){
   const date=new Date(item.created);
   const facts=document.createElement('p');facts.className='memory-facts';
   facts.textContent=[Number.isNaN(date.getTime())?'':`记录于 ${date.getFullYear()}.${date.getMonth()+1}.${date.getDate()} ${memoryTime(item.created)}`,
-    item.domain.length?'分类 · '+item.domain.join(' / '):'',item.importance?`重要度 ${item.importance}`:'',item.recalled?`最近想起过 ${item.recalled} 次`:''].filter(Boolean).join('　');
+    item.importance?`重要度 ${item.importance}`:'',item.recalled?`最近想起过 ${item.recalled} 次`:''].filter(Boolean).join('　');
   if(item.surprise){
     const note=document.createElement('p');note.className='memory-surprise';note.textContent='惊喜内容不能编辑';
     detail.replaceChildren(eyebrow,heading,facts,note);return;

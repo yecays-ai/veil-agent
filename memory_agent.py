@@ -125,11 +125,15 @@ class Memory:
                 raise UserError('Brain 记忆启动失败：%s' % exc) from exc
             from brain_store import BrainStore
             self.store = BrainStore(store, cfg.id, self.brain_authority.db_path)
-            from brain_migrate import migrate_role
+            from brain_migrate import migrate_role, unhide_legacy_rows
             try:
                 migrate_role(store, cfg.id)
             except Exception as exc:
                 raise UserError('事件附账本迁移失败，已停止；原文件仍保留：%s' % exc) from exc
+            try:
+                unhide_legacy_rows(store, cfg.id)
+            except Exception as exc:
+                raise UserError('P3-3 可见性迁移失败，已停止：%s' % exc) from exc
         self.runtime_monitor = runtime_monitor
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
@@ -451,8 +455,11 @@ class Memory:
 
     def visible(self, candidates):
         with self.mutex:
-            hidden = {k for k, v in self.state['entries'].items() if v.get('hidden')}
-            hidden |= self.native_hidden
+            # Ticket P3-3: old state-side hidden marks no longer withhold a memory. Deletion
+            # lifecycle marks still do, so a memory awaiting erase cannot leak back into recall.
+            hidden = set(self.native_hidden)
+            hidden |= {key for key, row in self.state['entries'].items()
+                       if row.get('deleted') or row.get('delete_pending') or row.get('erased')}
             parents = set(self.state['sources'].values())
             return [(k, text) for k, text in candidates if k not in hidden and k not in parents]
 
@@ -748,8 +755,9 @@ class Memory:
 
     def hidden_ids(self):
         with self.mutex:
-            hidden = {key for key, row in self.state['entries'].items() if row.get('hidden')}
-            return hidden | self.native_hidden | set(self.state['sources'].values())
+            deleted = {key for key, row in self.state['entries'].items()
+                       if row.get('deleted') or row.get('delete_pending') or row.get('erased')}
+            return deleted | set(self.native_hidden) | set(self.state['sources'].values())
 
     def _notice_once(self, key, text):
         seen = getattr(self._turn_notice_local, 'seen', None)
@@ -769,9 +777,10 @@ class Memory:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
                     state = reader.state(memory_id)
-                allowed = bool(row and not row.get('is_hidden') and not row.get('dont_surface')
-                               and not row.get('is_tombstone')
-                               and not row.get('is_deleted') and row.get('type') != 'archived')
+                allowed = bool(row and not row.get('is_tombstone')
+                               and not row.get('is_deleted')
+                               and row.get('bucket') in ('dynamic', 'permanent')
+                               and row.get('type') != 'archived')
             except Exception:
                 allowed = None
         if allowed is not None:
@@ -790,7 +799,7 @@ class Memory:
                 metadata = {}
                 for line in lines[1:end]:
                     key, sep, value = line.partition(':')
-                    if sep and not line[:1].isspace() and key.strip() in {'dont_surface', 'tombstone', 'deleted_at', 'type'}:
+                    if sep and not line[:1].isspace() and key.strip() in {'tombstone', 'deleted_at', 'type'}:
                         key = key.strip()
                         if key in metadata:
                             break  # Ambiguous metadata cannot authorize cached content.
@@ -798,10 +807,10 @@ class Memory:
                 else:
                     booleans = {'true': True, 'yes': True, 'on': True, '1': True,
                                 'false': False, 'no': False, 'off': False, '0': False}
-                    flags = [metadata.get(key, 'false') for key in ('dont_surface', 'tombstone')]
-                    if all(flag in booleans for flag in flags):
+                    flag = metadata.get('tombstone', 'false')
+                    if flag in booleans:
                         deleted = metadata.get('deleted_at', '') not in ('', 'null', 'none', 'false')
-                        allowed = not (any(booleans[flag] for flag in flags) or deleted
+                        allowed = not (booleans[flag] or deleted
                                        or metadata.get('type') == 'archived')
         with self.mutex:
             if allowed is True:
@@ -902,12 +911,8 @@ class Memory:
                     return 'archived'
                 if row.get('is_tombstone'):
                     return 'tombstone'
-                if row.get('dont_surface'):
-                    return 'dont_surface'
                 if row.get('is_deleted'):
                     return 'deleted'
-                if row.get('is_hidden'):
-                    return 'hidden'
             except Exception:
                 pass
         raw = self.raw_content_for(memory_id)
@@ -920,21 +925,17 @@ class Memory:
             for line in lines[1:end]:
                 key, sep, value = line.partition(':')
                 if sep and not line[:1].isspace() and key.strip() in {
-                        'dont_surface', 'tombstone', 'deleted_at', 'type'}:
+                        'tombstone', 'deleted_at', 'type'}:
                     metadata[key.strip()] = self._frontmatter_scalar(value).casefold()
         if metadata.get('type') == 'archived':
             return 'archived'
         if metadata.get('tombstone') in ('true', 'yes', 'on', '1'):
             return 'tombstone'
-        if metadata.get('dont_surface') in ('true', 'yes', 'on', '1'):
-            return 'dont_surface'
         if metadata.get('deleted_at', '') not in ('', 'null', 'none', 'false'):
             return 'deleted'
         with self.mutex:
             if memory_id in set(self.state['sources'].values()):
                 return 'source'
-            if memory_id in {key for key, row in self.state['entries'].items() if row.get('hidden')}:
-                return 'hidden'
         return 'unavailable'
 
     def note_budget_dropped(self, keys, reason='final_trim'):
@@ -980,12 +981,27 @@ class Memory:
             try:
                 with BrainRead(self.brain_authority.db_path) as reader:
                     row = reader.memory(memory_id)
-                return bool(not row or row.get('is_hidden') or row.get('dont_surface')
-                            or row.get('is_tombstone') or row.get('is_deleted')
+                return bool(not row or row.get('is_tombstone') or row.get('is_deleted')
                             or row.get('type') == 'archived')
             except Exception:
                 return True
-        return memory_id in self.hidden_ids()
+        if memory_id in self.hidden_ids():
+            return True
+        raw = self.raw_content_for(memory_id)
+        if raw is None:
+            return True
+        lines = raw.splitlines()
+        end = next((i for i, line in enumerate(lines[1:], 1) if line.strip() == '---'), None)
+        if not lines or lines[0].strip() != '---' or end is None:
+            return False
+        metadata = {}
+        for line in lines[1:end]:
+            key, sep, value = line.partition(':')
+            if sep and not line[:1].isspace() and key.strip() in {'tombstone', 'deleted_at', 'type'}:
+                metadata[key.strip()] = self._frontmatter_scalar(value).casefold()
+        return (metadata.get('type') == 'archived'
+                or metadata.get('tombstone') in ('true', 'yes', 'on', '1')
+                or metadata.get('deleted_at', '') not in ('', 'null', 'none', 'false'))
 
     def record_native_update(self, memory_id, content):
         """Keep the local command index in step with a lossless native update."""

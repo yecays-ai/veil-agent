@@ -235,7 +235,7 @@ class RecallJudge:
             self._brain_rows = {}
             with BrainRead(authority.db_path) as reader:
                 rows = reader.connection.execute(
-                    'SELECT id,bucket,type,body,title,is_hidden,dont_surface,is_deleted,is_tombstone,'
+                    'SELECT id,bucket,type,body,title,is_deleted,is_tombstone,'
                     'source_tool FROM memories WHERE is_deleted=0 AND is_tombstone=0')
                 for row in rows:
                     item = dict(row)
@@ -270,15 +270,15 @@ class RecallJudge:
 
     def _eligible(self, key):
         """The memory's front matter when Peter may be shown it, else None. A cheap read of the file first; the program's own
-        visibility check (hidden on the memory page, sources, archived, dont_surface) has the last word."""
+        visibility check (sources, archived, deleted, tombstone) has the last word."""
         if getattr(self.memory, 'brain_authority', None) is not None:
             self._brain_rows = getattr(self, '_brain_rows', None) or {}
             row = self._brain_rows.get(key)
             if row is None:
                 return None
             if (row.get('type') in SKIPPED_TYPES + ('archived',) or row.get('bucket') not in ('dynamic', 'permanent')
-                    or row.get('is_hidden') or row.get('dont_surface') or row.get('is_deleted')
-                    or row.get('is_tombstone') or (row.get('source_tool') or '').casefold() == 'letter'):
+                    or row.get('is_deleted') or row.get('is_tombstone')
+                    or (row.get('source_tool') or '').casefold() == 'letter'):
                 return None
             return {'body': row.get('body') or '', 'title': row.get('title') or ''}
         from recall_rotation import front_matter
@@ -287,7 +287,7 @@ class RecallJudge:
             return None
         meta = front_matter(raw)
         head = raw.partition('\n---\n')[0]
-        if (meta.get('type') in SKIPPED_TYPES + ('archived',) or re.search(r'^(digested|dont_surface|tombstone):\s*true', head, re.M)
+        if (meta.get('type') in SKIPPED_TYPES + ('archived',) or re.search(r'^tombstone:\s*true', head, re.M)
                 or re.search(r'^deleted_at:', head, re.M) or re.search(r'^source_tool:\s*letter', head, re.M)):
             return None   # what Ombre's automatic search never offers either
         if not self.memory.refresh_visibility(key) or not self.memory.visible([(key, '')]):

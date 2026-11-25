@@ -76,7 +76,7 @@ SEARCH = SimpleNamespace(name='breath_search', inputSchema={
 
 DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
                'breath_search to find a known memory; use trace for edits and the catalog/timeline tools '
-               'for library status. Every hidden memory is blocked by the program. ')
+               'for library status. Archived/deleted memories are withheld by the program. ')
 TRACE = SimpleNamespace(name='trace', inputSchema={
     'type': 'object', 'required': ['bucket_id'], 'additionalProperties': False,
     'properties': {
@@ -101,11 +101,11 @@ TRACE = SimpleNamespace(name='trace', inputSchema={
             'Archive this duplicate memory into another shown memory.'},
         'restore': {'type': 'boolean', 'description':
             'Bring an archived memory back into normal recall.'},
+        'archive': {'type': 'boolean', 'description':
+            'Move this memory to the archived list without deleting it.'},
         'delete': {'type': 'boolean', 'description':
             'Ask Lan to delete this memory; during autonomous activity it becomes a pending request.'},
         'delete_reason': {'type': 'string', 'description': 'Why this memory should be deleted.'},
-        'dont_surface': {'type': 'boolean', 'description':
-            'Hide from automatic recall (page-visible; restored with restore=true).'},
     }}, description=(
         'Edit one existing memory by its exact bucket_id; never guess an ID. content replaces the whole body; '
         'or old_str/new_str replaces one exact passage; not both. title renames it. importance 1-10 controls '
@@ -380,8 +380,6 @@ class NativeMemoryTools:
                     entries = reader.panel_entries(limit=10000)
                     records = {}
                     for entry in entries:
-                        if entry['hidden'] and not include_hidden:
-                            continue
                         if entry['bucket'] not in ('dynamic', 'permanent'):
                             continue
                         records[entry['memory_id']] = (entry['title'], reader.raw(entry['memory_id']) or '')
@@ -425,9 +423,6 @@ class NativeMemoryTools:
                 if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', key) or (key in hidden and not include_hidden):
                     continue
                 if meta.get('deleted_at', '').casefold() not in ('', 'null', 'none', 'false'):
-                    continue
-                if (not include_hidden
-                        and meta.get('dont_surface', '').casefold() not in ('', '0', 'false', 'null', 'none')):
                     continue
                 if self.memory.state['entries'].get(key, {}).get('deleted'):
                     continue
@@ -636,7 +631,6 @@ class NativeMemoryTools:
             return None
 
     def _pinned_ids(self):
-        # Hidden (dont_surface) pinned memories still occupy a pin slot: hiding one must not free it.
         if getattr(self.memory, 'brain_authority', None) is not None:
             from brain_read import BrainRead
             with BrainRead(self.memory.brain_authority.db_path) as reader:
@@ -650,7 +644,7 @@ class NativeMemoryTools:
     def library_stats(self, records=None):
         """Ticket 427: one status line Peter can ask for, replacing Ombre's pulse.
 
-        Counts what Lan may see plus how much is archived and hidden, the newest write and the
+        Counts what Lan may see plus how much is archived, the newest write and the
         on-disk size. It reads the vault directly, so it costs no model call and no Ombre round trip.
         """
         records = self._visible_records() if records is None else records
@@ -661,18 +655,13 @@ class NativeMemoryTools:
             if stamp is not None:
                 stamps.append(stamp)
         archived = 0
-        hidden = 0
         if getattr(self.memory, 'brain_authority', None) is not None:
             from brain_read import BrainRead
             try:
                 with BrainRead(self.memory.brain_authority.db_path) as reader:
                     archived = len(reader.archived(limit=10000))
-                    row = reader.connection.execute(
-                        'SELECT COUNT(*) FROM memories WHERE is_deleted=0 AND is_tombstone=0 '
-                        'AND (is_hidden=1 OR dont_surface=1)').fetchone()
-                    hidden = int(row[0] if row else 0)
             except Exception:
-                archived = hidden = 0
+                archived = 0
         else:
             vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
             try:
@@ -681,10 +670,6 @@ class NativeMemoryTools:
                         archived += 1
             except OSError:
                 pass
-            try:
-                hidden = len(self.memory.hidden_ids())
-            except Exception:
-                hidden = 0
         size = sum(len(raw.encode('utf-8')) for _, raw in records.values())
         newest = max(stamps).strftime('%Y-%m-%d') if stamps else ''
         parts = [f'{len(records)} memories']
@@ -692,8 +677,6 @@ class NativeMemoryTools:
             parts.append(f'{events} events')
         if archived:
             parts.append(f'{archived} archived')
-        if hidden:
-            parts.append(f'{hidden} hidden')
         if newest:
             parts.append(f'newest {newest}')
         if size:
@@ -799,7 +782,7 @@ class NativeMemoryTools:
             return 'This memory does not exist or is hidden.', '被拒绝', str(memory_id or 'memory_history')
         summary = self.memory.title_for(memory_id)
         if not summary:
-            return 'This memory does not exist or is hidden.', '被拒绝', memory_id
+            return 'This memory does not exist, is archived, or is unavailable.', '被拒绝', memory_id
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id]
         if not rows:
@@ -826,7 +809,7 @@ class NativeMemoryTools:
         if any(args.get(key) not in (None, False, '', [], {}) for key in banned):
             return 'This delete operation or argument combination is not available. Use the supported delete flow and its required confirmation.', '被拒绝', str(summary or 'trace')
         if not summary or self.memory.is_hidden(memory_id):
-            return 'The target memory does not exist or is hidden.', '被拒绝', str(memory_id or 'trace')
+            return 'The target memory does not exist, is archived, or is unavailable.', '被拒绝', str(memory_id or 'trace')
         delete = args.get('delete', False)
         if type(delete) is not bool:
             return 'delete must be a Boolean.', '被拒绝', summary
@@ -873,11 +856,6 @@ class NativeMemoryTools:
             if memory_id not in already and len(already) >= PINNED_LIMIT:
                 return (f'{PINNED_LIMIT} memories are already pinned. Unpin one first '
                         '(trace pinned=0 with importance 1-10) before pinning another.'), '被拒绝', summary
-        hide = args.get('dont_surface')
-        if (hide is True or hide == 1 or (isinstance(hide, str) and hide.strip().casefold() in ('1', 'true', 'yes'))) \
-                and memory_id in self._pinned_ids() and args.get('pinned') not in (0, False):
-            return ('This memory is pinned. Unpin it first (trace pinned=0 with importance 1-10) '
-                    'before hiding it from recall.'), '被拒绝', summary
         if delete and self.autonomy_mode:
             return self._queue_delete(memory_id, summary, args, old)
         if delete and (approval is None or approval(
@@ -1032,7 +1010,7 @@ class NativeMemoryTools:
         try:
             self.memory.call('trace', {'bucket_id': memory_id, 'delete': True})
         except Exception:
-            return 'The deletion was not confirmed; this memory remains hidden. Check its state before retrying with /delete.'
+            return 'The deletion was not confirmed; this memory remains unavailable. Check its state before retrying with /delete.'
         entry.pop('delete_pending', None)
         self.memory.persist()
         self.memory.erase(memory_id)
@@ -1042,9 +1020,9 @@ class NativeMemoryTools:
 
     def _editable(self, memory_id):
         """A memory may be extended only if Peter was shown it: his own search results, or an
-        automatic recall (read fresh from disk now). Other IDs, hidden or erased ones stay refused."""
+        automatic recall (read fresh from disk now). Other IDs, archived or erased ones stay refused."""
         shown = memory_id in self.search_results or memory_id in getattr(self.memory, 'surfaced_ids', {})
-        # Visibility is re-read from disk every time: a memory hidden or archived after it was shown stays refused.
+        # Visibility is re-read from disk every time: a memory archived after it was shown stays refused.
         if not shown or not self.memory.refresh_visibility(memory_id):
             return False
         if memory_id in self.search_results:
@@ -1079,7 +1057,7 @@ class NativeMemoryTools:
         except Exception:
             return []  # Not finding candidates must never block a save.
         found = []
-        # Ticket 384: same order as automatic recall (381): drop archived and hidden hits first, then keep three.
+        # Ticket 384: same order as automatic recall (381): drop archived/tombstoned hits first, then keep three.
         for key, _ in self.memory.context_visible(ordinary_hits(text, limit=3 + SEARCH_SPARE_HITS))[:3]:
             body = self.memory.content_for(key, refresh=True)
             if key in exclude or body is None or not self.memory.refresh_visibility(key):
@@ -1181,7 +1159,7 @@ class NativeMemoryTools:
                     return ('The stage is saved but not yet committed; the program will finish it. '
                             'Do not save it again.'), '出错', summary
                 if saved.get('locked'):
-                    return ('Lan locked this memory or it is hidden, so its story was not rewritten; '
+                    return ('Lan locked this memory or it is archived, so its story was not rewritten; '
                             'the stage is saved.'), '成功', summary
                 if not saved.get('changed'):
                     return ('The stage is saved; the story projection will be retried later.'), '出错', summary
@@ -1279,7 +1257,7 @@ class NativeMemoryTools:
             return 'target_id must be a memory you were shown: an automatic recall or a breath_search result from this conversation. Search again and use its ID.', '被拒绝', summary
         previous = self.search_results[target_id]
         if not self.memory.visible([(target_id, previous)]):
-            return 'This memory is hidden or unavailable; no update was made.', '被拒绝', summary
+            return 'This memory is archived or unavailable; no update was made.', '被拒绝', summary
         merge_ids = args.get('merge_ids', [])
         if (not isinstance(merge_ids, list) or any(not isinstance(key, str) for key in merge_ids)
                 or len(set(merge_ids)) != len(merge_ids)):
@@ -1289,7 +1267,7 @@ class NativeMemoryTools:
             return 'Every merge_id must be a memory you were shown (automatic recall or breath_search in this conversation). Search again before retrying.', '被拒绝', summary
         if (source_ids
                 and not self.memory.visible([(key, self.search_results[key]) for key in source_ids])):
-            return 'A memory selected for merging is hidden or unavailable; no update was made.', '被拒绝', summary
+            return 'A memory selected for merging is archived or unavailable; no update was made.', '被拒绝', summary
         refusal = self._locked_refusal([target_id, *source_ids])
         if refusal:
             return refusal, '被拒绝', summary

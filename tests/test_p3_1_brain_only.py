@@ -112,11 +112,11 @@ class BrainOnlyTests(unittest.TestCase):
         found = self.memory.search_candidates('lantern', 5)
         self.assertIn(memory_id, found)
 
-    def test_hidden_delete_request_does_not_leak_into_model_notes(self):
+    def test_archived_delete_request_does_not_leak_into_model_notes(self):
         memory_id = self.memory.call('hold', {'content': 'hidden secret', 'title': 'Hidden secret'}).split('→')[1]
         connection = sqlite3.connect(str(self.db))
         try:
-            connection.execute('UPDATE memories SET is_hidden=1 WHERE id=?', (memory_id,))
+            connection.execute("UPDATE memories SET bucket='archive', type='archived' WHERE id=?", (memory_id,))
             connection.commit()
         finally:
             connection.close()
@@ -159,19 +159,19 @@ class BrainOnlyTests(unittest.TestCase):
         self.assertEqual(rows[-1]['status'], 'rejected')
         self.assertIsNotNone(self.memory.raw_content_for(memory_id))
 
-    def test_recall_judge_scans_brain_visibility(self):
+    def test_recall_judge_scans_brain_visibility_and_ignores_legacy_hidden(self):
         visible = self.memory.call('hold', {'content': 'visible blue lamp', 'title': 'Lamp'}).split('→')[1]
-        hidden = self.memory.call('hold', {'content': 'hidden blue lamp', 'title': 'Hidden'}).split('→')[1]
+        legacy = self.memory.call('hold', {'content': 'hidden blue lamp', 'title': 'Hidden'}).split('→')[1]
         connection = sqlite3.connect(str(self.db))
         try:
-            connection.execute('UPDATE memories SET is_hidden=1 WHERE id=?', (hidden,))
+            connection.execute('UPDATE memories SET is_hidden=1 WHERE id=?', (legacy,))
             connection.commit()
         finally:
             connection.close()
         judge = RecallJudge(self.memory, self.cfg, Mock(), load_settings({}))
         judge._scan()
         self.assertIsNotNone(judge._eligible(visible))
-        self.assertIsNone(judge._eligible(hidden))
+        self.assertIsNotNone(judge._eligible(legacy))
 
 
 class BrainInitializationTests(unittest.TestCase):

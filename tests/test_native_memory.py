@@ -90,7 +90,7 @@ class NativeMemoryTests(unittest.TestCase):
         native.invoke('memory_read', {'memory_id': ids[0]})
         self.assertEqual(self.backend.calls, [])
 
-    def test_catalog_and_read_block_hidden_deleted_private_and_cross_role(self):
+    def test_catalog_and_read_keep_hidden_legacy_rows_but_block_deleted_private_and_cross_role(self):
         native = self.tools.native
         native.max_result_bytes = 8192
         vault = self.store.root / self.cfg.id / 'memory'
@@ -100,9 +100,13 @@ class NativeMemoryTests(unittest.TestCase):
             path = vault / folder / f'{key}.md'
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f'---\nid: {key}\ntitle: {key}\n{metadata}---\nprivate', encoding='utf-8')
+        # A legacy state-side hidden mark is not a visibility rule after P3-3.
         self.memory.state['entries']['visible'] = {'hidden': True}
-        self.assertEqual(json.loads(native.invoke('memory_catalog', {})[0])['items'], [])
-        for key in ('visible', 'secret', 'deleted', 'letter', 'source', '../other'):
+        self.assertEqual({item['memory_id'] for item in json.loads(native.invoke('memory_catalog', {})[0])['items']},
+                         {'visible', 'secret'})
+        for key in ('visible', 'secret'):
+            self.assertEqual(native.invoke('memory_read', {'memory_id': key})[1], '成功')
+        for key in ('deleted', 'letter', 'source', '../other'):
             self.assertEqual(native.invoke('memory_read', {'memory_id': key})[1], '被拒绝')
         outside = self.store.root / 'other' / 'memory' / 'dynamic'
         outside.mkdir(parents=True)
@@ -431,8 +435,9 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(saved['tool_events'][-1]['target'], 'mem001')
         self.assertEqual(saved['tool_events'][-1]['state'], '经检查确认')
 
-    def test_hidden_memory_cannot_be_traced_or_read_from_history(self):
-        self.memory.state['entries']['mem001'] = {'title': 'Old title', 'hidden': True}
+    def test_archived_memory_cannot_be_traced_or_read_from_history(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace(
+            'tags: [keep]', 'tags: [keep]\ntype: archived'), encoding='utf-8')
         result, state, _ = self.call('trace', {'bucket_id': 'mem001', 'content': 'changed'})
         self.assertEqual(state, '被拒绝')
         self.assertEqual(self.call('memory_history', {'memory_id': 'mem001'})[1], '被拒绝')
@@ -445,13 +450,13 @@ class OmbreToolGuardTests(unittest.TestCase):
             'why_remembered': 'fictional reason',
         })
         self.path.write_text(self.path.read_text(encoding='utf-8').replace(
-            'tags: [keep]', 'tags: [keep]\ndont_surface: true'), encoding='utf-8')
+            'tags: [keep]', 'tags: [keep]\ntype: archived'), encoding='utf-8')
 
         hidden, state, _ = self.call('memory_history', {'memory_id': 'mem001'})
         self.assertEqual(state, '被拒绝')
         self.assertNotIn('FICTIONAL_HIDDEN_HISTORY', hidden)
 
-        self.path.write_text(self.path.read_text(encoding='utf-8').replace('dont_surface: true\n', ''),
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('type: archived\n', ''),
                              encoding='utf-8')
         restored, state, _ = self.call('memory_history', {'memory_id': 'mem001'})
         self.assertEqual(state, '成功')
@@ -719,16 +724,16 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertEqual(state, '被拒绝')
         self.assertNotIn('does-not-exist', self.memory.surfaced_ids)
 
-    def test_a_refused_read_of_a_hidden_memory_does_not_make_it_editable(self):
-        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
+    def test_a_refused_read_of_an_archived_memory_does_not_make_it_editable(self):
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ntype: archived'),
                              encoding='utf-8')
         _, state, _ = self.call('memory_read', {'memory_id': 'mem001'})
         self.assertEqual(state, '被拒绝')
         self.assertNotIn('mem001', self.memory.surfaced_ids)
 
-    def test_hold_target_refuses_surfaced_memory_that_became_hidden(self):
+    def test_hold_target_refuses_surfaced_memory_that_became_archived(self):
         self.memory.mark_surfaced(['mem001'])
-        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ndont_surface: true'),
+        self.path.write_text(self.path.read_text(encoding='utf-8').replace('tags: [keep]', 'tags: [keep]\ntype: archived'),
                              encoding='utf-8')
         result, state, _ = self.call('hold', {'target_id': 'mem001', 'content': 'added detail'})
         self.assertEqual(state, '被拒绝')

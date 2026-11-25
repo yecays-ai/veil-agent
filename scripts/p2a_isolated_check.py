@@ -49,7 +49,7 @@ def main(argv=None):
                                              {'body': 'second body'}, embedder=vector,
                                              operation_reason='isolated check')
         checks['update'] = updated
-        brain_writer.set_state(connection, created['memory_id'], hidden=True, locked=True)
+        brain_writer.set_state(connection, created['memory_id'], locked=True)
         second = brain_writer.create_memory(connection, {'body': 'to delete'}, embedder=None)
         checks['pending'] = second
         checks['retry'] = brain_writer.retry_pending_vectors(connection, vector)

@@ -28,7 +28,7 @@ class BrainReadTests(unittest.TestCase):
             connection, {'body': 'old body', 'title': 'Title'}, embedder=lambda _: vector())
         brain_writer.update_memory(connection, self.created['memory_id'], {'body': 'new body'},
                                    embedder=lambda _: vector())
-        brain_writer.set_state(connection, self.created['memory_id'], hidden=True, locked=True)
+        brain_writer.set_state(connection, self.created['memory_id'], locked=True)
         self.target = brain_writer.create_memory(connection, {'body': 'target'}, embedder=lambda _: vector())
         connection.close()
 
@@ -37,7 +37,7 @@ class BrainReadTests(unittest.TestCase):
             entry = next(item for item in reader.panel_entries()
                          if item['memory_id'] == self.created['memory_id'])
             self.assertEqual(entry['memory_id'], self.created['memory_id'])
-            self.assertTrue(entry['hidden'])
+            self.assertNotIn('hidden', entry)
             self.assertTrue(entry['locked'])
             self.assertEqual(entry['versions'], 1)
             self.assertEqual(reader.content(self.created['memory_id']), 'new body')

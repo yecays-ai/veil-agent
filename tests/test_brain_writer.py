@@ -64,7 +64,7 @@ class WriterTests(unittest.TestCase):
             created = brain_writer.create_memory(connection, {'body': 'secret body', 'title': 'S'},
                                                  embedder=lambda _: vector())
             # Trigger a state change so a sidecar_event row exists before hard delete.
-            brain_writer.set_state(connection, created['memory_id'], hidden=True)
+            brain_writer.set_state(connection, created['memory_id'], locked=True)
             self.assertGreater(
                 connection.execute('SELECT COUNT(*) FROM sidecar_events').fetchone()[0], 0)
             brain_writer.hard_delete(connection, created['memory_id'], 'test reason')
@@ -85,12 +85,12 @@ class WriterTests(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_hidden_and_locked_do_not_delete_and_locked_is_recorded(self):
+    def test_locked_state_is_recorded_without_deleting(self):
         connection = self.connect()
         try:
             created = brain_writer.create_memory(connection, {'body': 'body'}, embedder=lambda _: vector())
-            brain_writer.set_state(connection, created['memory_id'], hidden=True, locked=True)
-            self.assertEqual(connection.execute('SELECT is_hidden FROM memories').fetchone()[0], 1)
+            brain_writer.set_state(connection, created['memory_id'], locked=True)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM memories').fetchone()[0], 1)
             kinds = [row[0] for row in connection.execute('SELECT kind FROM sidecar_events')]
             self.assertIn('locked', kinds)
         finally:

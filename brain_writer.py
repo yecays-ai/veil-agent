@@ -237,7 +237,7 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
             'memory_id': memory_id, 'vector_state': state}
 
 
-def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None, deleted=None,
+def set_state(connection, memory_id, *, locked=None, archived=None, deleted=None,
               reason=''):
     """State changes keep the existing visibility contract; no blanket 'unsearchable'."""
     ensure_schema(connection)
@@ -247,9 +247,6 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
         raise KeyError(memory_id)
     try:
         connection.execute('BEGIN IMMEDIATE')
-        if hidden is not None:
-            connection.execute('UPDATE memories SET is_hidden=? WHERE id=?', (int(bool(hidden)), memory_id))
-            _sidecar(connection, memory_id, 'hidden' if hidden else 'shown')
         if deleted is not None:
             connection.execute('UPDATE memories SET is_deleted=?,deleted_at=? WHERE id=?',
                                (int(bool(deleted)), now() if deleted else None, memory_id))
@@ -265,7 +262,7 @@ def set_state(connection, memory_id, *, hidden=None, locked=None, archived=None,
                 'ON CONFLICT(memory_id) DO UPDATE SET locked=excluded.locked',
                 (memory_id, int(bool(locked))))
             _sidecar(connection, memory_id, 'locked' if locked else 'unlocked', raw={'locked': bool(locked)})
-        _journal(connection, 'state', memory_id, {'hidden': hidden, 'locked': locked,
+        _journal(connection, 'state', memory_id, {'locked': locked,
                                                    'archived': archived, 'deleted': deleted,
                                                    'reason_hash': _sha(reason)[:16]}, 'saved')
         connection.commit()

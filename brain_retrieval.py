@@ -87,9 +87,8 @@ class BrainIndex:
         try:
             rows = connection.execute(
                 'SELECT id, title, body, created, importance, bucket, type, is_tombstone, '
-                'is_deleted, is_hidden, dont_surface FROM memories '
-                'WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0 AND is_hidden=0 '
-                'AND (dont_surface IS NULL OR dont_surface=0)',
+                'is_deleted FROM memories '
+                'WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0',
                 VISIBLE_BUCKETS).fetchall()
             visible = [row for row in rows if (row[6] or '') not in HIDDEN_TYPES]
             vectors = {}

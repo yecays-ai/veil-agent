@@ -125,7 +125,7 @@ class RecallJudgeTests(unittest.TestCase):
 
     def test_without_the_judge_the_weak_ombre_hit_is_recalled_as_before(self):
         refs, _ = self.recall(self.memory(judge=False))
-        self.assertEqual(['junk'], refs)
+        self.assertEqual(['hidden', 'junk'], refs)
 
     def test_it_may_pick_every_candidate_it_judges_relevant(self):
         """Ticket 419: no hard cap of two; the whole-round budget decides how many fit."""
@@ -144,11 +144,13 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertEqual([], memory.judge.last_choice['picked'])
         self.assertEqual(0, memory.judge.failures)
 
-    def test_hidden_archived_digested_and_plan_memories_never_reach_the_judge(self):
+    def test_legacy_hidden_and_digested_reach_the_judge_but_archived_and_plan_do_not(self):
         memory = self.memory()
         self.recall(memory)
         sent = self.model.calls[0][0][1]['content']
-        for banned in ('Archived plants', 'Hidden plants', 'Digested plants', 'A plan'):
+        self.assertIn('Hidden plants', sent)
+        self.assertIn('Digested plants', sent)
+        for banned in ('Archived plants', 'A plan'):
             self.assertNotIn(banned, sent)
         self.assertIn('Kills plants', sent)
 
@@ -187,7 +189,7 @@ class RecallJudgeTests(unittest.TestCase):
         started = time.monotonic()
         refs, _ = self.recall(memory)
         self.assertLess(time.monotonic() - started, limit)
-        self.assertEqual(['junk'], refs)   # today's recall
+        self.assertEqual(['hidden', 'junk'], refs)   # today's recall
         self.assertEqual('failed', memory.judge.last['kind'])
         self.assertEqual(reason, memory.judge.last['reason'])
 
@@ -252,12 +254,12 @@ class RecallJudgeTests(unittest.TestCase):
         now = [1000.0]
         memory.judge.clock = lambda: now[0]
         for _ in range(3):
-            self.assertEqual(['junk'], self.recall(memory)[0])
+            self.assertEqual(['hidden', 'junk'], self.recall(memory)[0])
         self.assertEqual(3, len(self.model.calls))
         self.assertTrue(memory.judge.breaker_open())
         calls = len(self.model.calls)
         started = time.monotonic()
-        self.assertEqual(['junk'], self.recall(memory)[0])
+        self.assertEqual(['hidden', 'junk'], self.recall(memory)[0])
         self.assertLess(time.monotonic() - started, 0.3)
         self.assertEqual(calls, len(self.model.calls))   # paused: no request, no delay
         now[0] += 61
@@ -272,7 +274,7 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertEqual(['cactus'], self.recall(memory)[0])
         embeds, calls = self.embedder.calls, len(self.model.calls)
         memory.judge.set_enabled(False)
-        self.assertEqual(['junk'], self.recall(memory)[0])
+        self.assertEqual(['hidden', 'junk'], self.recall(memory)[0])
         self.assertEqual((embeds, calls), (self.embedder.calls, len(self.model.calls)))
         self.assertFalse(memory.judge.status()['enabled'])
         memory.judge.set_enabled(True)

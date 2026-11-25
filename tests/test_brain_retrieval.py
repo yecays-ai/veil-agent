@@ -101,11 +101,13 @@ class BrainRetrievalTests(unittest.TestCase):
         self.assertEqual(meta['ids'][0], 'blue')
         self.assertIn('[bucket_id:blue]', text)
 
-    def test_hidden_tombstone_and_archived_never_enter_results(self):
+    def test_hidden_is_visible_but_tombstone_and_archived_never_enter_results(self):
         text, _ = self.search('蓝色 吵架 墓碑 隐藏 归档 记忆')
         self.assertIn('[bucket_id:blue]', text)
         self.assertIn('[bucket_id:fight]', text)
-        for forbidden in ('dead', 'hidden', 'old'):
+        # P3-3: legacy dont_surface no longer withholds a memory.
+        self.assertIn('[bucket_id:hidden]', text)
+        for forbidden in ('dead', 'old'):
             self.assertNotIn('[bucket_id:%s]' % forbidden, text)
 
     def test_render_keeps_the_ombre_contract(self):
@@ -129,7 +131,7 @@ class BrainRetrievalTests(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
-        second, _ = self.search('颜色')
+        second, _ = self.search('colour')
         self.assertIn('[bucket_id:new]', second)
 
     def test_drift_section_is_present_when_nothing_matches(self):
@@ -143,7 +145,6 @@ class BrainRetrievalTests(unittest.TestCase):
         drift = text.split(brain_retrieval.DRIFT_MARK, 1)[1].split('=== ombre:result-ids ===')[0]
         self.assertRegex(drift, r'\[bucket_id:[a-z0-9]+\]')
         self.assertNotIn('[bucket_id:dead]', drift)
-        self.assertNotIn('[bucket_id:hidden]', drift)
 
     def test_brain_embedding_goes_through_the_budget_lifecycle(self):
         import shutil
