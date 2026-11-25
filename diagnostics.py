@@ -60,7 +60,7 @@ GROUP_LABELS = {
     'other': '未分组的新工具',
 }
 MEMORY_TOOLS = {
-    'hold', 'breath_search', 'trace', 'dream', 'memory_read', 'memory_catalog',
+    'hold', 'breath_search', 'trace', 'memory_read', 'memory_catalog',
     'memory_history', 'memory_timeline',
 }
 DENIAL_SUBCLASS = {

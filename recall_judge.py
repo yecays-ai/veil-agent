@@ -144,6 +144,7 @@ class RecallJudge:
         self.last_choice = {'status': 'skipped', 'candidates': 0, 'picked': [], 'vector': []}
         self._embedder = None
         self._files = {}
+        self._brain_rows = None
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='recall-judge')
 
@@ -226,7 +227,23 @@ class RecallJudge:
 
     def _scan(self):
         """One pass over the library per turn: {memory id: file} for what is not in the archive folder, so the judge does
-        not re-scan the whole folder for every candidate."""
+        not re-scan the whole folder for every candidate. Under Brain authority the rows come from brain.db."""
+        authority = getattr(self.memory, 'brain_authority', None)
+        if authority is not None:
+            from brain_read import BrainRead
+            index = {}
+            self._brain_rows = {}
+            with BrainRead(authority.db_path) as reader:
+                rows = reader.connection.execute(
+                    'SELECT id,bucket,type,body,title,is_hidden,dont_surface,is_deleted,is_tombstone,'
+                    'source_tool FROM memories WHERE is_deleted=0 AND is_tombstone=0')
+                for row in rows:
+                    item = dict(row)
+                    self._brain_rows = getattr(self, '_brain_rows', None) or {}
+                    self._brain_rows[item['id']] = item
+                    index[item['id']] = item['id']
+            return index
+        self._brain_rows = None
         from memory_agent import vault_path
         vault = vault_path(self.memory.store.root, self.memory.cfg.id)
         index = {}
@@ -241,6 +258,8 @@ class RecallJudge:
         return index
 
     def _raw(self, key):
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            return self.memory.raw_content_for(key)
         path = self._files.get(key)
         if path is None:
             return None
@@ -252,6 +271,16 @@ class RecallJudge:
     def _eligible(self, key):
         """The memory's front matter when Peter may be shown it, else None. A cheap read of the file first; the program's own
         visibility check (hidden on the memory page, sources, archived, dont_surface) has the last word."""
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            self._brain_rows = getattr(self, '_brain_rows', None) or {}
+            row = self._brain_rows.get(key)
+            if row is None:
+                return None
+            if (row.get('type') in SKIPPED_TYPES + ('archived',) or row.get('bucket') not in ('dynamic', 'permanent')
+                    or row.get('is_hidden') or row.get('dont_surface') or row.get('is_deleted')
+                    or row.get('is_tombstone') or (row.get('source_tool') or '').casefold() == 'letter'):
+                return None
+            return {'body': row.get('body') or '', 'title': row.get('title') or ''}
         from recall_rotation import front_matter
         raw = self._raw(key)
         if raw is None:

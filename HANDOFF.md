@@ -1,18 +1,23 @@
 # HANDOFF
 
-## P3-0 配置持久化与前置准备（2026-11-25，本 PR，待复审）
+## P3-1 启动解耦 + Brain-only 读路径（2026-11-25，PR #442，待复审/合并）
 
-- 已完成：将 P2 正式切换的 Brain 接管配置提交进 main + 回归测试；P3 方案与 P3-0..P3-4 工单；正式库预检在线备份/导出/manifest/离线 restore drill；切换期误删记忆定点恢复（Lan 已批准，报告在仓库外）。
-- 正式状态：P2 正式接管仍有效；Ombre 18011 仍运行仅作临时回退；P3-1 未启动。
-- 未做：未自行合并 PR；未停止/重启正式 Peter；未启动 P3-1；未删除正式数据。
-- 下一步第一步：等 Lan/复审确认 P3-0 PR；P2 正式体验通过后再开 P3-1。
-- 注意：P2 正式体验未通过前不得进入 P3-1；后续测试只用新增专用测试记忆，不得用已有正式记忆做修改/删除测试。
-- 回退：P3-0 只改配置/文档/测试，git revert 即可；正式配置在合并前不受影响。
+- 已完成：启动链移除 `open_ombre`；Memory 可在无 backend 下运行；本地 trace schema、删除 dream；判官/事件缓存/最近创建/库统计/召回元数据改 Brain；BM25-only/空候选降级；pinned/importance 落库并同步 raw front matter；自主删除申请改结构化状态；Brain 写入失败上报 runtime_monitor；无 Brain authority 时明确提示并跳过记忆。
+- 首次启动：全新角色自动初始化空 brain.db（完整 schema/事件表/digest，跨进程锁）；已有角色缺 brain.db 或库损坏时明确报错，不创建空库掩盖丢失。
+- 测试：`test_p3_1_brain_only` 12 项（含全新初始化/缺库拒建/损坏库不替换）、native/authority/chat/recall/event/brain/web 相关套件通过；隔离实例验收通过；CI 四组 Windows/Linux 全绿，scanner/audit 通过。
+- 复审：CodeRabbit 5 条实质意见已修；PR #442 待复审/合并，未自行合并。
+- 正式状态：P3-0 已合并并完成维护窗口；正式 Peter 当前仍按 P2 方式运行（Ombre 18011 仍在，仅回退）；本单未部署、未停正式进程、未改正式数据。
+- 未做：未启动 P3-2；未做正式环境 1–2 天观察。
+- 下一步第一步：等 PR #442 复审/合并；合并后部署并确认无 Ombre 启动，再做正式观察。
+- 注意：P3-1 合并前不要停止正式 Ombre；正式测试只用新增专用测试记忆。
+
+## P3-0 配置持久化与前置准备（已合并）
+
+- #441 已合并；main 配置持久化生效；维护窗口已完成更新/重启/技术验收，正式库 digest ok、0 tombstone、页面/事件 API 正常。
+- P2 正式体验已由 Lan 确认通过；P3-0 误删记忆已定点恢复，报告在仓库外。
 
 ## P2 正式接管（2026-11-25）
 
 - 已执行：正式 Peter 停止 → 最终同步 → 一致性备份 + 恢复验证 → 事件完整数据迁移 → P2-C 标签治理 → 最终对账 → 启用 Brain 唯一读写权威 → 启动/重启验证 → Ombre 回退导出验证。
 - 正式运行状态：Brain 唯一写入权威、shadow 关闭、retrieval=brain；Ombre 18011 仍运行，仅回退。
-- 数据：288 记忆 / 286 版本 / 249 向量 / 73 事件 / 74 阶段 / 171 sidecar；tags=0、pending=0；原有 287 个 ID 无缺失。
-- 备份：4 份 P2 一致性备份（迁移前/事件迁移后/启用前/最终）在仓库外备份目录。
 - 回退：按 `docs/tickets/p2/P2-formal-cutover-report.md` 第 6 节“当前 Brain 同 ID 导出 → Ombre 读取”，不要用旧备份直接覆盖当前 Brain。

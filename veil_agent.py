@@ -6587,8 +6587,14 @@ def models_available(cfg):
 
 
 def memory_available(cfg):
-    """Model-dependent Ombre must not start while Lan still has to choose an API model."""
+    """Model-dependent memory must not start while Lan still has to choose an API model."""
     return bool((getattr(cfg, 'memory', None) or {}).get('enabled')) and models_available(cfg)
+
+
+def brain_authority_ready(cfg):
+    """P3-1: memory now requires the Brain write authority instead of an Ombre backend."""
+    brain = ((getattr(cfg, 'memory', None) or {}).get('brain') or {})
+    return isinstance(brain, dict) and brain.get('write_authority') is True
 
 
 def make_voice(root, cfg, store, budget):
@@ -6910,17 +6916,19 @@ def main():
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
+                    if use_memory and not brain_authority_ready(cfg):
+                        print('记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
+                        use_memory = False
                     if use_memory:
-                        from memory_agent import Memory, open_ombre
-                        with open_ombre(ROOT, cfg) as backend:
-                            with Memory(cfg, store, budget, model, backend) as memory:
-                                # Ticket 382: Peter's background model judges which memories fit what she just said.
-                                memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
-                                from memory_native import NativeMemoryTools, ToolSet
-                                tools = ToolSet(tools, NativeMemoryTools(
-                                    memory, cfg.tools['max_result_bytes'], model=model))
-                                run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
-                                              background_model=background_model))
+                        from memory_agent import Memory
+                        with Memory(cfg, store, budget, model) as memory:
+                            # Ticket 382: Peter's background model judges which memories fit what she just said.
+                            memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
+                            from memory_native import NativeMemoryTools, ToolSet
+                            tools = ToolSet(tools, NativeMemoryTools(
+                                memory, cfg.tools['max_result_bytes'], model=model))
+                            run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,
+                                          background_model=background_model))
                             for notice in memory.notices():
                                 print(notice)
                     else:

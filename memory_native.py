@@ -17,9 +17,9 @@ from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
 from memory_sidecar import Sidecar
 
-# Ticket 427: Ombre's feature tools (letters, plans, pulse, I, anchor/release) are gone; VEIL keeps
-# the two that still carry value: editing a memory and reviewing the recent ones.
-OMBRE_TOOLS = ('trace', 'dream')
+# Ticket 427/441: Ombre's feature tools are gone. Only trace (edit/archive/delete) remains, and
+# P3-1 defines its schema locally so memory no longer needs an Ombre process just to describe tools.
+OMBRE_TOOLS = ('trace',)
 NATIVE_TOOLS = ('hold', 'breath_search', *OMBRE_TOOLS, 'memory_history', 'memory_catalog', 'memory_read',
                 'memory_timeline')
 CONTENT_LIMIT, TITLE_LIMIT, WHY_LIMIT = 1500, 100, 500
@@ -75,8 +75,46 @@ SEARCH = SimpleNamespace(name='breath_search', inputSchema={
                 'date_from / date_to narrow the search to memories created in that period.')
 
 DESCRIPTION = ('Memory tools are separate from file access. Use hold to save lasting experience and '
-               'breath_search to find a known memory; use the listed Ombre tools for edits, reflection, '
-               'and library status. Every hidden memory is blocked by the program. ')
+               'breath_search to find a known memory; use trace for edits and the catalog/timeline tools '
+               'for library status. Every hidden memory is blocked by the program. ')
+TRACE = SimpleNamespace(name='trace', inputSchema={
+    'type': 'object', 'required': ['bucket_id'], 'additionalProperties': False,
+    'properties': {
+        'bucket_id': {'type': 'string', 'description':
+            'Exact ID of a memory shown in this conversation (recall or breath_search).'},
+        'content': {'type': 'string', 'description':
+            'Replace the whole body with this text. With old_str/new_str leave this empty.'},
+        'old_str': {'type': 'string', 'description':
+            'One exact, unique passage to replace; use together with new_str.'},
+        'new_str': {'type': 'string', 'description':
+            'Replacement for old_str; an empty string removes the passage.'},
+        'title': {'type': 'string', 'description': 'New title for this memory.'},
+        'importance': {'type': 'integer', 'minimum': 1, 'maximum': 10, 'description':
+            'How strongly this memory should surface (1-10).'},
+        'pinned': {'type': 'boolean', 'description':
+            'True keeps it in the opening front row; requires edit_reason. False unpins.'},
+        'why_remembered': {'type': 'string', 'description':
+            'Optional first-person note about why this matters.'},
+        'edit_reason': {'type': 'string', 'description':
+            'Short reason for this change, kept in VEIL history.'},
+        'merge_into': {'type': 'string', 'description':
+            'Archive this duplicate memory into another shown memory.'},
+        'restore': {'type': 'boolean', 'description':
+            'Bring an archived memory back into normal recall.'},
+        'delete': {'type': 'boolean', 'description':
+            'Ask Lan to delete this memory; during autonomous activity it becomes a pending request.'},
+        'delete_reason': {'type': 'string', 'description': 'Why this memory should be deleted.'},
+        'dont_surface': {'type': 'boolean', 'description':
+            'Hide from automatic recall (page-visible; restored with restore=true).'},
+    }}, description=(
+        'Edit one existing memory by its exact bucket_id; never guess an ID. content replaces the whole body; '
+        'or old_str/new_str replaces one exact passage; not both. title renames it. importance 1-10 controls '
+        'how strongly it surfaces; pinned=true keeps it in the opening front row (needs edit_reason and '
+        'why_remembered). merge_into archives a duplicate; restore=true unarchives; '
+        'delete=true asks Lan (autonomous activity creates a request she answers).'
+        ' edit_reason says why you change it now and is kept only in VEIL history.'))
+
+
 MEMORY_HISTORY = SimpleNamespace(name='memory_history', inputSchema={
     'type': 'object', 'required': ['memory_id'], 'additionalProperties': False,
     'properties': {'memory_id': {'type': 'string', 'description':
@@ -91,8 +129,7 @@ MEMORY_CATALOG = SimpleNamespace(name='memory_catalog', description=(
     'created_from / created_to (YYYY-MM-DD, both inclusive, optional) keep only memories created in that period; '
     'use them to walk the older memories of a given time span. Each result has total (all matches), items and '
     'next_after; pass next_after as after, with the same order and dates, to continue; an empty next_after '
-    'means done. Use memory_read for current text; memory_history contains only older versions, and dream has '
-    'no historical offset.'), inputSchema={
+    'means done. Use memory_read for current text; memory_history contains only older versions.'), inputSchema={
         'type': 'object', 'additionalProperties': False, 'properties': {
             'after': {'type': 'string'},
             'order': {'type': 'string', 'enum': ['id', 'newest', 'oldest']},
@@ -116,43 +153,7 @@ MEMORY_READ = SimpleNamespace(name='memory_read', description=(
 
 # Ticket 145: Ombre's own docstrings are long Chinese text about its internals and test
 # helpers. Peter gets the same schema with short English descriptions of what VEIL allows.
-OMBRE_DESCRIPTIONS = {
-    'trace': (
-        'Edit one existing memory by its exact bucket_id; never guess an ID. Pass only the fields you change '
-        '(-1 or empty means unchanged). content replaces the whole body; or old_str/new_str replaces one exact, '
-        'unique passage (empty new_str removes it); not both. title is the memory\'s own title; '
-        'name is only its bucket name. resolved=1 lets it settle, 0 reactivates it; pinned=1 makes it a permanent '
-        'core memory (needs edit_reason saying why; very few may exist); protected=1 stops decay without '
-        'forcing it up; digested=1 hides it from passive recall and '
-        'dream; dont_surface=1 keeps it out of daily recall. Removing the last pinned/protected needs importance '
-        '1-10 in the same call. Metadata: importance 1-10, domain and tags comma-separated, valence/arousal 0-1, '
-        'why_remembered, meaning_append/meaning_replace, media_append/media_replace (replace drops the old value; '
-        'prefer append). '
-        'Each of these goes in its own call: reinforce=true when, after reading it, this memory truly matters '
-        '(search hits do not reinforce); quotes_replace corrects or removes its original quotes (never adds); '
-        'unlink=<id> removes a wrong link; relink=<id> with relation_type (caused_by, causes, continuation_of, '
-        'continues, related_to, same_event) fixes an existing link. restore=true brings back an archived memory. '
-        'delete=true with delete_reason asks Lan; during your own autonomous activity it becomes a request she '
-        'answers on the memory page. edit_reason says why you change it now (kept in VEIL history only).'),
-    'dream': (
-        'Read every memory that changed in the last window_hours (default 48), in full, to look back and digest. '
-        'What you have let go of can settle with trace(resolved=1).'),
-}
-DREAM_NOTE = ('Your recent memories, for looking back. Anything you are done with can settle with '
-              'trace(bucket_id, resolved=1); nothing needs to be written.')
-
-
-def neutral_dream_header(result):
-    """Ticket 147: replace Ombre's reflection questions above the first memory with a plain note.
-
-    Ombre asks what still weighs on him and suggests hold(feel=True), which VEIL does not offer."""
-    if not isinstance(result, str) or not result.startswith('=== Dreaming'):
-        return result
-    header, newline, rest = result.partition('\n')
-    guidance, blank, memories = rest.partition('\n\n')
-    if not blank or 'trace(' not in guidance or re.search(r'(?m)^ID: ', guidance):
-        return result
-    return header + newline + DREAM_NOTE + blank + memories
+OMBRE_DESCRIPTIONS = {'trace': TRACE.description}
 
 
 TRACE_HIDDEN_FIELDS = ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason')
@@ -259,12 +260,9 @@ class NativeMemoryTools:
         self.memory, self.max_result_bytes = memory, max_result_bytes
         self.model = model if callable(model) else None
         self.search_results = {}
-        available = {tool.name: tool for tool in memory.backend.list_tools()} \
-            if hasattr(memory.backend, 'list_tools') else {}
-        missing = set(OMBRE_TOOLS) - set(available) if hasattr(memory.backend, 'list_tools') else set()
-        if missing:
-            raise UserError('Ombre 缺少本工单要求的工具：' + '、'.join(sorted(missing)))
-        self.ombre_tools = {name: available[name] for name in OMBRE_TOOLS if name in available}
+        # P3-1: trace's schema is defined locally; memory no longer needs an Ombre process to
+        # describe or authorize it. No dream tool: it was a no-op under Brain authority.
+        self.ombre_tools = {'trace': TRACE}
         model_tools = [ombre_tool_for_model(tool) for tool in self.ombre_tools.values()]
         self.description = DESCRIPTION
         self.autonomy_mode = False
@@ -365,7 +363,10 @@ class NativeMemoryTools:
                 return self._history(args)
             if name == 'memory_timeline':
                 return self._timeline(args)
-            return self._ombre(name, args, approval)
+            if name == 'trace':
+                return self._trace(args, approval)
+            return ('This tool is not authorized for the current role. Choose an available tool; '
+                    'permissions cannot be bypassed.'), '被拒绝', self.preview_summary(name, args)
         except MemoryToolError as exc:
             return str(exc), '出错', self.preview_summary(name, args)
         except Exception:
@@ -569,10 +570,10 @@ class NativeMemoryTools:
         try:
             self.memory.call('trace', {'bucket_id': memory_id, 'restore': True})
         except Exception:
-            return False, 'Ombre 这次没有恢复成功，记忆还在归档里。'
+            return False, '记忆服务这次没有恢复成功，记忆还在归档里。'
         self.memory.bucket_details_cache.pop(memory_id, None)
         if not self.memory.refresh_visibility(memory_id):
-            return False, 'Ombre 回答了，但这条还没回到记忆里；稍后刷新再看。'
+            return False, '记忆服务回答了，但这条还没回到记忆里；稍后刷新再看。'
         self.sidecar.unarchived(memory_id)
         return True, '已恢复，它会重新被想起。'
 
@@ -610,7 +611,7 @@ class NativeMemoryTools:
             return False, '这条记忆不存在或已经删除。'
         title = self.memory.title_for(memory_id) or memory_id
         failure = self._delete(memory_id, title)
-        return (False, '这次没能确认 Ombre 的删除；这条已经不会再被想起，稍后可以再删一次。') if failure \
+        return (False, '这次没能确认删除结果；这条已经不会再被想起，稍后可以再删一次。') if failure \
             else (True, '已删除。')
 
     @staticmethod
@@ -636,6 +637,10 @@ class NativeMemoryTools:
 
     def _pinned_ids(self):
         # Hidden (dont_surface) pinned memories still occupy a pin slot: hiding one must not free it.
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            with BrainRead(self.memory.brain_authority.db_path) as reader:
+                return set(reader.pinned_ids())
         pinned = set()
         for key, (_, raw) in self._visible_records(include_hidden=True).items():
             if str(parse_frontmatter(raw)[0].get('pinned', '')).casefold() in ('true', '1', 'yes'):
@@ -656,17 +661,30 @@ class NativeMemoryTools:
             if stamp is not None:
                 stamps.append(stamp)
         archived = 0
-        vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
-        try:
-            for path in (vault / 'archive').rglob('*.md'):
-                if path.is_file() and not path.is_symlink():
-                    archived += 1
-        except OSError:
-            pass
-        try:
-            hidden = len(self.memory.hidden_ids())
-        except Exception:
-            hidden = 0
+        hidden = 0
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            from brain_read import BrainRead
+            try:
+                with BrainRead(self.memory.brain_authority.db_path) as reader:
+                    archived = len(reader.archived(limit=10000))
+                    row = reader.connection.execute(
+                        'SELECT COUNT(*) FROM memories WHERE is_deleted=0 AND is_tombstone=0 '
+                        'AND (is_hidden=1 OR dont_surface=1)').fetchone()
+                    hidden = int(row[0] if row else 0)
+            except Exception:
+                archived = hidden = 0
+        else:
+            vault = role_vault_path(self.memory.store.root, self.memory.cfg.id)
+            try:
+                for path in (vault / 'archive').rglob('*.md'):
+                    if path.is_file() and not path.is_symlink():
+                        archived += 1
+            except OSError:
+                pass
+            try:
+                hidden = len(self.memory.hidden_ids())
+            except Exception:
+                hidden = 0
         size = sum(len(raw.encode('utf-8')) for _, raw in records.values())
         newest = max(stamps).strftime('%Y-%m-%d') if stamps else ''
         parts = [f'{len(records)} memories']
@@ -801,26 +819,6 @@ class NativeMemoryTools:
             return result
         return raw[:self.max_result_bytes].decode('utf-8', errors='ignore') + '\n[truncated]'
 
-    def _ombre(self, name, args, approval):
-        summary = self.preview_summary(name, args)
-        if name not in OMBRE_TOOLS or name not in self.ombre_tools:
-            return 'This tool is not authorized for the current role. Choose an available tool; permissions cannot be bypassed.', '被拒绝', summary
-        if not isinstance(args, dict):
-            return 'Tool arguments must be a JSON object.', '被拒绝', summary
-        if name == 'trace':
-            return self._trace(args, approval)
-        try:
-            result = self.memory.call(name, args)
-        except MemoryToolError as exc:
-            return str(exc), '出错', summary
-        except Exception:
-            return 'The memory tool failed. Check the current memory state before retrying.', '出错', summary
-        if name == 'dream':
-            result = self._filter_hidden_result(result, name)
-        if name == 'dream':
-            result = neutral_dream_header(result)
-        return self._bounded(result), '成功', summary
-
     def _trace(self, args, approval, *, by_lan=False):
         memory_id = args.get('bucket_id')
         summary = self.memory.title_for(memory_id) if isinstance(memory_id, str) else None
@@ -951,15 +949,12 @@ class NativeMemoryTools:
         if not self._save_version(memory_id, args, old):
             return 'The previous version could not be archived safely, so no delete request was created.', '出错', summary
         request_id = uuid.uuid4().hex
-        tags = self.memory.tags_for(memory_id)
-        if '待删除' not in tags:
-            tags.append('待删除')
         path = f'{self.memory.cfg.id}/delete-requests.jsonl'
         request = {'request_id': request_id, 'memory_id': memory_id, 'title': summary,
                    'reason': reason.strip(), 'status': 'pending'}
         try:
+            # P3-1: the pending marker is the request row itself; Brain no longer has free tags.
             self.memory.store.append(path, request)
-            self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
         except Exception:
             try:
                 self.memory.store.append(path, {**request, 'status': 'failed'})
@@ -996,22 +991,11 @@ class NativeMemoryTools:
                              'no duplicate deletion was performed.')
                 continue
             if self.memory.is_hidden(memory_id):
-                tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
-                old = self.memory.raw_content_for(memory_id)
-                if old is not None and '待删除' in self.memory.tags_for(memory_id):
-                    if not self._save_version(memory_id, {'tags': '待删除 removed'}, old):
-                        continue
-                    self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
+                # Hidden memories must not leak their title/reason back into the model through
+                # pending_deletion_context. Close the request silently; Lan still sees it on the
+                # memory page, where hidden items belong.
                 self.memory.store.append(path, {**row, 'status': 'rejected',
                                                 'decision_reason': '目标记忆已隐藏'})
-                continue
-            if '待删除' not in self.memory.tags_for(memory_id):
-                note = f'记忆 #{memory_id}「{title}」的待删除标记已移除；申请已结束。'
-                self.memory.store.append(path, {**row, 'status': 'rejected',
-                                                'decision_reason': '待删除标记已移除'})
-                self.memory.messages.put(note)
-                notes.append(f'The pending deletion marker for memory {memory_id} ({title}) was removed; '
-                             'the request is closed.')
                 continue
             prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")
@@ -1031,10 +1015,8 @@ class NativeMemoryTools:
                 note = (f'已同意并删除自主申请的记忆 #{memory_id}「{title}」。'
                         f' {self.memory.cfg.name} 的理由：{row.get("reason") or "未提供"}')
             else:
-                tags = [tag for tag in self.memory.tags_for(memory_id) if tag != '待删除']
-                self.memory.call('trace', {'bucket_id': memory_id, 'tags': ','.join(tags) or ' '})
                 status = 'rejected'
-                note = (f'未同意删除记忆 #{memory_id}「{title}」；已移除待删除标记。'
+                note = (f'未同意删除记忆 #{memory_id}「{title}」；申请已关闭。'
                         f' {self.memory.cfg.name} 的理由：{row.get("reason") or "未提供"}')
             self.memory.store.append(path, {**row, 'status': status})
             self.memory.messages.put(note)
@@ -1055,39 +1037,6 @@ class NativeMemoryTools:
         self.memory.persist()
         self.memory.erase(memory_id)
         return None
-
-    def _filter_hidden_result(self, result, name):
-        hidden = self.memory.hidden_ids()
-        if not hidden:
-            return result
-        hidden_titles = {title for key in hidden if (title := self.memory.title_for(key))}
-        # Ombre emits each dream record as a separate block whose first line holds its stable ID.
-        # Remove the records Lan may not see before the result reaches the chat model.
-        pieces = result.split('\n---\n')
-        if name == 'dream':
-            first, *blocks = pieces
-            first_id = re.search(r'(?m)^ID: ([A-Za-z0-9_-]+)\s*$', first)
-            visible_count = 0
-            if first_id:
-                title_hidden = any(title in first for title in hidden_titles)
-                id_hidden = first_id.group(1) in hidden
-                if id_hidden or title_hidden:
-                    separator = first.rfind('\n\n', 0, first_id.start())
-                    first = first[:separator] if separator >= 0 else first[:first_id.start()]
-                else:
-                    visible_count += 1
-            visible = []
-            for piece in blocks:
-                match = re.search(r'(?m)^ID: ([A-Za-z0-9_-]+)\s*$', piece)
-                if (match and match.group(1) in hidden) or any(title in piece for title in hidden_titles):
-                    continue
-                visible.append(piece)
-                if match:
-                    visible_count += 1
-            first = re.sub(r'（\d+ 个桶）', f'（{visible_count} 个桶）', first, count=1)
-            result = '\n---\n'.join([first, *visible])
-        return '\n'.join(line for line in result.splitlines() if not any(key in line for key in hidden)
-                         and not any(title in line for title in hidden_titles))
 
     SEARCH_RESULTS_LIMIT = 20
 

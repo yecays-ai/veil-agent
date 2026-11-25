@@ -33,7 +33,8 @@ from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
 from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
                         ActivityState, Budget, Chat, Store, UserError,
-                        background_cfg, load_character, memory_available, now, make_model, make_voice, run_chat,
+                        background_cfg, brain_authority_ready, load_character, memory_available, now,
+                        make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 import workbench_switch
 import persona_versions
@@ -3751,22 +3752,24 @@ def main(argv=None):
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:
+                        if use_memory and not brain_authority_ready(cfg):
+                            hub.push('notice', '记忆需要 [memory.brain] write_authority=true；Ombre 启动已停用，本次不加载记忆。')
+                            use_memory = False
                         if use_memory:
-                            from memory_agent import Memory, open_ombre
-                            with open_ombre(ROOT, cfg, data_root=data_dir,
-                                            env_root=config_root) as backend:
-                                with Memory(cfg, store, budget, model, backend, runtime_monitor) as memory:
-                                    # Ticket 382: Peter's background model judges which memories fit what she just said.
-                                    memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
-                                    from memory_native import NativeMemoryTools, ToolSet
-                                    tools = ToolSet(tools, NativeMemoryTools(
-                                        memory, cfg.tools['max_result_bytes'], model=model))
-                                    hub.memory_tools = tools.native
-                                    serve_chat(Chat(cfg, store, budget, model, memory, tools,
-                                                    approval=hub.approval, output=hub.output,
-                                                    voice=voice, runtime_monitor=runtime_monitor,
-                                                    background_model=background_model), hub, channels,
-                                               acceptance=args.acceptance)
+                            from memory_agent import Memory
+                            with Memory(cfg, store, budget, model,
+                                        runtime_monitor=runtime_monitor) as memory:
+                                # Ticket 382: Peter's background model judges which memories fit what she just said.
+                                memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
+                                from memory_native import NativeMemoryTools, ToolSet
+                                tools = ToolSet(tools, NativeMemoryTools(
+                                    memory, cfg.tools['max_result_bytes'], model=model))
+                                hub.memory_tools = tools.native
+                                serve_chat(Chat(cfg, store, budget, model, memory, tools,
+                                                approval=hub.approval, output=hub.output,
+                                                voice=voice, runtime_monitor=runtime_monitor,
+                                                background_model=background_model), hub, channels,
+                                           acceptance=args.acceptance)
                                 for notice in memory.notices():
                                     hub.output(notice)
                         else:

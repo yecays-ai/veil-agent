@@ -68,8 +68,42 @@ def _frontmatter(record):
     for key in ('title', 'type', 'created', 'importance'):
         if record.get(key) not in (None, ''):
             lines.append('%s: %s' % (key, record[key]))
+    if record.get('pinned'):
+        lines.append('pinned: true')
+    if record.get('why_remembered'):
+        lines.append('why_remembered: %s' % record['why_remembered'])
     lines.append('---')
     return '\n'.join(lines) + '\n'
+
+
+def _with_metadata(raw, values):
+    """Keep raw_markdown's front matter in step with title/importance/pinned.
+    Recall and the memory page read these fields; a database-only update would leave them stale."""
+    if not isinstance(raw, str) or not raw.startswith('---\n'):
+        return raw
+    end = raw.find('\n---\n', 3)
+    if end < 0:
+        return raw
+    lines = raw[4:end].splitlines()
+    wanted = {key: value for key, value in values.items() if value is not None}
+    seen = set()
+    out = []
+    for line in lines:
+        key = line.partition(':')[0].strip()
+        if key in wanted:
+            value = wanted[key]
+            if key == 'pinned':
+                value = 'true' if value else 'false'
+            out.append('%s: %s' % (key, value))
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, value in wanted.items():
+        if key not in seen:
+            if key == 'pinned':
+                value = 'true' if value else 'false'
+            out.append('%s: %s' % (key, value))
+    return '---\n' + '\n'.join(out) + raw[end:]
 
 
 def _vector(record, vector, embedder):
@@ -105,7 +139,9 @@ def create_memory(connection, record, *, vector=None, embedder=None):
     created = record.get('created') or now()
     frontmatter = _frontmatter({'id': memory_id, 'title': title,
                                 'type': record.get('type') or 'dynamic',
-                                'created': created, 'importance': record.get('importance')})
+                                'created': created, 'importance': record.get('importance'),
+                                'pinned': record.get('pinned'),
+                                'why_remembered': record.get('why_remembered')})
     raw = frontmatter + body
     frontmatter_json = json.dumps({'id': memory_id, 'title': title,
                                    'type': record.get('type') or 'dynamic',
@@ -116,7 +152,7 @@ def create_memory(connection, record, *, vector=None, embedder=None):
             'INSERT INTO memories(id,bucket,file_rel,title,name,body,body_sha256,raw_markdown,'
             'raw_sha256,frontmatter_raw,frontmatter_json,created,last_active,type,importance,'
             'domain_json,tags_json,why_remembered,meaning,is_hidden,is_tombstone,is_deleted,'
-            'extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'pinned,extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (memory_id, record.get('bucket') or 'dynamic',
              record.get('file_rel') or ('dynamic/%s.md' % memory_id), title, title, body,
              _sha(body), raw, _sha(raw), frontmatter, frontmatter_json, created, created,
@@ -124,7 +160,8 @@ def create_memory(connection, record, *, vector=None, embedder=None):
              json.dumps(record.get('domain') or [], ensure_ascii=False),
              json.dumps(record.get('tags') or [], ensure_ascii=False),
              record.get('why_remembered') or '', record.get('meaning') or '',
-             int(bool(record.get('hidden'))), 0, 0, '{}', state))
+             int(bool(record.get('hidden'))), 0, 0,
+             int(bool(record.get('pinned'))), '{}', state))
         if vector:
             connection.execute(
                 'INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,updated_at,content_hash) '
@@ -149,15 +186,22 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
                   operation_reason='', why_remembered=''):
     """Rewrite a memory, archiving the old body first, in one transaction."""
     ensure_schema(connection)
-    row = connection.execute('SELECT body,raw_markdown,file_rel FROM memories WHERE id=? AND '
+    row = connection.execute('SELECT body,raw_markdown,file_rel,vector_state FROM memories WHERE id=? AND '
                              'is_deleted=0 AND is_tombstone=0', (memory_id,)).fetchone()
     if row is None:
         raise KeyError(memory_id)
-    old_body, old_raw, file_rel = row
-    body = changes.get('body', old_body)
+    old_body, old_raw, file_rel, old_state = row
+    body_changed = 'body' in changes
+    body = changes.get('body', old_body) if body_changed else old_body
     if not isinstance(body, str) or not body.strip():
         raise ValueError('empty memory body')
-    vector, state = _vector({'body': body}, vector, embedder)
+    if body_changed:
+        vector, state = _vector({'body': body}, vector, embedder)
+    else:
+        # A metadata-only trace (title/pinned/importance) must not re-embed the unchanged body:
+        # Memory.call reserved no embedding budget, and a failed embedding must not drop the
+        # existing vector. The stored vector and state stay exactly as they were.
+        vector, state = None, old_state
     fields = sorted(changes)
     try:
         connection.execute('BEGIN IMMEDIATE')
@@ -166,17 +210,22 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
                            (memory_id, now(), operation_reason[:500], why_remembered[:500],
                             json.dumps(fields), old_body, _sha(old_body)))
         raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
+        raw = _with_metadata(raw, {'title': changes.get('title'),
+                                   'importance': changes.get('importance'),
+                                   'pinned': changes.get('pinned')})
         connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
-                           'title=COALESCE(?,title),importance=COALESCE(?,importance),vector_state=? '
-                           'WHERE id=?',
+                           'title=COALESCE(?,title),importance=COALESCE(?,importance),'
+                           'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'
+                           'vector_state=COALESCE(?,vector_state) WHERE id=?',
                            (body, _sha(body), raw, _sha(raw), changes.get('title'),
-                            changes.get('importance'), state, memory_id))
-        if state == 'ready':
+                            changes.get('importance'), changes.get('pinned'),
+                            why_remembered or None, state if body_changed else None, memory_id))
+        if body_changed and state == 'ready':
             connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
                                'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
                                (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)),
                                 now(), _sha(body)))
-        else:
+        elif body_changed:
             connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
         _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
         connection.commit()
