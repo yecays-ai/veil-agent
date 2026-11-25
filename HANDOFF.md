@@ -3,7 +3,8 @@
 ## P3-1 启动解耦 + Brain-only 读路径（2026-11-25，PR #442，待复审/合并）
 
 - 已完成：启动链移除 `open_ombre`；Memory 可在无 backend 下运行；本地 trace schema、删除 dream；判官/事件缓存/最近创建/库统计/召回元数据改 Brain；BM25-only/空候选降级；pinned/importance 落库并同步 raw front matter；自主删除申请改结构化状态；Brain 写入失败上报 runtime_monitor；无 Brain authority 时明确提示并跳过记忆。
-- 测试：`test_p3_1_brain_only` 9 项、native/authority/chat/recall/event/brain/web 相关套件通过；隔离实例验收通过；CI 四组 Windows/Linux 全绿，scanner/audit 通过。
+- 首次启动：全新角色自动初始化空 brain.db（完整 schema/事件表/digest，跨进程锁）；已有角色缺 brain.db 或库损坏时明确报错，不创建空库掩盖丢失。
+- 测试：`test_p3_1_brain_only` 12 项（含全新初始化/缺库拒建/损坏库不替换）、native/authority/chat/recall/event/brain/web 相关套件通过；隔离实例验收通过；CI 四组 Windows/Linux 全绿，scanner/audit 通过。
 - 复审：CodeRabbit 5 条实质意见已修；PR #442 待复审/合并，未自行合并。
 - 正式状态：P3-0 已合并并完成维护窗口；正式 Peter 当前仍按 P2 方式运行（Ombre 18011 仍在，仅回退）；本单未部署、未停正式进程、未改正式数据。
 - 未做：未启动 P3-2；未做正式环境 1–2 天观察。

@@ -13,6 +13,7 @@ from pathlib import Path
 from brain_lock import write_lock
 
 import brain_writer
+from brain_authority_init import BrainDatabaseProblem, prepare as prepare_brain_database
 
 
 class BrainAuthority:
@@ -212,6 +213,9 @@ def attach_authority(cfg, store):
         return None
     if settings.get('shadow') is True:
         raise ValueError('write_authority=brain and shadow=true are mutually exclusive')
+    # P3-1: a brand-new role gets an empty Brain database; an existing role whose database
+    # disappeared or is damaged fails here, before any Memory object can hide the loss.
+    prepare_brain_database(store, cfg.id)
     return BrainAuthority(cfg, store)
 
 

@@ -9,6 +9,7 @@ import veil_brain
 from brain_read import BrainRead
 from memory_agent import Memory
 from memory_native import NativeMemoryTools
+from veil_agent import UserError
 from recall_judge import RecallJudge, load_settings
 from veil_agent import Budget, Character, Store
 
@@ -171,3 +172,50 @@ class BrainOnlyTests(unittest.TestCase):
         judge._scan()
         self.assertIsNotNone(judge._eligible(visible))
         self.assertIsNone(judge._eligible(hidden))
+
+
+class BrainInitializationTests(unittest.TestCase):
+    """P3-1: a fresh role initializes Brain; a lost existing database stops loudly."""
+
+    def make(self, role='fresh'):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = Store(self.temp.name + '/data')
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        settings = {'model': 'fake-embedding', 'input_cny_per_million': '0', 'mode': 'native',
+                    'base_url': 'https://example.invalid/v1',
+                    'brain': {'write_authority': True, 'shadow': False},
+                    'retrieval': {'backend': 'brain'}}
+        self.cfg = Character(role, 'Example', 'persona', 20, 1024, provider, role, settings)
+        return self.store.root / role
+
+    def test_fresh_role_gets_an_empty_brain_database(self):
+        role_dir = self.make()
+        self.assertFalse(role_dir.exists())
+        memory = Memory(self.cfg, self.store, Budget(self.store), Mock())
+        self.addCleanup(memory.__exit__, None, None, None)
+        self.assertTrue((role_dir / 'brain.db').is_file())
+        with BrainRead(role_dir / 'brain.db') as reader:
+            tables = {row[0] for row in reader.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn('memories', tables)
+        self.assertIn('events', tables)
+        self.assertEqual(memory.call('breath', {}), '')
+
+    def test_existing_role_without_brain_does_not_get_an_empty_database(self):
+        role_dir = self.make('existing')
+        role_dir.mkdir(parents=True)
+        (role_dir / 'chat.jsonl').write_text('{"text": "old"}\n', encoding='utf-8')
+        with self.assertRaises(UserError):
+            Memory(self.cfg, self.store, Budget(self.store), Mock())
+        self.assertFalse((role_dir / 'brain.db').exists())
+
+    def test_corrupt_brain_is_not_replaced(self):
+        role_dir = self.make('broken')
+        role_dir.mkdir(parents=True)
+        path = role_dir / 'brain.db'
+        path.write_bytes(b'not sqlite')
+        with self.assertRaises(UserError):
+            Memory(self.cfg, self.store, Budget(self.store), Mock())
+        self.assertEqual(path.read_bytes(), b'not sqlite')

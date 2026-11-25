@@ -4,8 +4,9 @@
 
 - **目标**：正式 Peter 启动不再依赖 Ombre 进程；Brain 独立完成记忆读写、召回、页面/事件/经验整理；修复 P2 已知缺陷；保留一致性备份/离线导出用于回退。
 - **已完成**：启动链移除 `open_ombre`；Memory 可在无 MCP backend 下运行；NativeMemoryTools 使用本地 trace schema，删除无实际作用的 dream 工具；判官/事件账本/故事缓存/最近创建/库统计/事件邻接/召回元数据改读 Brain；检索失败只降级 BM25 或返回空候选并写诊断；pinned/importance 落库并同步 raw front matter；自主删除申请改用 `delete_requests.status`；Brain 写入失败上报 runtime_monitor；无 Brain authority 时明确提示并跳过记忆，不启动 Ombre。
+- **首次启动**：全新角色没有数据目录时自动创建空 brain.db（完整 schema、事件表、digest）；已有角色数据但 brain.db 缺失或损坏时明确报错并停止，**不会创建空库掩盖数据丢失**；首次初始化加跨进程写锁，避免双实例同时建库。
 - **复审**：CodeRabbit 5 条实质意见已修复（元数据更新不重算向量、召回读 DB、BM25 权重、隐藏删除申请不泄露、启动门控）；PR 评论已记录。
-- **测试**：新增 `tests/test_p3_1_brain_only.py`（9 项）；相关 memory/recall/event/brain/web/chat 套件通过；隔离实例验收通过；Windows/Linux 四组 CI 全绿，scanner/audit 通过。
+- **测试**：新增 `tests/test_p3_1_brain_only.py`（12 项，含全新角色初始化/已有角色缺库拒建/损坏库不替换）；相关 memory/recall/event/brain/web/chat 套件通过；隔离实例验收通过；Windows/Linux 四组 CI 全绿，scanner/audit 通过。
 - **未做**：未合并 PR（等复审/用户决定）；未部署正式环境；未停 Ombre；未改正式数据；未启动 P3-2。
 
 ## P3-0 配置持久化与前置准备（已合并，2026-11-25）
