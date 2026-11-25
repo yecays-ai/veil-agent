@@ -176,6 +176,88 @@ class UnhideMigrationTests(unittest.TestCase):
         finally:
             memory.__exit__(None, None, None)
 
+    def test_autonomous_delete_request_reaches_lan_and_approval_removes(self):
+        from unittest.mock import Mock
+        from memory_agent import Memory
+        from memory_native import NativeMemoryTools
+        from veil_agent import Budget, Character
+        rejected_id = self._create('keep after rejection')
+        approved_id = self._create('remove after approval')
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute(
+                "INSERT INTO delete_requests(request_id,memory_id,reason,status,raw_json) "
+                "VALUES('r-reject',?,'not now','pending',?)",
+                (rejected_id, json.dumps({'request_id': 'r-reject', 'memory_id': rejected_id,
+                                          'reason': 'not now', 'status': 'pending'})))
+            connection.execute(
+                "INSERT INTO delete_requests(request_id,memory_id,reason,status,raw_json) "
+                "VALUES('r-approve',?,'duplicate','pending',?)",
+                (approved_id, json.dumps({'request_id': 'r-approve', 'memory_id': approved_id,
+                                          'reason': 'duplicate', 'status': 'pending'})))
+            connection.commit()
+        finally:
+            connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake',
+                        {'model': 'fake-embedding', 'input_cny_per_million': '0',
+                         'mode': 'native', 'events': {'enabled': False}})
+        memory = Memory(cfg, self.store, Budget(self.store), Mock())
+        try:
+            prompts = []
+            notes = NativeMemoryTools(memory).process_pending_deletions(
+                lambda prompt: prompts.append(prompt) or ('n' if rejected_id in prompt else 'y'))
+            self.assertTrue(any(rejected_id in prompt for prompt in prompts), notes)
+            self.assertTrue(any(approved_id in prompt for prompt in prompts), notes)
+            rows = {row['request_id']: row for row in memory.store.read('fake/delete-requests.jsonl')}
+            self.assertEqual(rows['r-reject']['status'], 'rejected')
+            self.assertEqual(rows['r-approve']['status'], 'approved')
+            # Rejected request must leave the memory visible and recall-eligible again.
+            self.assertTrue(memory.refresh_visibility(rejected_id))
+            self.assertFalse(memory.is_hidden(rejected_id))
+            # Approved request must actually remove it.
+            self.assertFalse(memory.refresh_visibility(approved_id))
+            self.assertTrue(memory.is_hidden(approved_id))
+        finally:
+            memory.__exit__(None, None, None)
+
+    def test_trace_pending_delete_can_be_approved_even_while_request_is_pending(self):
+        # Regression guard for the is_hidden(delete_pending) conflict: the pending flag itself
+        # must not make process_pending_deletions reject the request before Lan sees it.
+        from unittest.mock import Mock
+        from memory_agent import Memory
+        from memory_native import NativeMemoryTools
+        from veil_agent import Budget, Character
+        memory_id = self._create('pending approval')
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute(
+                "INSERT INTO delete_requests(request_id,memory_id,reason,status,raw_json) "
+                "VALUES('r-pending',?,'reason','pending',?)",
+                (memory_id, json.dumps({'request_id': 'r-pending', 'memory_id': memory_id,
+                                        'title': 'pending approval', 'reason': 'reason',
+                                        'status': 'pending'})))
+            connection.commit()
+        finally:
+            connection.close()
+        provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
+                    'output_cny_per_million': 2, 'cached_input_cny_per_million': 1}
+        cfg = Character('fake', 'Example', 'persona', 20, 1024, provider, 'fake',
+                        {'model': 'fake-embedding', 'input_cny_per_million': '0',
+                         'mode': 'native', 'events': {'enabled': False}})
+        memory = Memory(cfg, self.store, Budget(self.store), Mock())
+        try:
+            self.assertFalse(memory.refresh_visibility(memory_id))
+            prompts = []
+            notes = NativeMemoryTools(memory).process_pending_deletions(
+                lambda prompt: prompts.append(prompt) or 'n')
+            self.assertTrue(prompts, notes)
+            self.assertIn('pending approval', prompts[0])
+            self.assertTrue(memory.refresh_visibility(memory_id))
+        finally:
+            memory.__exit__(None, None, None)
+
 
 class PageContractTests(unittest.TestCase):
     def test_page_uses_lifecycle_groups_and_does_not_search_domains_or_tags(self):

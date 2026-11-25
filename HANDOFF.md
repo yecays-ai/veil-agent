@@ -4,6 +4,7 @@
 
 - 已完成：`unhide_legacy_rows` 启动迁移（旧 hidden/dont_surface 行恢复为 normal dynamic，正文/why/P6 不改，归档行保留）；移除 BrainAuthority/BrainRetrieval/RecallJudge/Memory/Native/BrainRead 面板的 hidden/dont_surface 过滤和工具参数；空事件改为归档；页面分组改为 全部/最近/经历/已归档，页面搜索/事实行去掉 domain/tag，移除 us/peter/system 分组依赖。
 - 测试：新增 `tests/test_p3_3_visibility.py` 6 项；更新 hidden/召回/判官/原生工具/事件/分页/页面目标测试；本地全量 2202 项，20 failures / 2 errors 为既有环境依赖，目标套件通过；最终以 PR CI 为准。
+- 复审补丁：修复 pending delete 与 `is_hidden` 冲突，自主删除申请可进入审批；同意删除/拒绝恢复均有集成测试。旧 surprise 标签不再隐藏页面正文/why/标题或禁止编辑。
 - 未做：不逐条改记忆内容、不自动删除/合并、不执行 P3-4；P3-3 尚未合并/部署。
 - 下一步第一步：等全量测试和 PR 复审；合并后按维护窗口部署，启动时自动 unhide；正式验收确认页面/召回/判官/编辑/归档/删除/事件关联一致。
 - 注意：正式 Peter 已运行 P3-2（f63e58a）；不要在正式目录开发或直接改正式 brain.db。

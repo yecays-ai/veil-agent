@@ -12,6 +12,7 @@
 
 - **目标**：隐藏机制取消；唯一旧 hidden/archived 行恢复为正常可见/可召回；归档生命周期保留；页面改为 全部/最近/经历/已归档；页面/搜索/召回/判官不再依赖旧 tags/domain；数据列与 P6 字段保留。
 - **已完成**：启动迁移 `unhide_legacy_rows`（只改可见性/类型，正文/why/P6 不动）；BrainAuthority、BrainRetrieval、RecallJudge、Memory、Native tools、BrainRead 面板移除 hidden/dont_surface 行为；删除 dont_surface 工具参数；关闭空事件改为归档而非隐藏；页面移除 us/peter/system/domain/tag 分组与搜索依赖。
+- **复审补丁**：修复 `is_hidden(delete_pending)` 与自主删除审批的状态冲突——`process_pending_deletions` 改用 archived/deleted 生命周期判断，pending 请求会正常进入 Lan 审批；同意删除、拒绝后恢复可见/召回均有测试。旧 surprise 标签只保留历史数据，不再隐藏页面正文/why/标题或禁止编辑。
 - **未做**：不逐条改记忆内容、不自动删除/合并、不执行 P3-4；正式部署待本 PR 合并和维护窗口。
 - **测试**：新增 `tests/test_p3_3_visibility.py`（6 项）；隐藏/召回/判官/原生工具/事件/页面目标套件通过；本地全量排除外部 OpenCode 环境 2202 项，20 failures / 2 errors 均为既有 maintenance 假 git/gh 与冷备份 desktop-data 环境依赖（与 P3-2 基线同类），最终以 PR CI 为准。
 - **验收步骤**：记忆页 全部/最近/经历/已归档可用；旧 hidden 行正常显示并可召回；旧标签/domain 不再出现在页面/搜索；归档、编辑、删除、事件关联仍正常；P6 数据可查。

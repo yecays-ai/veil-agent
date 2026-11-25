@@ -878,10 +878,10 @@ function renderMemoryList(){
     if(day!==lastDay){const heading=document.createElement('h4');heading.className='memory-day';heading.textContent=day;list.appendChild(heading);lastDay=day}
     const button=document.createElement('button');button.type='button';button.className='memory-entry';
     const top=document.createElement('span');top.className='memory-entry-top';
-    const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.surprise?'🎁 '+item.title:item.title;
+    const title=document.createElement('span');title.className='memory-entry-title';title.textContent=item.title;
     const time=document.createElement('time');time.textContent=(item.locked?'🔒 ':'')+(item.peter_after_lan?'他改过你改的 · ':'')+(item.auto?'自动整理 · ':'')+memoryTime(item.created);top.append(title,time);
     const preview=document.createElement('span');preview.className='memory-entry-preview';
-    preview.textContent=item.surprise?'惊喜，先不剧透':(item.body||item.why).replace(/\s+/g,' ').slice(0,90);
+    preview.textContent=(item.body||item.why).replace(/\s+/g,' ').slice(0,90);
     button.append(top,preview);
     button.setAttribute('aria-current',String($('memory-detail').dataset.memoryId===item.memory_id));
     button.onclick=()=>readMemory(item);list.appendChild(button);
@@ -1005,15 +1005,11 @@ function memoryField(label,value,multiline,rows=3){
 function readMemory(item){
   const detail=$('memory-detail');detail.dataset.memoryId=item.memory_id;renderMemoryList();
   const eyebrow=document.createElement('p');eyebrow.className='eyebrow';eyebrow.textContent='MEMORY DETAIL';
-  const heading=document.createElement('h3');heading.textContent=item.surprise?'🎁 '+item.title:item.title;
+  const heading=document.createElement('h3');heading.textContent=item.title;
   const date=new Date(item.created);
   const facts=document.createElement('p');facts.className='memory-facts';
   facts.textContent=[Number.isNaN(date.getTime())?'':`记录于 ${date.getFullYear()}.${date.getMonth()+1}.${date.getDate()} ${memoryTime(item.created)}`,
     item.importance?`重要度 ${item.importance}`:'',item.recalled?`最近想起过 ${item.recalled} 次`:''].filter(Boolean).join('　');
-  if(item.surprise){
-    const note=document.createElement('p');note.className='memory-surprise';note.textContent='惊喜内容不能编辑';
-    detail.replaceChildren(eyebrow,heading,facts,note);return;
-  }
   const title=memoryField('标题',item.title,false),why=memoryField('他为什么记这条',item.why,true,2),body=memoryField('记忆内容',item.body,true,8);
   const status=document.createElement('p');status.className='memory-status';status.setAttribute('aria-live','polite');
   const actions=document.createElement('div');actions.className='memory-actions';

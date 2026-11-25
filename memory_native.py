@@ -31,7 +31,6 @@ MEMORY_CHARS = 0
 PINNED_LIMIT = 8
 CATALOG_PAGE = 5
 MERGED_MEMORY_LIMIT_BYTES = 48 * 1024
-SURPRISE_TAGS = {'惊喜', 'surprise'}
 
 HOLD = SimpleNamespace(name='hold', inputSchema={
     'type': 'object', 'required': ['content'], 'additionalProperties': False,
@@ -447,14 +446,13 @@ class NativeMemoryTools:
         for key, (title, raw) in self._visible_records().items():
             meta, body = parse_frontmatter(raw)
             tags = as_list(meta.get('tags'))
-            # Peter's surprises for Lan stay folded; the page only reveals them on request.
-            surprise = any(tag.strip().casefold() in SURPRISE_TAGS for tag in tags)
+            # P3-3: old surprise tags are historical data, not a page visibility rule.
             entries.append({
                 'memory_id': key, 'title': title, 'created': meta.get('created', ''),
                 'kind': meta.get('type', ''), 'domain': as_list(meta.get('domain')),
-                'tags': [] if surprise else tags, 'importance': meta.get('importance', ''),
-                'why': '' if surprise else meta.get('why_remembered', ''),
-                'body': '' if surprise else body.strip(), 'surprise': surprise,
+                'tags': tags, 'importance': meta.get('importance', ''),
+                'why': meta.get('why_remembered', ''),
+                'body': body.strip(), 'surprise': False,
                 'source_record': title.strip() == '原文来源', 'recalled': recalled.get(key, 0)})
         try:
             notes = self.sidecar.all()
@@ -976,12 +974,12 @@ class NativeMemoryTools:
                 notes.append(f'Memory {memory_id} ({title}) was already handled in the memory panel; '
                              'no duplicate deletion was performed.')
                 continue
-            if self.memory.is_hidden(memory_id):
-                # Hidden memories must not leak their title/reason back into the model through
-                # pending_deletion_context. Close the request silently; Lan still sees it on the
-                # memory page, where hidden items belong.
+            if self.memory.is_archived(memory_id):
+                # Archived/tombstoned targets cannot be approved for deletion. A request's own
+                # pending flag must not count as hidden here, or every autonomous request would
+                # be silently rejected before Lan can approve it.
                 self.memory.store.append(path, {**row, 'status': 'rejected',
-                                                'decision_reason': '目标记忆已隐藏'})
+                                                'decision_reason': '目标记忆已归档'})
                 continue
             prompt = (f"{self.memory.cfg.name} 的自主删除申请：记忆 #{memory_id}「{title}」\n"
                       f"理由：{row.get('reason') or '未提供'}。同意删除吗？y/N ")

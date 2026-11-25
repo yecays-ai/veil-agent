@@ -74,13 +74,14 @@ class MemoryPanelTests(unittest.TestCase):
         self.assertEqual(items[0]['recalled'], 2)
         self.assertEqual(items[0]['body'], 'body of newer')
 
-    def test_surprise_memories_never_send_their_text(self):
+    def test_legacy_surprise_tags_do_not_hide_page_content(self):
         self.write('hunt', '2026-10-25T06:46:28+08:00', 'The hunt key', tags='[惊喜, 生日]',
-                   extra='why_remembered: secret reason\n')
+                   extra='why_remembered: birthday surprise\n')
         item = next(item for item in self.native().panel_entries()['items'] if item['memory_id'] == 'hunt')
-        self.assertTrue(item['surprise'])
-        self.assertEqual((item['body'], item['why'], item['tags']), ('', '', []))
-        self.assertNotIn('body of hunt', json.dumps(self.native().panel_entries(), ensure_ascii=False))
+        self.assertFalse(item['surprise'])
+        self.assertEqual(item['body'], 'body of hunt')
+        self.assertEqual(item['why'], 'birthday surprise')
+        self.assertEqual(item['tags'], ['惊喜', '生日'])
 
     def test_lan_edit_goes_through_archived_trace(self):
         ok, message = self.native().panel_edit('mem001', {'content': 'corrected by Lan'})
