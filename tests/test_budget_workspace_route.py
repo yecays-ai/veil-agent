@@ -40,8 +40,11 @@ class BudgetWorkspaceRouteTest(TestCase):
         self.request.do_GET()
         status, data = self.request._send.call_args.args
         self.assertEqual(200, status)
-        self.assertEqual({'spent_cny': '1.25', 'limit_cny': '11', 'remaining_cny': '9.25'}, data['daily'])
-        self.assertEqual({'spent_cny': '1.25', 'limit_cny': '26', 'remaining_cny': '24.25'}, data['monthly'])
+        # limit_cny is effective (base + approved raise); the editable form uses base_limit_cny.
+        self.assertEqual({'spent_cny': '1.25', 'limit_cny': '11', 'base_limit_cny': '10', 'raise_cny': '1',
+                          'remaining_cny': '9.25'}, data['daily'])
+        self.assertEqual({'spent_cny': '1.25', 'limit_cny': '26', 'base_limit_cny': '25', 'raise_cny': '1',
+                          'remaining_cny': '24.25'}, data['monthly'])
         self.assertEqual('0.5', data['pending_cny'])
         self.assertFalse(data['ledger_unverified'])
         self.assertIn('fictional-model', data['model_summary'])

@@ -47,7 +47,8 @@ workbench_lock = threading.Lock()
 
 MAX_BODY = 200_000
 MEMORY_CHANGE_PATHS = ('/api/memory/edit', '/api/memory/delete', '/api/memory/versions',
-                       '/api/memory/restore-version', '/api/memory/archived', '/api/memory/unarchive',
+                       '/api/memory/restore-version', '/api/memory/archive', '/api/memory/archived',
+                       '/api/memory/unarchive',
                        '/api/memory/lock', '/api/memory/seen', '/api/memory/event/split',
                        '/api/memory/event/move')
 MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
@@ -2456,9 +2457,13 @@ def make_handler(hub, token):
                 return
             self._send(200, {
                 'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
+                # limit_cny is the effective cap (base + today's approved raise); the form must
+                # edit base_limit_cny, otherwise saving it folds the raise into the base every day.
                 'daily': {'spent_cny': str(day), 'limit_cny': str(daily_cap),
+                          'base_limit_cny': str(budget.daily), 'raise_cny': str(daily_cap - budget.daily),
                           'remaining_cny': str(daily_cap - day - pending)},
                 'monthly': {'spent_cny': str(month), 'limit_cny': str(monthly_cap),
+                            'base_limit_cny': str(budget.monthly), 'raise_cny': str(monthly_cap - budget.monthly),
                             'remaining_cny': str(monthly_cap - month - pending)},
                 'pending_cny': str(pending), 'ledger_unverified': unverified,
                 'categories': categories, 'model_summary': models,
@@ -2541,6 +2546,9 @@ def make_handler(hub, token):
                 return
             except ValueError:
                 self._send(400, {'error': '日期参数无效，应为 YYYY-MM-DD。'})
+                return
+            except OSError:
+                self._send(500, {'error': '巡检完成但报告未能完整保存，请检查磁盘权限后重试。'})
                 return
             self._send(200, {'schema_version': 1, 'read_only': True, 'report': report})
 
@@ -2770,17 +2778,27 @@ def make_handler(hub, token):
                 tools = hub.memory_tools
                 extra = {}
                 if url.path == '/api/memory/edit':
+                    # Ticket 456 review: an edit without a concurrency token could silently
+                    # overwrite a background update, so the token is now mandatory.
                     expected_sha = body.get('expected_sha256')
-                    if isinstance(expected_sha, str) and expected_sha:
-                        from brain_p4_api import memory_sha256
-                        current_sha = memory_sha256(hub, body['id'])
-                        if current_sha and current_sha != expected_sha:
-                            self._send(409, {
-                                'error': '这段记忆在你编辑期间已被更新，请刷新核对后再保存（你的草稿仍保留）。',
-                                'conflict': True,
-                                'server_sha256': current_sha,
-                            })
-                            return
+                    if not isinstance(expected_sha, str) or not expected_sha:
+                        self._send(400, {'error': '缺少内容校验值，请刷新记忆页后重试。'})
+                        return
+                    from brain_p4_api import memory_sha256
+                    current_sha = memory_sha256(hub, body['id'])
+                    if not current_sha:
+                        self._send(409, {
+                            'error': '这条记忆当前读不到（可能已被删除），这次没有保存。',
+                            'conflict': True,
+                        })
+                        return
+                    if current_sha != expected_sha:
+                        self._send(409, {
+                            'error': '这段记忆在你编辑期间已被更新，请刷新核对后再保存（你的草稿仍保留）。',
+                            'conflict': True,
+                            'server_sha256': current_sha,
+                        })
+                        return
                     ok, message = tools.panel_edit(body['id'], body.get('changes') or {}
                                                    if isinstance(body.get('changes'), dict) else {})
                 elif url.path == '/api/memory/delete':
@@ -2801,6 +2819,8 @@ def make_handler(hub, token):
                     index = body.get('index')
                     ok, message = (tools.panel_restore_version(body['id'], index) if type(index) is int
                                    else (False, '无效请求。'))
+                elif url.path == '/api/memory/archive':
+                    ok, message = tools.panel_archive(body['id'])
                 elif url.path == '/api/memory/archived':
                     ok, message, extra = True, '', {'items': tools.panel_archived()}
                 elif url.path == '/api/memory/unarchive':

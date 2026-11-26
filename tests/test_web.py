@@ -457,7 +457,12 @@ output_cny_per_million = "8"
         status, listing = self.call('/api/memory/panel')
         self.assertEqual((status, listing['items'][0]['memory_id']), (200, 'fixture-id'))
         self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}, token='wrong')[0], 403)
-        self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}), (200, {'ok': True, 'message': 'saved'}))
+        # Ticket 456 review: an edit without a concurrency token is refused, never written blindly.
+        self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}})[0], 400)
+        with patch('brain_p4_api.memory_sha256', return_value='a' * 64):
+            self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'},
+                                                           'expected_sha256': 'a' * 64}),
+                             (200, {'ok': True, 'message': 'saved'}))
         self.assertEqual(self.call('/api/memory/delete', {'id': 'fixture-id'})[0], 409)
         self.assertEqual(self.call('/api/memory/delete', {'nope': 1})[0], 400)
         self.assertEqual(calls, [('edit', 'fixture-id', {'title': 'New'}), ('delete', 'fixture-id')])

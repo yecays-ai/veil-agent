@@ -468,7 +468,7 @@ function detachedViewFromEvent(event) {
 const fromChatPage = event => fromChat(event) || detachedViewFromEvent(event) !== null;
 // Memory page actions the renderer may post (ticket 363 added versions, archive, lock and seen).
 const MEMORY_POSTS = ['/api/memory/edit', '/api/memory/delete', '/api/memory/versions', '/api/memory/restore-version',
-  '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen',
+  '/api/memory/archive', '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen',
   '/api/memory/event/split', '/api/memory/event/move'];
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') {
@@ -717,7 +717,7 @@ function broadcastChannel(channel, payload) {
 const DEFAULT_CUSTOM_CSS = `/* ==========================================================================
    VEIL 聊天界面用户自定义外观覆盖文件 (userData/chat-custom.css)
    软件更新与升级时绝不会被覆盖。
-   出于安全策略，禁止使用 @import、url()、expression() 或外部脚本链接。
+   出于安全策略，禁止加载外部资源或执行脚本。
    ========================================================================== */
 
 :root {
@@ -778,12 +778,17 @@ ipcMain.handle('chat:save-avatar', async (event, dataUrl) => {
   if (!buf.length || buf.length > 8 * 1024 * 1024) throw new Error('头像超过 8MB');
   const ext = mime === 'image/jpeg' ? '.jpg' : `.${mime.split('/')[1]}`;
   await fs.mkdir(app.getPath('userData'), { recursive: true });
+  // Write and switch the reference before deleting the old format: a failed write must not
+  // leave settings.avatarExt pointing at a file that no longer exists.
+  const target = path.join(app.getPath('userData'), `avatar${ext}`);
+  const staging = `${target}.tmp`;
+  await fs.writeFile(staging, buf);
+  await fs.rename(staging, target);
+  settings.avatarExt = ext;
+  await save();
   for (const oldExt of Object.keys(avatarMime)) {
     if (oldExt !== ext) await fs.rm(path.join(app.getPath('userData'), `avatar${oldExt}`), { force: true });
   }
-  await fs.writeFile(path.join(app.getPath('userData'), `avatar${ext}`), buf);
-  settings.avatarExt = ext;
-  await save();
   const savedUrl = `data:${mime};base64,${buf.toString('base64')}`;
   broadcastChannel('avatar:changed', savedUrl);
   return savedUrl;

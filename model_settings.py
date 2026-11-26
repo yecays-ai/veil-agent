@@ -628,37 +628,45 @@ class ModelSettings:
                 self._source_bytes = self._current_bytes()
             if self._current_bytes() != self._source_bytes:
                 raise SettingsError('模型配置已被另一个进程修改；请刷新模型设置后重试。')
-            endpoints, new_keys = [], {}
-            known = {item['id']: item for item in self.data['endpoints']}
-            taken = set(known)
-            for item in endpoints_in:
-                if not isinstance(item, dict):
-                    raise SettingsError('设置格式不对。')
-                endpoint = self._endpoint(item, existing=taken)
-                taken.add(endpoint['id'])
-                key = item.get('key')
-                if isinstance(key, str) and key.strip():
-                    new_keys[endpoint['key_env']] = _key(key)
-                elif endpoint['id'] not in known:
-                    raise SettingsError(f'新接口“{endpoint["name"]}”要填 API Key。')
-                endpoints.append(endpoint)
-            if len({item['name'] for item in endpoints}) != len(endpoints):
-                raise SettingsError('两个接口不能同名。')
-            if len({item['id'] for item in endpoints}) != len(endpoints):
-                raise SettingsError('两个接口不能使用相同 ID。')
-            endpoint_ids = {item['id'] for item in endpoints}
-            models = []
-            previous_models = {item['id']: item for item in self.data['models']}
-            for item in models_in:
-                if not isinstance(item, dict):
-                    raise SettingsError('设置格式不对。')
-                previous = previous_models.get(item.get('id'), {}) if isinstance(item.get('id'), str) else {}
-                if ('input_modalities' not in item and 'input_modalities' in previous
-                        and all(item.get(key) == previous.get(key) for key in ('endpoint', 'model'))):
-                    item = {**item, 'input_modalities': previous['input_modalities']}
-                models.append(self._model(item, endpoint_ids))
-            if len({item['id'] for item in models}) != len(models):
-                raise SettingsError('两个模型不能使用相同 ID。')
+            if 'endpoints' not in payload and 'models' not in payload:
+                # A limits-only save (the budget workspace) must not wipe endpoints, models,
+                # keys or the role selections by treating the missing lists as empty.
+                endpoints = [dict(item) for item in self.data['endpoints']]
+                models = [dict(item) for item in self.data['models']]
+                endpoint_ids = {item['id'] for item in endpoints}
+                new_keys = {}
+            else:
+                endpoints, new_keys = [], {}
+                known = {item['id']: item for item in self.data['endpoints']}
+                taken = set(known)
+                for item in endpoints_in:
+                    if not isinstance(item, dict):
+                        raise SettingsError('设置格式不对。')
+                    endpoint = self._endpoint(item, existing=taken)
+                    taken.add(endpoint['id'])
+                    key = item.get('key')
+                    if isinstance(key, str) and key.strip():
+                        new_keys[endpoint['key_env']] = _key(key)
+                    elif endpoint['id'] not in known:
+                        raise SettingsError(f'新接口“{endpoint["name"]}”要填 API Key。')
+                    endpoints.append(endpoint)
+                if len({item['name'] for item in endpoints}) != len(endpoints):
+                    raise SettingsError('两个接口不能同名。')
+                if len({item['id'] for item in endpoints}) != len(endpoints):
+                    raise SettingsError('两个接口不能使用相同 ID。')
+                endpoint_ids = {item['id'] for item in endpoints}
+                models = []
+                previous_models = {item['id']: item for item in self.data['models']}
+                for item in models_in:
+                    if not isinstance(item, dict):
+                        raise SettingsError('设置格式不对。')
+                    previous = previous_models.get(item.get('id'), {}) if isinstance(item.get('id'), str) else {}
+                    if ('input_modalities' not in item and 'input_modalities' in previous
+                            and all(item.get(key) == previous.get(key) for key in ('endpoint', 'model'))):
+                        item = {**item, 'input_modalities': previous['input_modalities']}
+                    models.append(self._model(item, endpoint_ids))
+                if len({item['id'] for item in models}) != len(models):
+                    raise SettingsError('两个模型不能使用相同 ID。')
             data = {'endpoints': endpoints, 'models': models, 'use': {},
                     'limits': self._limits(payload.get('limits') or {})}
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']

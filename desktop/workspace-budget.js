@@ -97,8 +97,12 @@
           ? '账本存在待核实记录，付费请求已暂停'
           : '全部角色共用实时账本 · 修改限额后即时生效';
 
-        if (data.daily.limit_cny != null && !dailyInput.value) dailyInput.value = String(data.daily.limit_cny);
-        if (data.monthly.limit_cny != null && !monthlyInput.value) monthlyInput.value = String(data.monthly.limit_cny);
+        // limit_cny includes today's approved raise; the editable field must show the base limit,
+        // otherwise saving an untouched form folds the raise into the base and inflates the cap.
+        const dailyBase = data.daily.base_limit_cny ?? data.daily.limit_cny;
+        const monthlyBase = data.monthly.base_limit_cny ?? data.monthly.limit_cny;
+        if (dailyBase != null) dailyInput.value = String(dailyBase);
+        if (monthlyBase != null) monthlyInput.value = String(monthlyBase);
 
         kpiGrid.replaceChildren();
         for (const [label, spent, limit, rem] of [

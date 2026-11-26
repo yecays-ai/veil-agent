@@ -12,7 +12,8 @@ from pathlib import Path
 class BrainRead:
     def __init__(self, db_path):
         self.db_path = Path(db_path)
-        self.connection = sqlite3.connect('file:%s?mode=ro' % self.db_path, uri=True)
+        uri = self.db_path.resolve().as_uri()
+        self.connection = sqlite3.connect('%s?mode=ro' % uri, uri=True)
         self.connection.row_factory = sqlite3.Row
 
     def close(self):

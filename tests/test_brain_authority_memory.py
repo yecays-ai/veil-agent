@@ -94,6 +94,28 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertEqual(next(row for row in rows if row['memory_id'] == created['memory_id'])['body'],
                          'archived through brain')
 
+    def test_lan_can_archive_and_restore_a_memory_through_brain(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'archivable memory', 'title': 'Arch'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        ok, message = tools.panel_archive(memory_id)
+        self.assertTrue(ok, message)
+        self.assertIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
+        ok, message = tools.panel_unarchive(memory_id)
+        self.assertTrue(ok, message)
+        self.assertNotIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
+
+    def test_panel_entries_expose_the_same_sha_as_the_edit_lock(self):
+        from brain_p4_api import memory_sha256
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
+        memory_id = text.split('→')[1]
+        hub = SimpleNamespace(chat=SimpleNamespace(cfg=self.memory.cfg, store=self.store,
+                                                    memory=self.memory))
+        entry = next(item for item in NativeMemoryTools(self.memory).panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        self.assertEqual(memory_sha256(hub, memory_id), entry['sha256'])
 
 if __name__ == '__main__':
     unittest.main()

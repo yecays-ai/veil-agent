@@ -406,7 +406,7 @@ body:not(.detached-window) .topbar {
 .reader-meta-grid { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; color: var(--veil-soft); padding-bottom: 12px; border-bottom: 1px solid var(--veil-rule); margin-bottom: 14px; }
 .reader-why { padding: 10px 14px; border-radius: 12px; background: var(--veil-accent-soft); font-size: 13px; margin-bottom: 14px; }
 .reader-prose { font-size: 14.5px; line-height: 1.75; white-space: pre-wrap; max-width: 68ch; color: var(--veil-ink); margin-bottom: 16px; }
-.diff-box { font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 10px; background: var(--surface-muted); white-space: pre-wrap; margin-top: 6px; }
+.diff-box { font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 10px; background: var(--surface-muted); white-space: pre-wrap; margin-top: 6px; max-height: 460px; overflow: auto; }
 .diff-del { color: var(--veil-danger); }
 .diff-add { color: var(--good); }
 

@@ -164,7 +164,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     } else if (url.pathname === '/api/memory/event') {
       json(res, { event: { event_id: 'fictional-ev-1', title: '书店与雨天', story: '两人约定下雨天去松风旧书店买地图。', first_at: new Date().toISOString(), last_at: new Date().toISOString() }, linked_memories: [{ memory_id: 'fictional-mem-1', title: '周末书店散步' }], stages: [{ stage_title: '起因', summary: '聊到下雨天喜欢看老地图。' }] });
     } else if (url.pathname === '/api/peter-page/versions') {
-      json(res, { versions: [{ time: new Date().toISOString(), reason: '确认周末出行偏好', diff: ['- 旧记录', '+ 新增旧书店偏好'] }] });
+      json(res, { items: [{ time: new Date().toISOString(), reason: '确认周末出行偏好', diff: ['- 旧记录', '+ 新增旧书店偏好'] }] });
     } else if (url.pathname === '/api/diagnostics/trace') {
       json(res, { turns: [{ request_id: 'req-demo-1', model: 'fictional-model', time: new Date().toISOString(), retrieval_mode: 'hybrid', recall: { retrieval_mode: 'hybrid', relationship_base: ['关系底座'], opening: ['fictional-mem-1'], items: [{ memory_id: 'fictional-mem-1', title: '周末书店散步', score: 0.92 }] }, costs: { total_cost: '0.004' } }] });
     } else if (url.pathname === '/api/brain/health' || url.pathname === '/api/brain/health/scan') {
@@ -181,8 +181,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       const body = await readBody(req);
       json(res, { ok: true, settings: body });
     } else if (url.pathname === '/api/brain/health/export') {
-      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-      res.end('# VEIL Brain 只读健康报告（预览示例）\n');
+      json(res, { schema_version: 1, format: 'markdown', text: '# VEIL Brain 只读健康报告（预览示例）\n' });
     } else if (url.pathname === '/api/workbench') {
       if (req.method === 'POST') {
         const b = await readBody(req);

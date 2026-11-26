@@ -9,6 +9,7 @@ import array
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import threading
 import time
@@ -23,6 +24,17 @@ DEFAULT_HEALTH_SETTINGS = {
 VALID_SCHEDULES = ('daily_night', 'every_6h', 'manual_only')
 _SCAN_LOCK = threading.Lock()
 _ACTIVE_SCAN = False
+ALL_CHECK_IDS = ('H-1', 'H-2', 'H-3', 'H-4', 'H-5', 'H-6', 'H-7', 'H-8', 'H-9')
+# Ticket 456 review: the daily-night slot follows the same 01:00-06:00 window the repository
+# already uses for autonomy quiet hours, unless the role configures its own.
+DEFAULT_NIGHT_WINDOW = ((1, 0), (6, 0))
+# H-5 samples the newest-event scan; totals always come from COUNT(*) so a bound never lies.
+EVENT_ROW_LIMIT = 20000
+STAGE_EVIDENCE_LIMIT = 20000
+
+
+class _ScanTimeout(Exception):
+    """Raised internally when the whole scan has used up its time budget."""
 
 
 def _now_iso():
@@ -34,7 +46,10 @@ def _today_str():
 
 
 def _ro_connect(db_path):
-    return sqlite3.connect(f'file:{Path(db_path)}?mode=ro', uri=True, timeout=5.0)
+    # Path.as_uri() percent-encodes '#', '?' and '%'; a raw path would otherwise make SQLite
+    # open a different (or read-write) file than the one the caller asked for.
+    uri = Path(db_path).resolve().as_uri()
+    return sqlite3.connect(f'{uri}?mode=ro', uri=True, timeout=5.0)
 
 
 def _json_load(text, default):
@@ -43,6 +58,15 @@ def _json_load(text, default):
         return val if val is not None else default
     except (ValueError, TypeError):
         return default
+
+
+def _deadline_reached(deadline):
+    return time.monotonic() >= deadline
+
+
+def _guard(deadline):
+    if _deadline_reached(deadline):
+        raise _ScanTimeout
 
 
 def _parse_dt(value):
@@ -167,6 +191,9 @@ def save_health_settings(root, role_id, payload):
 
 
 def load_latest_report(root, role_id, from_date='', to_date=''):
+    # The endpoint can only serve the last report, so a requested range never relabels it.
+    if from_date or to_date:
+        _range_bounds(from_date, to_date)  # malformed dates raise instead of being echoed back
     rdir = health_reports_dir(root, role_id)
     latest = rdir / 'latest.json'
     if not latest.is_file():
@@ -175,11 +202,7 @@ def load_latest_report(root, role_id, from_date='', to_date=''):
         report = json.loads(latest.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
-    if not isinstance(report, dict):
-        return None
-    if from_date or to_date:
-        report['filtered_note'] = f'当前筛选区间：{from_date or "最早"} 至 {to_date or "今天"}'
-    return report
+    return report if isinstance(report, dict) else None
 
 
 def load_snapshots(root, role_id, limit=30):
@@ -189,13 +212,13 @@ def load_snapshots(root, role_id, limit=30):
 
 
 def _save_report(root, role_id, report):
+    """Persist the snapshot and the latest report; either failure means the scan did not finish.
+
+    The snapshot is appended first: the scheduler decides when to scan again from the persisted
+    ``scanned_at``, so a half-saved report must never look complete to the next poll.
+    """
     rdir = health_reports_dir(root, role_id)
     rdir.mkdir(parents=True, exist_ok=True)
-    latest = rdir / 'latest.json'
-    tmp = rdir / '.latest.tmp'
-    tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-    tmp.replace(latest)
-
     snap = {
         'day': _today_str(),
         'scanned_at': report.get('scanned_at'),
@@ -203,10 +226,21 @@ def _save_report(root, role_id, report):
         'events_total': report.get('stats', {}).get('events_total', 0),
         'warn_count': report.get('summary', {}).get('warn_count', 0),
         'error_count': report.get('summary', {}).get('error_count', 0),
+        'incomplete': bool(report.get('incomplete')),
     }
     snap_path = rdir / 'health-snapshots.jsonl'
     with snap_path.open('a', encoding='utf-8') as fh:
         fh.write(json.dumps(snap, ensure_ascii=False) + '\n')
+        fh.flush()
+        os.fsync(fh.fileno())
+
+    latest = rdir / 'latest.json'
+    tmp = rdir / '.latest.tmp'
+    with tmp.open('w', encoding='utf-8') as fh:
+        fh.write(json.dumps(report, ensure_ascii=False, indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
+    tmp.replace(latest)
 
 
 def _cosine(a, b):
@@ -235,6 +269,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         dt_from, dt_to = _range_bounds(from_date, to_date)
         db = Path(db_path)
         checks = []
+        timed_out = False
         stats = {
             'active_memories': 0,
             'pinned_memories': 0,
@@ -274,19 +309,35 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         conn.row_factory = sqlite3.Row
         try:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            _guard(deadline)
             mem_rows = conn.execute(
                 'SELECT id, title, name, created, bucket, type, importance, pinned, '
                 'vector_state, is_tombstone, is_deleted, body, body_sha256, raw_markdown, why_remembered '
                 'FROM memories'
             ).fetchall() if 'memories' in tables else []
 
+            _guard(deadline)
             sidecar_rows = conn.execute('SELECT memory_id, locked, links_json, merged_into FROM sidecar_state').fetchall() if 'sidecar_state' in tables else []
             sidecar_map = {r['memory_id']: r for r in sidecar_rows}
 
-            event_rows = conn.execute('SELECT * FROM events').fetchall() if 'events' in tables else []
-            stage_rows = conn.execute('SELECT * FROM event_stages').fetchall() if 'event_stages' in tables else []
-            version_rows = conn.execute('SELECT seq, memory_id, time, old_content, old_sha256 FROM versions ORDER BY memory_id, seq').fetchall() if 'versions' in tables else []
-            vector_rows = conn.execute('SELECT memory_id, dim, content_hash, vector FROM vectors').fetchall() if 'vectors' in tables else []
+            # Counts are exact; only bounded detail rows are loaded for the per-check samples.
+            _guard(deadline)
+            event_total = conn.execute('SELECT COUNT(*) FROM events').fetchone()[0] if 'events' in tables else 0
+            stage_total = conn.execute('SELECT COUNT(*) FROM event_stages').fetchone()[0] if 'event_stages' in tables else 0
+            version_total = 0
+            empty_versions = 0
+            if 'versions' in tables:
+                version_total, empty_versions = conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(CASE WHEN TRIM(COALESCE(old_content, '')) = '' THEN 1 ELSE 0 END), 0) "
+                    'FROM versions').fetchone()
+            event_rows = conn.execute('SELECT * FROM events LIMIT ?', (EVENT_ROW_LIMIT,)).fetchall() if 'events' in tables else []
+            _guard(deadline)
+            vector_rows = conn.execute(
+                'SELECT memory_id, dim, content_hash, length(vector) AS bytes FROM vectors').fetchall() if 'vectors' in tables else []
+            _guard(deadline)
+            sample_vector_rows = conn.execute(
+                'SELECT memory_id, vector FROM vectors WHERE vector IS NOT NULL LIMIT ?',
+                (max(1, int(vector_sample_limit)) * 2,)).fetchall() if 'vectors' in tables else []
             tomb_rows = conn.execute('SELECT memory_id, deleted_at FROM tombstones').fetchall() if 'tombstones' in tables else []
 
             active_mems = [r for r in mem_rows if not r['is_tombstone'] and not r['is_deleted'] and r['bucket'] != 'archive']
@@ -299,9 +350,9 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'pinned_memories': sum(1 for r in active_mems if r['pinned']),
                 'archived_memories': len(archived_mems),
                 'tombstones': len(tomb_rows),
-                'events_total': len(event_rows),
-                'event_stages_total': len(stage_rows),
-                'versions_total': len(version_rows),
+                'events_total': event_total,
+                'event_stages_total': stage_total,
+                'versions_total': version_total,
                 'vectors_total': len(vector_rows),
             })
 
@@ -319,7 +370,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'title': '记忆增长与各层数据分布',
                 'severity': 'good',
                 'status_label': '分布正常',
-                'impact': f"活跃记忆 {len(active_mems)} 条（置顶 {stats['pinned_memories']} 条），已归档 {len(archived_mems)} 条，事件故事 {len(event_rows)} 段，累计正文 {total_chars:,} 字。",
+                'impact': f"活跃记忆 {len(active_mems)} 条（置顶 {stats['pinned_memories']} 条），已归档 {len(archived_mems)} 条，事件故事 {event_total} 段，累计正文 {total_chars:,} 字。",
                 'object': 'memories / events / versions / learned-context',
                 'basis': f"分桶分布：{', '.join(f'{k}={v}' for k, v in sorted(by_bucket.items())) or '无'}",
                 'source': 'brain.db (mode=ro)',
@@ -361,15 +412,28 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
 
             # Offline cosine similarity on existing vectors (bounded sample, zero paid calls)
             near_dups = []
-            if time.monotonic() < deadline and vector_rows:
+            vector_decode_issues = []
+            active_title_map = {r['id']: _safe_title(r['title'] or r['name'], r['id']) for r in active_mems}
+            if not _deadline_reached(deadline) and sample_vector_rows:
                 sample_vecs = []
-                active_title_map = {r['id']: _safe_title(r['title'] or r['name'], r['id']) for r in active_mems}
-                for vr in vector_rows:
-                    if vr['memory_id'] in active_ids and vr['vector'] and vr['dim'] == 1024:
-                        arr = array.array('f')
-                        arr.frombytes(vr['vector'])
-                        if len(arr) == 1024:
-                            sample_vecs.append((vr['memory_id'], arr))
+                for idx, vr in enumerate(sample_vector_rows):
+                    if idx % 50 == 0:
+                        _guard(deadline)
+                    mid = vr['memory_id']
+                    if mid not in active_ids or not vr['vector']:
+                        continue
+                    blob = vr['vector']
+                    # A malformed BLOB used to abort the whole scan; record it for H-7 and keep going.
+                    if len(blob) != 1024 * 4:
+                        vector_decode_issues.append({
+                            'memId': mid,
+                            'label': _safe_title(active_title_map.get(mid, mid), mid),
+                            'note': f'向量字节数 {len(blob)}，与 1024 维（4096 字节）不符',
+                        })
+                        continue
+                    arr = array.array('f')
+                    arr.frombytes(blob)
+                    sample_vecs.append((mid, arr))
                     if len(sample_vecs) >= vector_sample_limit:
                         break
                 for i in range(len(sample_vecs)):
@@ -408,6 +472,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             })
 
             # H-3: Orphan & dangling links
+            _guard(deadline)
             orphan_evidences = []
             for r in sidecar_rows:
                 mid = r['memory_id']
@@ -435,8 +500,11 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             })
 
             # H-4: Event source broken links
+            _guard(deadline)
             ev_link_issues = []
-            for ev in event_rows:
+            for i, ev in enumerate(event_rows):
+                if i % 500 == 0:
+                    _guard(deadline)
                 mid = ev['memory_id']
                 if mid and mid not in live_ids:
                     ev_link_issues.append({
@@ -444,9 +512,12 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                         'label': _safe_title(ev['title'], ev['event_id']),
                         'note': f"关联记忆 {mid} 不在有效记忆库中",
                     })
+            stage_ev_total = conn.execute(
+                "SELECT COUNT(*) FROM event_ledger WHERE kind='stage-evidence'").fetchone()[0] if 'event_ledger' in tables else 0
+            _guard(deadline)
             stage_ev_rows = conn.execute(
-                "SELECT event_id, payload_json FROM event_ledger WHERE kind='stage-evidence'"
-            ).fetchall() if 'event_ledger' in tables else []
+                "SELECT event_id, payload_json FROM event_ledger WHERE kind='stage-evidence' LIMIT ?",
+                (STAGE_EVIDENCE_LIMIT,)).fetchall() if 'event_ledger' in tables else []
             chat_ev_count = 0
             for sr in stage_ev_rows:
                 payload = _json_load(sr['payload_json'], {})
@@ -457,8 +528,8 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'title': '事件来源与记忆链接完整性',
                 'severity': 'warn' if ev_link_issues else 'good',
                 'status_label': f"{len(ev_link_issues)} 条事件链接断开" if ev_link_issues else '事件关联完整',
-                'impact': (f"发现 {len(ev_link_issues)} 个事件的 memory_id 指向已失效记忆；stage-evidence 共 {len(stage_ev_rows)} 条（其中 chat 原话证据 {chat_ev_count} 条）。"
-                           if ev_link_issues else f"全部 {len(event_rows)} 个事件链接正常；stage-evidence 共 {len(stage_ev_rows)} 条（chat 证据 {chat_ev_count} 条）。"),
+                'impact': (f"发现 {len(ev_link_issues)} 个事件的 memory_id 指向已失效记忆；stage-evidence 共 {stage_ev_total} 条（其中 chat 原话证据 {chat_ev_count} 条）。"
+                           if ev_link_issues else f"全部 {event_total} 个事件链接正常；stage-evidence 共 {stage_ev_total} 条（chat 证据 {chat_ev_count} 条）。"),
                 'object': 'events.memory_id / event_ledger(stage-evidence)',
                 'basis': '精确引用集合核对',
                 'source': 'brain.db (mode=ro)',
@@ -467,11 +538,11 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             })
 
             # H-5: Event timeline anomalies
+            _guard(deadline)
             ev_time_issues = []
-            stages_by_event = {}
-            for st in stage_rows:
-                stages_by_event.setdefault(st['event_id'], []).append(st)
-            for ev in event_rows:
+            for i, ev in enumerate(event_rows):
+                if i % 500 == 0:
+                    _guard(deadline)
                 eid = ev['event_id']
                 fa = _parse_dt(ev['first_at'])
                 la = _parse_dt(ev['last_at'])
@@ -496,6 +567,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             })
 
             # H-6: Data integrity & versions
+            _guard(deadline)
             integrity_issues = []
             try:
                 qc = conn.execute('PRAGMA quick_check').fetchone()
@@ -506,7 +578,9 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
 
             crlf_count = 0
             sha_mismatch = []
-            for r in mem_rows:
+            for i, r in enumerate(mem_rows):
+                if i % 500 == 0:
+                    _guard(deadline)
                 if r['is_tombstone'] or r['is_deleted']:
                     continue
                 if isinstance(r['raw_markdown'], str) and '\r\n' in r['raw_markdown']:
@@ -515,7 +589,6 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 if r['body_sha256'] and calc != r['body_sha256']:
                     sha_mismatch.append({'memId': r['id'], 'label': _safe_title(r['title'], r['id']), 'note': 'body_sha256 与正文实际哈希不一致'})
 
-            empty_versions = sum(1 for v in version_rows if not (v['old_content'] or '').strip())
             all_h6 = integrity_issues + sha_mismatch
             h6_warn = bool(all_h6 or empty_versions > 0)
             checks.append({
@@ -533,9 +606,12 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             })
 
             # H-7: Retrieval index consistency
+            _guard(deadline)
             vec_by_id = {vr['memory_id']: vr for vr in vector_rows}
-            vec_issues = []
-            for r in active_mems:
+            vec_issues = list(vector_decode_issues)
+            for i, r in enumerate(active_mems):
+                if i % 500 == 0:
+                    _guard(deadline)
                 mid = r['id']
                 vr = vec_by_id.get(mid)
                 vstate = r['vector_state'] or 'ready'
@@ -546,6 +622,9 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 else:
                     if vr['dim'] != 1024:
                         vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': f"向量维度 {vr['dim']} ≠ 1024"})
+                    elif vr['bytes'] is not None and vr['bytes'] != vr['dim'] * 4:
+                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                           'note': f"向量字节数 {vr['bytes']} 与维度 {vr['dim']} 不符"})
                     if vr['content_hash'] and r['body_sha256'] and vr['content_hash'] != r['body_sha256']:
                         vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': '正文修改后向量 content_hash 未同步'})
             residual_tomb_vecs = [vr['memory_id'] for vr in vector_rows if vr['memory_id'] not in live_ids]
@@ -564,63 +643,88 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'confidence': '高可信（确定性对账）',
                 'evidences': vec_issues[:20],
             })
+        except _ScanTimeout:
+            timed_out = True
         finally:
             conn.close()
 
-        # H-8: Runtime recall / save / injection anomalies in window
+        if not timed_out and _deadline_reached(deadline):
+            timed_out = True
+        # H-8/H-9 still run when the database stage finished inside the budget; once the
+        # budget is gone they stay unexecuted and the report says so explicitly.
         rdir = _role_dir(root, role_id)
-        recall_rows = [row for row in _read_jsonl(rdir / 'recall-diagnostics.jsonl', 600)
-                       if _in_range(row.get('time'), dt_from, dt_to)]
-        degraded_count = 0
-        judge_fail_count = 0
-        budget_drop_count = 0
-        for row in recall_rows:
-            if row.get('failure') or 'keyword' in str(row.get('retrieval_mode', '')):
-                degraded_count += 1
-            j = row.get('judge')
-            if isinstance(j, dict) and j.get('status') == 'failed':
-                judge_fail_count += 1
-            if row.get('budget_dropped'):
-                budget_drop_count += 1
+        if not timed_out:
+            recall_rows = [row for row in _read_jsonl(rdir / 'recall-diagnostics.jsonl', 600)
+                           if _in_range(row.get('time'), dt_from, dt_to)]
+            degraded_count = 0
+            judge_fail_count = 0
+            budget_drop_count = 0
+            for row in recall_rows:
+                if row.get('failure') or 'keyword' in str(row.get('retrieval_mode', '')):
+                    degraded_count += 1
+                j = row.get('judge')
+                if isinstance(j, dict) and j.get('status') == 'failed':
+                    judge_fail_count += 1
+                if row.get('budget_dropped'):
+                    budget_drop_count += 1
 
-        exp_fail_rows = [row for row in _read_jsonl(rdir / 'experience-memory-failures.jsonl', 200)
-                         if _in_range(row.get('time'), dt_from, dt_to)]
-        page_err_rows = [row for row in _read_jsonl(rdir / 'peter-page-errors.jsonl', 200)
-                         if _in_range(row.get('time'), dt_from, dt_to)]
+            exp_fail_rows = [row for row in _read_jsonl(rdir / 'experience-memory-failures.jsonl', 200)
+                             if _in_range(row.get('time'), dt_from, dt_to)]
+            page_err_rows = [row for row in _read_jsonl(rdir / 'peter-page-errors.jsonl', 200)
+                             if _in_range(row.get('time'), dt_from, dt_to)]
 
-        runtime_warns = degraded_count + judge_fail_count + len(exp_fail_rows) + len(page_err_rows)
-        checks.append({
-            'id': 'H-8',
-            'title': '运行期召回、整理与注入异常统计',
-            'severity': 'warn' if runtime_warns else 'good',
-            'status_label': f"{runtime_warns} 次运行降级/异常" if runtime_warns else '运行平稳',
-            'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"),
-            'object': 'recall-diagnostics.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
-            'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
-            'source': 'role runtime jsonl',
-            'confidence': '高可信（真实日志计数）',
-            'evidences': [],
-        })
+            runtime_warns = degraded_count + judge_fail_count + len(exp_fail_rows) + len(page_err_rows)
+            checks.append({
+                'id': 'H-8',
+                'title': '运行期召回、整理与注入异常统计',
+                'severity': 'warn' if runtime_warns else 'good',
+                'status_label': f"{runtime_warns} 次运行降级/异常" if runtime_warns else '运行平稳',
+                'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"),
+                'object': 'recall-diagnostics.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
+                'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
+                'source': 'role runtime jsonl',
+                'confidence': '高可信（真实日志计数）',
+                'evidences': [],
+            })
 
         # H-9: Background maintenance & freeze status
-        frozen = (rdir / 'brain-write-freeze').exists()
-        exp_avail = bool(experience_status and experience_status.get('available'))
-        exp_enabled = bool(experience_status and experience_status.get('enabled'))
-        exp_kept = int((experience_status or {}).get('failures_kept') or 0)
-        judge_breaker = bool(judge_status and judge_status.get('breaker_open'))
-        bg_warn = frozen or exp_kept > 0 or judge_breaker
-        checks.append({
-            'id': 'H-9',
-            'title': '后台整理与写入保护机制状态',
-            'severity': 'warn' if bg_warn else 'good',
-            'status_label': '写入已冻结' if frozen else ('存在告警态' if bg_warn else '护栏正常'),
-            'impact': (f"Brain 写入冻结：{'是' if frozen else '否'}；自动经历整理：{'已开启' if exp_enabled else '已关闭'}（可用={exp_avail}，留存失败草稿={exp_kept}）；判官熔断：{'已熔断' if judge_breaker else '未熔断'}。"),
-            'object': 'brain-write-freeze / ExperienceMemory / RecallJudge',
-            'basis': '直接读取运行组件 status() 与锁标志文件',
-            'source': 'live runtime components',
-            'confidence': '高可信（实时状态读数）',
-            'evidences': [],
-        })
+        if not timed_out:
+            frozen = (rdir / 'brain-write-freeze').exists()
+            exp_avail = bool(experience_status and experience_status.get('available'))
+            exp_enabled = bool(experience_status and experience_status.get('enabled'))
+            exp_kept = int((experience_status or {}).get('failures_kept') or 0)
+            judge_breaker = bool(judge_status and judge_status.get('breaker_open'))
+            bg_warn = frozen or exp_kept > 0 or judge_breaker
+            checks.append({
+                'id': 'H-9',
+                'title': '后台整理与写入保护机制状态',
+                'severity': 'warn' if bg_warn else 'good',
+                'status_label': '写入已冻结' if frozen else ('存在告警态' if bg_warn else '护栏正常'),
+                'impact': (f"Brain 写入冻结：{'是' if frozen else '否'}；自动经历整理：{'已开启' if exp_enabled else '已关闭'}（可用={exp_avail}，留存失败草稿={exp_kept}）；判官熔断：{'已熔断' if judge_breaker else '未熔断'}。"),
+                'object': 'brain-write-freeze / ExperienceMemory / RecallJudge',
+                'basis': '直接读取运行组件 status() 与锁标志文件',
+                'source': 'live runtime components',
+                'confidence': '高可信（实时状态读数）',
+                'evidences': [],
+            })
+
+        skipped_checks = []
+        if timed_out:
+            done_ids = {c['id'] for c in checks}
+            skipped_checks = [cid for cid in ALL_CHECK_IDS if cid not in done_ids]
+            checks.append({
+                'id': 'H-T',
+                'title': '巡检执行时限与完成度',
+                'severity': 'warn',
+                'status_label': '本轮巡检未完成（超时）',
+                'impact': (f'已达到 {max(1.0, float(timeout_s)):.1f} 秒执行时限，未执行：{"、".join(skipped_checks) or "无"}。'
+                           '未执行的检查不会被标为通过，请稍后重试或缩小检查范围。'),
+                'object': 'scan deadline / per-stage work budget',
+                'basis': f'started={started:.3f}s, deadline={deadline:.3f}s',
+                'source': 'brain_health.run_health_scan',
+                'confidence': '确定（时间预算）',
+                'evidences': [],
+            })
 
         warn_count = sum(1 for c in checks if c['severity'] == 'warn')
         error_count = sum(1 for c in checks if c['severity'] == 'error')
@@ -635,9 +739,16 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             'from_date': from_date,
             'to_date': to_date,
             'stats': stats,
+            'incomplete': timed_out,
+            'timed_out': timed_out,
+            'completed_checks': [c['id'] for c in checks if c['id'] != 'H-T'],
+            'skipped_checks': skipped_checks,
+            'timeout_s': max(1.0, float(timeout_s)),
             'summary': {
-                'status': 'error' if error_count else ('warn' if warn_count else 'good'),
-                'status_label': f'发现 {warn_count + error_count} 项需关注' if (warn_count or error_count) else '系统健康，零异常',
+                'status': 'incomplete' if timed_out else ('error' if error_count else ('warn' if warn_count else 'good')),
+                'status_label': ('本轮巡检未完成（超时），未执行项不等同通过' if timed_out
+                                 else (f'发现 {warn_count + error_count} 项需关注' if (warn_count or error_count) else '系统健康，零异常')),
+                'incomplete': timed_out,
                 'total_checks': len(checks),
                 'good_count': good_count,
                 'warn_count': warn_count,
@@ -678,6 +789,25 @@ def export_report(report, fmt='markdown'):
     return '\n'.join(lines)
 
 
+def night_window_for(cfg):
+    """The role's night quiet hours (already parsed by veil_agent), or the repository default."""
+    autonomy = getattr(cfg, 'autonomy', None) or {}
+    hours = autonomy.get('quiet_hours') if isinstance(autonomy, dict) else None
+    if isinstance(hours, (list, tuple)) and len(hours) == 2:
+        return hours
+    return DEFAULT_NIGHT_WINDOW
+
+
+def in_night_window(now, window):
+    (start_h, start_m), (end_h, end_m) = window
+    start = int(start_h) * 60 + int(start_m)
+    end = int(end_h) * 60 + int(end_m)
+    current = now.hour * 60 + now.minute
+    if start == end:
+        return True
+    return start <= current < end if start < end else (current >= start or current < end)
+
+
 def start_health_scheduler(hub, *, interval_seconds=600):
     """Start a low-overhead periodic read-only P5 scheduler daemon if enabled."""
     def _loop():
@@ -694,11 +824,18 @@ def start_health_scheduler(hub, *, interval_seconds=600):
             data_root = getattr(hub, 'data_root', None) or Path(store.root)
             try:
                 settings = load_health_settings(data_root, cfg.id)
-                if not settings.get('enabled') or settings.get('schedule') == 'manual_only':
+                schedule = settings.get('schedule')
+                if not settings.get('enabled') or schedule == 'manual_only':
+                    continue
+                if schedule == 'daily_night' and not in_night_window(datetime.now(), night_window_for(cfg)):
+                    # daily_night means the night slot, not "whatever time the app happened to start".
                     continue
                 now_ts = time.time()
-                min_gap = 6 * 3600 if settings.get('schedule') == 'every_6h' else 20 * 3600
+                min_gap = 6 * 3600 if schedule == 'every_6h' else 20 * 3600
                 latest = load_latest_report(data_root, cfg.id)
+                if latest and latest.get('incomplete'):
+                    # An unfinished report must not postpone the next attempt by a whole night.
+                    min_gap = min(min_gap, 10 * 60)
                 if latest and latest.get('scanned_at'):
                     dt = _parse_dt(latest['scanned_at'])
                     if dt and (datetime.now() - dt).total_seconds() < min_gap:

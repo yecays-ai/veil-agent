@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import hashlib
 import json
 import sqlite3
@@ -139,12 +139,75 @@ class P4P5BrainRoutesTest(TestCase):
         self.assertIn('VEIL Brain', exp['text'])
         self.assertNotIn('在二楼窗边待了一下午', exp['text'])
 
+    def test_health_scan_reports_incomplete_instead_of_passing_unexecuted_checks(self):
+        calls = {'n': 0}
+        real_guard = brain_health._guard
+
+        def guard(deadline):
+            calls['n'] += 1
+            if calls['n'] >= 2:
+                raise brain_health._ScanTimeout
+            return real_guard(deadline)
+
+        with patch.object(brain_health, '_guard', guard):
+            report = brain_health.run_health_scan(self.data_root, 'peter', self.db_path, persist=False)
+        self.assertTrue(report['incomplete'])
+        self.assertTrue(report['timed_out'])
+        self.assertIn('H-T', [check['id'] for check in report['checks']])
+        self.assertEqual('incomplete', report['summary']['status'])
+        self.assertTrue(report['skipped_checks'])
+        self.assertFalse(set(report['completed_checks']) & set(report['skipped_checks']))
+        self.assertNotIn('H-2', report['completed_checks'])
+
+    def test_health_scan_reports_storage_failure_instead_of_success(self):
+        reports = self.role_dir / 'health-reports'
+        reports.mkdir()
+        (reports / 'health-snapshots.jsonl').mkdir()  # the append must fail loudly
+        self.req._post_brain_health_scan({})
+        status, payload = self.req._send.call_args.args
+        self.assertEqual(500, status)
+        self.assertIn('保存', payload['error'])
+
     def test_health_settings_roundtrip(self):
         self.req._post_brain_health_settings({'enabled': False, 'schedule': 'every_6h'})
         status, body = self.req._send.call_args.args
         self.assertEqual(200, status)
         self.assertFalse(body['settings']['enabled'])
         self.assertEqual('every_6h', body['settings']['schedule'])
+    def test_memory_edit_requires_sha_and_archive_uses_the_write_path(self):
+        calls = []
+
+        class FixtureTools:
+            def panel_edit(self, memory_id, changes):
+                calls.append(('edit', memory_id, changes))
+                return True, 'saved'
+
+            def panel_archive(self, memory_id):
+                calls.append(('archive', memory_id))
+                return True, 'archived'
+
+        self.hub.memory_tools = FixtureTools()
+        body_sha = hashlib.sha256('雨天一起去旧书店看手绘地图，在二楼窗边待了一下午。'.encode('utf-8')).hexdigest()
+
+        def call_post(path, body):
+            raw = json.dumps(body).encode('utf-8')
+            self.req.headers['Content-Length'] = str(len(raw))
+            self.req.rfile = __import__('io').BytesIO(raw)
+            self.req._post_memory_change(SimpleNamespace(path=path))
+            return self.req._send.call_args.args
+
+        self.assertEqual(400, call_post('/api/memory/edit', {'id': 'm1', 'changes': {'content': 'x'}})[0])
+        status, payload = call_post('/api/memory/edit', {'id': 'm1', 'changes': {'content': 'x'},
+                                                         'expected_sha256': '0' * 64})
+        self.assertEqual(409, status)
+        self.assertTrue(payload['conflict'])
+        status, _payload = call_post('/api/memory/edit', {'id': 'm1', 'changes': {'content': 'x'},
+                                                          'expected_sha256': body_sha})
+        self.assertEqual(200, status)
+        self.assertEqual(('edit', 'm1', {'content': 'x'}), calls[-1])
+        status, _payload = call_post('/api/memory/archive', {'id': 'm1'})
+        self.assertEqual(200, status)
+        self.assertEqual(('archive', 'm1'), calls[-1])
 
     def test_diagnostics_trace_and_snapshot_titles_expose_full_recall_pipeline(self):
         self.assertEqual('关系底座', request_snapshots.title_of('relationship_base'))

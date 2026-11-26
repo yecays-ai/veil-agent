@@ -1040,7 +1040,9 @@ function readMemory(item){
   reset.onclick=()=>{for(const [key,input] of Object.entries(inputs))input.value=original[key];status.textContent='';sync()};
   save.onclick=async()=>{
     save.disabled=true;status.textContent='正在保存…';
-    try{const r=await api('/api/memory/edit',{id:item.memory_id,changes:changes()});const data=await r.json();
+    // Ticket 456 review: send the hash captured when the editor opened so a background update
+    // turns into a 409 instead of being silently overwritten by this older draft.
+    try{const r=await api('/api/memory/edit',{id:item.memory_id,changes:changes(),expected_sha256:item.sha256||''});const data=await r.json();
       if(!r.ok)throw new Error(data.error||'没能保存。');
       await loadMemoryCatalog(false);const after=$('memory-detail').querySelector('.memory-status');if(after)after.textContent=data.message||'已保存。';
     }catch(error){status.textContent=error.message||'没能保存。';sync()}
@@ -3250,12 +3252,17 @@ window.addEventListener('resize',()=>closeVeilSelect());window.addEventListener(
       pinBtn.setAttribute('aria-pressed',String(Boolean(pinned)));
       pinBtn.textContent=pinned?'已置顶':'置顶';
     };
-    window.veilDesktop?.getPinned?.(detachedView).then(res=>syncPin(res?.pinned)).catch(()=>{});
-    window.veilDesktop?.onPinnedState?.(payload=>{if(!payload?.view||payload.view===detachedView)syncPin(payload?.pinned)});
+    // The IPC bridge returns and broadcasts a plain boolean; keep read, click and broadcast in sync.
+    window.veilDesktop?.getPinned?.(detachedView).then(res=>syncPin(Boolean(res))).catch(()=>{});
+    window.veilDesktop?.onPinnedState?.(pinned=>syncPin(Boolean(pinned)));
     pinBtn.onclick=async()=>{
+      pinBtn.disabled=true;
       const next=pinBtn.getAttribute('aria-pressed')!=='true';
-      const res=await window.veilDesktop?.setPinned?.(detachedView,next).catch(()=>null);
-      syncPin(res?res.pinned:next);
+      try{
+        const res=await window.veilDesktop?.setPinned?.(detachedView,next);
+        syncPin(typeof res==='boolean'?res:next);
+      }catch{syncPin(!next);}
+      finally{pinBtn.disabled=false;}
     };
   }
 

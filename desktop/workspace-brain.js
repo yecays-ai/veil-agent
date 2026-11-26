@@ -276,7 +276,8 @@
     addon.append(head, filterBar, split, pager);
     view.append(addon);
 
-    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0 };
+    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0, loadSeq: 0 };
+    const drafts = new Map();
 
     function openDetail(item) {
       state.selectedId = item.memory_id;
@@ -305,12 +306,31 @@
       readerPane.append(badgeRow, title, meta);
       if (item.why) readerPane.append(el('div', 'reader-why', `为什么记住：${item.why}`));
 
+      // Keep the server text and the unsaved draft separate: after a 409 the user must be able
+      // to compare them and decide, never have the draft silently replaced or auto-retried.
+      const serverBody = item.body_exact ?? item.body ?? '';
+      const draft = drafts.get(item.memory_id);
       const bodyEditor = document.createElement('textarea');
       bodyEditor.rows = 8;
       bodyEditor.style.width = '100%';
-      bodyEditor.value = item.body || '';
+      bodyEditor.value = draft !== undefined ? draft : serverBody;
+      bodyEditor.addEventListener('input', () => drafts.set(item.memory_id, bodyEditor.value));
 
       const actionStatus = el('p', '', '');
+      const draftArea = el('div', '');
+      if (draft !== undefined) {
+        const box = el('article', 'veil-card');
+        box.style.marginTop = '8px';
+        box.append(el('p', '', '你有未保存的草稿（基于旧版本）。服务器上的最新版本如下，核对后再决定保存或丢弃。'));
+        box.append(el('pre', 'diff-box', serverBody || '（服务器版本为空）'));
+        const discard = btn('丢弃我的草稿，改用服务器版本', 'sm');
+        discard.addEventListener('click', () => {
+          drafts.delete(item.memory_id);
+          openDetail(item);
+        });
+        box.append(discard);
+        draftArea.append(box);
+      }
       const actions = el('div', 'workspace-links');
       const saveBtn = btn('保存修改（乐观锁校验）', 'sm primary');
       const verBtn = btn('查看版本与 Diff', 'sm');
@@ -322,60 +342,89 @@
       saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
         actionStatus.textContent = '正在校验 SHA-256 并保存…';
-        const res = await reqJson(lastReq, '/api/memory/edit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: item.memory_id,
-            content: bodyEditor.value,
-            expected_sha256: item.sha256 || '',
-          }),
-        });
-        saveBtn.disabled = false;
-        if (res.status === 409) {
-          actionStatus.textContent = '并发冲突 (409)：后台已更新过此记忆，请先点击“刷新全库”重新读取后再编辑。';
-          return;
+        try {
+          const res = await reqJson(lastReq, '/api/memory/edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: item.memory_id,
+              // panel_edit only reads body['changes']; the top-level content used to be dropped.
+              changes: { content: bodyEditor.value },
+              expected_sha256: item.sha256 || '',
+            }),
+          });
+          if (res.status === 409) {
+            actionStatus.textContent = '并发冲突 (409)：后台已更新过此记忆。你的草稿仍保留，点击“刷新全库”可对照服务器最新版本后再决定。';
+            return;
+          }
+          if (!res.ok) {
+            actionStatus.textContent = res.data?.error || '保存失败。';
+            return;
+          }
+          drafts.delete(item.memory_id);
+          actionStatus.textContent = '保存成功！';
+          await loadLibrary(item.memory_id);
+        } catch (err) {
+          actionStatus.textContent = err?.message || '保存失败，草稿仍保留。';
+        } finally {
+          saveBtn.disabled = false;
         }
-        if (!res.ok) {
-          actionStatus.textContent = res.data?.error || '保存失败。';
-          return;
-        }
-        actionStatus.textContent = '保存成功！';
-        await loadLibrary(item.memory_id);
       });
 
       verBtn.addEventListener('click', async () => {
         verBtn.disabled = true;
-        const res = await reqJson(lastReq, '/api/memory/versions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: item.memory_id }),
-        });
-        verBtn.disabled = false;
-        extraArea.replaceChildren();
-        const versions = res.data?.versions || [];
-        if (!versions.length) {
-          extraArea.append(el('p', '', '暂无历史版本快照。'));
-          return;
-        }
-        for (const v of versions) {
-          const card = el('div', 'veil-card');
-          card.style.marginTop = '8px';
-          card.append(el('strong', '', `${formatTime(v.time)} · ${v.operation_reason || '编辑'}`));
-          if (v.diff) card.append(buildLineDiffNode(v.diff));
-          else if (v.old_content) card.append(el('div', 'diff-box', v.old_content.slice(0, 400)));
-          extraArea.append(card);
+        try {
+          const res = await reqJson(lastReq, '/api/memory/versions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.memory_id }),
+          });
+          extraArea.replaceChildren();
+          if (!res.ok) {
+            extraArea.append(el('p', '', res.data?.error || '版本读取失败。'));
+            return;
+          }
+          const versions = res.data?.versions || [];
+          if (!versions.length) {
+            extraArea.append(el('p', '', '暂无历史版本快照。'));
+            return;
+          }
+          for (const v of versions) {
+            const card = el('div', 'veil-card');
+            card.style.marginTop = '8px';
+            card.append(el('strong', '', `${formatTime(v.time)} · ${v.operation_reason || '编辑'}`));
+            if (v.diff) card.append(buildLineDiffNode(v.diff));
+            else if (v.old_content) card.append(el('div', 'diff-box', v.old_content.slice(0, 400)));
+            extraArea.append(card);
+          }
+        } catch (err) {
+          extraArea.replaceChildren(el('p', '', err?.message || '版本读取失败。'));
+        } finally {
+          verBtn.disabled = false;
         }
       });
 
       archBtn.addEventListener('click', async () => {
-        const res = await reqJson(lastReq, item.archived ? '/api/memory/unarchive' : '/api/memory/archived', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: item.memory_id }),
-        });
-        if (res.ok) await loadLibrary(item.memory_id);
-        else actionStatus.textContent = '归档状态切换失败。';
+        archBtn.disabled = true;
+        try {
+          // /api/memory/archived only lists; the reversible state change is /api/memory/archive.
+          const res = await reqJson(lastReq, item.archived ? '/api/memory/unarchive' : '/api/memory/archive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.memory_id }),
+          });
+          if (!res.ok) {
+            actionStatus.textContent = res.data?.error || '归档状态切换失败。';
+            return;
+          }
+          drafts.delete(item.memory_id);
+          actionStatus.textContent = res.data?.message || '';
+          await loadLibrary(item.memory_id);
+        } catch (err) {
+          actionStatus.textContent = err?.message || '归档状态切换失败。';
+        } finally {
+          archBtn.disabled = false;
+        }
       });
 
       delBtn.addEventListener('click', async () => {
@@ -401,11 +450,14 @@
         actions.append(evJump);
       }
 
-      readerPane.append(bodyEditor, actions, actionStatus, extraArea);
+      readerPane.append(bodyEditor, draftArea, actions, actionStatus, extraArea);
     }
 
     async function loadLibrary(focusId) {
       if (focusId) state.selectedId = focusId;
+      // Snapshot the query and a sequence number: a slower response for an older query must not
+      // overwrite a newer filter's list, page number or error state.
+      const seq = ++state.loadSeq;
       const qs = new URLSearchParams({
         q: qInput.value.trim(),
         status: statusSel.value,
@@ -415,6 +467,7 @@
         limit: String(state.limit),
       });
       const { ok, data } = await reqJson(lastReq, `/api/memory/library?${qs}`);
+      if (seq !== state.loadSeq) return;
       if (!ok || !data) {
         listPane.replaceChildren(el('p', '', '暂时无法加载全量记忆库。'));
         return;
@@ -449,6 +502,22 @@
       }
     }
 
+    async function openMemoryById(memId) {
+      if (!memId) return;
+      const seq = ++state.loadSeq;
+      const qs = new URLSearchParams({ q: String(memId), status: 'all', kind: 'all',
+                                       sort: 'updated', offset: '0', limit: '30' });
+      const { ok, data } = await reqJson(lastReq, `/api/memory/library?${qs}`);
+      if (seq !== state.loadSeq || !ok || !data) return;
+      const item = (data.items || []).find(row => row.memory_id === memId);
+      if (!item) return;
+      state.selectedId = memId;
+      for (const node of listPane.querySelectorAll('.index-item')) {
+        node.setAttribute('aria-current', String(node.dataset.memId === memId));
+      }
+      openDetail(item);
+    }
+
     refreshBtn.addEventListener('click', () => loadLibrary());
     for (const ctrl of [statusSel, kindSel, sortSel]) {
       ctrl.addEventListener('change', () => { state.offset = 0; loadLibrary(); });
@@ -460,6 +529,7 @@
     nextBtn.addEventListener('click', () => { state.offset += state.limit; loadLibrary(); });
 
     addon._loadLibrary = loadLibrary;
+    addon._openMemoryById = openMemoryById;
     loadLibrary();
   }
 
@@ -487,14 +557,17 @@
     readerPane.append(renderEmptyState('在左侧选择一个事件', '查看完整故事脉络、时间阶段、关联记忆卡与事件整理操作。'));
 
     let selectedId = focusEventId || events[0]?.event_id || events[0]?.id;
+    let detailSeq = 0;
 
     async function loadEventDetail(evId) {
       selectedId = evId;
+      const seq = ++detailSeq;
       for (const n of listPane.querySelectorAll('.index-item')) {
         n.setAttribute('aria-current', String(n.dataset.evId === evId));
       }
       readerPane.replaceChildren(el('p', '', '正在读取事件详情…'));
       const res = await reqJson(req, `/api/memory/event?id=${encodeURIComponent(evId)}`);
+      if (seq !== detailSeq) return;  // a newer selection already owns the pane
       if (!res.ok || !res.data) {
         readerPane.replaceChildren(el('p', '', '读取事件详情失败。'));
         return;
@@ -586,7 +659,7 @@
       reqJson(req, '/api/peter-page/versions'),
     ]);
     const page = pageRes.data || {};
-    const versions = verRes.data?.versions || [];
+    const versions = verRes.data?.items || verRes.data?.versions || [];
 
     const grid = el('div', 'overview-grid');
     const relCard = el('article', 'veil-card');
@@ -635,10 +708,12 @@
     const listPane = el('div', 'index-pane');
     const detailPane = el('article', 'veil-card reader-pane');
     let selectedId = focusTurnId || combined[0].request_id || combined[0].id || '';
+    let detailSeq = 0;
 
     async function showTurn(item) {
       const tid = String(item.request_id || item.id || '');
       selectedId = tid;
+      const seq = ++detailSeq;
       for (const n of listPane.querySelectorAll('.index-item')) {
         n.setAttribute('aria-current', String(n.dataset.turnId === tid));
       }
@@ -647,6 +722,7 @@
       let traceData = item;
       if (tid) {
         const traceRes = await reqJson(req, `/api/diagnostics/trace?request_id=${encodeURIComponent(tid)}`);
+        if (seq !== detailSeq) return;  // A -> B -> A: only the newest request owns the pane
         if (traceRes.ok && traceRes.data) traceData = { ...item, ...traceRes.data };
       }
 
@@ -658,7 +734,14 @@
       const tags = el('div', 'index-tags');
       if (recall.retrieval_mode) tags.append(pill(`模式: ${recall.retrieval_mode}`, 'rose'));
       if (traceData.model) tags.append(pill(traceData.model));
-      if (costs?.total_cost != null) tags.append(pill(`费用 ¥${costs.total_cost}`, 'gold'));
+      if (Array.isArray(costs)) {
+        const settled = costs.filter(row => row && row.type === 'settle');
+        const settledTotal = settled.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+        if (settled.length) tags.append(pill(`费用 ¥${settledTotal.toFixed(2)}（已结算 ${settled.length} 笔）`, 'gold'));
+        else if (costs.length) tags.append(pill(`费用结算中（${costs.length} 条）`, 'warn'));
+      } else if (costs?.total_cost != null) {
+        tags.append(pill(`费用 ¥${costs.total_cost}`, 'gold'));
+      }
       detailPane.append(tags);
 
       // Layer breakdown
@@ -700,10 +783,24 @@
         const body = el('pre', 'diff-box', '点击展开后按需加载…');
         rawDetails.append(sum, body);
         rawDetails.addEventListener('toggle', async () => {
-          if (!rawDetails.open || rawDetails.dataset.loaded === 'true') return;
-          rawDetails.dataset.loaded = 'true';
-          const snapDetail = await reqJson(req, `/api/request-snapshot?id=${encodeURIComponent(tid)}`);
-          body.textContent = JSON.stringify(snapDetail.data || {}, null, 2).slice(0, 6000);
+          if (!rawDetails.open || rawDetails.dataset.loaded === 'true' || rawDetails.dataset.loading === 'true') return;
+          rawDetails.dataset.loading = 'true';
+          body.textContent = '正在读取完整快照…';
+          try {
+            const snapDetail = await reqJson(req, `/api/request-snapshot?id=${encodeURIComponent(tid)}`);
+            if (!snapDetail.ok || !snapDetail.data) {
+              throw new Error(snapDetail.data?.error || '快照读取失败，收起后再展开可重试。');
+            }
+            body.textContent = JSON.stringify(snapDetail.data, null, 2);
+            if (snapDetail.data.truncated) {
+              rawDetails.append(el('p', 'muted', '接口返回的快照已标记为截断。'));
+            }
+            rawDetails.dataset.loaded = 'true';
+          } catch (err) {
+            body.textContent = err?.message || '快照读取失败，收起后再展开可重试。';
+          } finally {
+            delete rawDetails.dataset.loading;
+          }
         });
         detailPane.append(rawDetails);
       }
@@ -733,10 +830,14 @@
   // =========================================================================
   async function renderHealthWorkspace(host, req) {
     host.replaceChildren(el('p', '', '正在加载只读健康报告与巡检设置…'));
+    let healthSettings = null;
 
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
-      const settings = payload?.settings || { enabled: true, schedule: 'daily_night', idle_only: true };
+      // A scan response carries only the report; keep the saved settings instead of redrawing
+      // the form with defaults that a later save would write back to disk.
+      const settings = payload?.settings || healthSettings || { enabled: true, schedule: 'daily_night', idle_only: true };
+      healthSettings = settings;
       const sum = report.summary || { status: 'good', status_label: '尚未运行检查', total_checks: 0, good_count: 0, warn_count: 0, error_count: 0 };
       const checks = report.checks || [];
       healthWarnFlag = Boolean(sum.warn_count || sum.error_count);
@@ -761,8 +862,9 @@
 
       const scanBtn = btn('立即全面检查（只读）', 'primary');
       const exportBtn = btn('导出脱敏报告', '');
+      const bannerMsg = el('small', '', '');
       const btnGroup = el('div', 'workspace-links');
-      btnGroup.append(scanBtn, exportBtn);
+      btnGroup.append(scanBtn, exportBtn, bannerMsg);
       banner.append(lead, btnGroup);
 
       // KPI stats row inside banner
@@ -800,12 +902,24 @@
       const saveSchedBtn = btn('保存巡检设置', 'sm');
       const schedMsg = el('small', '', '');
       saveSchedBtn.addEventListener('click', async () => {
-        const res = await reqJson(req, '/api/brain/health/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: enabledChk.checked, schedule: schedSel.value, idle_only: true }),
-        });
-        schedMsg.textContent = res.ok ? '已保存设置' : '保存失败';
+        saveSchedBtn.disabled = true;
+        try {
+          const res = await reqJson(req, '/api/brain/health/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabledChk.checked, schedule: schedSel.value, idle_only: true }),
+          });
+          if (res.ok && res.data?.settings) {
+            healthSettings = res.data.settings;
+            schedMsg.textContent = '已保存设置';
+          } else {
+            schedMsg.textContent = res.data?.error || '保存失败';
+          }
+        } catch (err) {
+          schedMsg.textContent = err?.message || '保存失败';
+        } finally {
+          saveSchedBtn.disabled = false;
+        }
       });
       controls.append(chkLabel, schedSel, saveSchedBtn, schedMsg);
       schedBar.append(schedHead, controls);
@@ -859,27 +973,48 @@
       scanBtn.addEventListener('click', async () => {
         scanBtn.disabled = true;
         scanBtn.textContent = '巡检中…';
-        const res = await reqJson(req, '/api/brain/health/scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-        scanBtn.disabled = false;
-        scanBtn.textContent = '立即全面检查（只读）';
-        if (res.ok && res.data) await drawHealth(res.data);
+        try {
+          const res = await reqJson(req, '/api/brain/health/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          if (!res.ok || !res.data?.report) {
+            bannerMsg.textContent = res.data?.error || '巡检失败，请稍后重试。';
+            return;
+          }
+          await drawHealth({ report: res.data.report, settings: healthSettings });
+        } catch (err) {
+          bannerMsg.textContent = err?.message || '巡检失败，请稍后重试。';
+        } finally {
+          scanBtn.disabled = false;
+          scanBtn.textContent = '立即全面检查（只读）';
+        }
       });
 
       exportBtn.addEventListener('click', async () => {
-        const res = await req('/api/brain/health/export?format=markdown');
-        if (!res.ok) return;
-        const text = await res.text();
-        const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `veil-brain-health-${new Date().toISOString().slice(0, 10)}.md`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        exportBtn.disabled = true;
+        try {
+          const res = await req('/api/brain/health/export?format=markdown');
+          // The endpoint replies with {format, text}; res.text() would save the JSON wrapper.
+          const payload = await res.json().catch(() => null);
+          if (!res.ok || !payload || typeof payload.text !== 'string') {
+            bannerMsg.textContent = '导出失败：后端没有返回报告正文。';
+            return;
+          }
+          const blob = new Blob([payload.text], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `veil-brain-health-${new Date().toISOString().slice(0, 10)}.md`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          bannerMsg.textContent = '已导出脱敏报告。';
+        } catch (err) {
+          bannerMsg.textContent = err?.message || '导出失败。';
+        } finally {
+          exportBtn.disabled = false;
+        }
       });
 
       wrap.append(banner, kpis, schedBar, checksWrap);
@@ -896,8 +1031,9 @@
     mountMemoryLibraryAddon,
     openMemory(memId) {
       mountMemoryLibraryAddon(lastReq);
-      document.getElementById('brain-library-addon')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      document.getElementById('brain-library-addon')?._loadLibrary?.(memId);
+      const addon = document.getElementById('brain-library-addon');
+      addon?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      addon?._openMemoryById?.(memId);
     },
     openEvent(eventId) {
       const host = document.querySelector('#workspace-events-view .workspace-content');

@@ -442,6 +442,19 @@ class NativeMemoryTools:
         for row in rows:
             for memory_id in row.get('memory_ids') or []:
                 recalled[memory_id] = recalled.get(memory_id, 0) + 1
+        # The edit endpoint refuses a save without expected_sha256; the legacy page gets the exact
+        # hash the endpoint compares (Brain is authoritative here, the vault copy is only a view).
+        sha_map = {}
+        auth = getattr(self.memory, 'brain_authority', None)
+        if auth is not None:
+            try:
+                from brain_read import BrainRead
+                with BrainRead(auth.db_path) as reader:
+                    for row in reader.connection.execute('SELECT id, body, body_sha256 FROM memories'):
+                        sha_map[row['id']] = row['body_sha256'] or hashlib.sha256(
+                            (row['body'] or '').encode('utf-8')).hexdigest()
+            except Exception:
+                sha_map = {}
         entries = []
         for key, (title, raw) in self._visible_records().items():
             meta, body = parse_frontmatter(raw)
@@ -453,6 +466,7 @@ class NativeMemoryTools:
                 'tags': tags, 'importance': meta.get('importance', ''),
                 'why': meta.get('why_remembered', ''),
                 'body': body.strip(), 'surprise': False,
+                'sha256': sha_map.get(key) or hashlib.sha256(body.encode('utf-8')).hexdigest(),
                 'source_record': title.strip() == '原文来源', 'recalled': recalled.get(key, 0)})
         try:
             notes = self.sidecar.all()
@@ -571,6 +585,15 @@ class NativeMemoryTools:
             return False, '记忆服务回答了，但这条还没回到记忆里；稍后刷新再看。'
         self.sidecar.unarchived(memory_id)
         return True, '已恢复，它会重新被想起。'
+
+    def panel_archive(self, memory_id):
+        """Move a memory into the archive through the same reversible trace path Lan uses."""
+        if not isinstance(memory_id, str) or memory_id not in self._visible_records():
+            return False, '这条记忆不存在或已经删除。'
+        args = {'bucket_id': memory_id, 'archive': True,
+                'edit_reason': 'Lan archived this memory on the memory page.'}
+        result, state, _ = self._trace(args, None, by_lan=True)
+        return (True, '已移入归档，可随时恢复。') if state == '成功' else (False, result)
 
     def panel_lock(self, memory_id, locked):
         if not isinstance(memory_id, str) or memory_id not in self._visible_records(include_hidden=True):

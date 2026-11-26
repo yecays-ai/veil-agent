@@ -35,12 +35,38 @@
   - **Peter 头像自定义与持久化**：持久化到 `userData/avatar.*`（自动迁移旧版 `localStorage['veil-avatar']`），点击顶栏/气泡头像/独立小窗按钮打开预览裁剪弹窗，多窗口实时同步。
   - **三层聊天 CSS 体系**：设计系统 -> `chat-theme.css` -> `userData/chat-custom.css`（保持原有 CSP 与外部资源拦截校验），支持设置页与独立小窗快捷样式编辑器、打开外部文件及重载。
 
-## 隔离验证结果
+## 复查后验证结果（2026-11-26）
 
-- Python 单元测试：`Ran 67 tests in 5.384s — OK`（`test_p4_p5_brain_routes`、`test_budget_workspace_route`、`test_workspace_inventory`、`test_diagnostics`、`test_request_snapshots`、`test_brain_read`、`test_config_overview_route`、`test_config_registry`）。
-- 桌面 Node 契约与回归测试：`37/37` 全绿（`ui.test.cjs`、`workspace-mcp.test.cjs`、`workspace-inventory.test.cjs`、`workspace-brain.test.cjs`、`backend.test.cjs`）。
-- Windows Electron 真实窗口 E2E 冒烟测试：`desktop/tests/smoke.cjs` 退出码 `0`（完整覆盖原有回归项与 P4/P5 六大工作区、主题切换、独立小窗置顶及健康报告折叠交互）。
-
+- **定向 Python 单测**：`test_p4_p5_brain_routes`、`test_budget_workspace_route`、`test_model_settings`、`test_brain_authority_memory`、`test_web`（记忆页）全部通过；新增用例覆盖必需 `expected_sha256`、归档写入、巡检超时 `incomplete`/`H-T`、报告持久化失败 500、limits-only 保存保留配置、基础/有效限额分离。
+- **全量 Python**：本机 `python -m unittest discover -s tests` 运行 2343 项。本机 22 项失败/错误均为环境差异，不在本次改动范围：
+  - 本机 `core.autocrlf` 未设置，maintenance 用例里的 `git diff --check` 把 CRLF 当行尾空白（以 `GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true` 复跑 47/47 通过）；
+  - 本机 `%APPDATA%\VEIL Desktop` 已有真实桌面数据，备份用例多出一项（以空 `APPDATA` 复跑 backup/closeout 13/13 通过）；
+  - 本机未安装 `python-docx`（CI 由 `requirements.lock.txt` 安装）；本机 OpenCode 实机未产出测试文件（CI 环境差异）。
+- **桌面 Node**：`node --test tests/*.test.cjs` **53/53 全绿**，含新增 `workspace-budget.test.cjs`（基础限额表单）与 `workspace-review-fixes.test.cjs`（编辑载荷/草稿/归档/置顶/头像/CSS 默认模板）。
+- **Windows Electron 冒烟**：本机未安装 `desktop/node_modules`，未在本机重跑；由 CI `desktop.yml` 的 `npm test`、`npm run test:windows` 与打包覆盖。
 ## 隔离预览启动方式
 
 双击仓库根目录 [`打开-VEIL隔离预览.cmd`](file:///E:/Peter-Agent/VEIL/worktrees/451-p4-p5-brain-workspace/%E6%89%93%E5%BC%80-VEIL%E9%9A%94%E7%A6%BB%E9%A2%84%E8%A7%88.cmd) 查看真实 Electron 桌面交互界面（使用临时虚构后端数据，不影响正式 Peter 实例）。
+
+## CodeRabbit 复查修复（2026-11-26）
+
+对 PR #456 的 6 条 inline major、1 条 outside-diff major 与 22 条 minor/additional 逐条核对；只修仍成立的实质问题：
+
+### Major
+- **记忆库保存丢正文**：`desktop/workspace-brain.js` 改为提交 `changes: { content }`，保留顶层 `expected_sha256`；`memory_native.panel_edit` 只接受 `changes`。
+- **归档按钮不写入**：新增 `NativeMemoryTools.panel_archive()` 与 `POST /api/memory/archive`（走既有可逆 `trace archive=True` 路径），前端改用写入接口；`/api/memory/archived` 仍只做列表。
+- **409 后草稿丢失**：库页面按记忆 ID 分开保存草稿与服务端正文；刷新后编辑器保留草稿，并展示服务器最新版本与「丢弃草稿」按钮；不自动用新哈希重试旧草稿。
+- **限额保存把当日加额写进基础限额**：`/api/budget/summary` 增加 `base_limit_cny` / `raise_cny`，预算页表单只读写基础限额；`Budget.raise_today` 仍只在当日生效。
+- **预算页保存清空接口/模型**：`ModelSettings.save()` 在 payload 缺少 `endpoints`/`models` 时沿用现有配置与角色选择；显式传空列表仍可删除。
+- **巡检时限只覆盖部分阶段 / 未完成算通过**：`brain_health.run_health_scan()` 在取数、完整性、日志各阶段检查时限，改用 `COUNT(*)` 与向量元数据/有界样本；超时返回 `incomplete=true`、`timed_out=true`、`skipped_checks`、`H-T` 检查项，未执行项不标为通过；`daily_night` 只在角色夜间静默时段启动，未完成报告 10 分钟后可重试。
+- **旧记忆编辑入口可能覆盖并发更新**：`/api/memory/edit` 现在必须携带 `expected_sha256`（缺失 400、当前不可读 409、不一致 409 且不写入）；`/api/memory/panel` 返回与后端一致的 `sha256`，旧编辑器保存时携带。
+
+### Minor / Additional
+- 巡检：`from`/`to` 先校验再返回（不再把请求区间标成报告区间）；快照先追加 `health-snapshots.jsonl` 再替换 `latest.json`，任一步失败让 POST 返回 500、调度器重试；损坏向量记录到 H-7 后继续；只读连接用 `Path.as_uri()` 编码（`brain_health.py`、`brain_p4_api.py`、`brain_read.py`）。
+- P4 API：`learned_versions` 按 28 天窗口聚合版本而非只取最近 400 条；库列表用原始正文计算哈希并返回 `body_exact`，避免尾随空白导致永久 409。
+- 记忆库：列表请求按序号丢弃过期响应；关联记忆按 ID 直接打开；事件/召回详情按序号防串台；费用按 `settle` 行合计；快照完整显示（`.diff-box` 可滚动，不再截 6000 字符）；加载失败允许重试；按钮在 `finally` 恢复；导出解析 JSON 的 `text` 字段；认知版本读取 `items`。
+- 桌面：置顶桥接统一为 `getPinned`/`setPinned`/`onPinnedState` 并统一布尔值；头像先写新文件（临时文件 + rename）再删旧格式；默认自定义 CSS 注释不再触发 `validateCustomCssText`；`onPage` 先渲染再显示自定义页。
+- 诊断：`diagnostics.trace()` 同时按 `request_id` 与 `id` 关联普通聊天的结算行。
+
+### 未单开改动
+- 纯 JSON 缩进、命名与文案风格建议不单改；`request_snapshots` 等已符合现有契约。

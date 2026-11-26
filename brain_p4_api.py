@@ -17,7 +17,9 @@ from brain_health import load_latest_report, load_snapshots
 
 
 def _ro_connect(db_path):
-    conn = sqlite3.connect(f'file:{Path(db_path)}?mode=ro', uri=True, timeout=5.0)
+    # Encoded file URI: '#'/'?'/'%' in the path must not change which file (and mode) SQLite opens.
+    uri = Path(db_path).resolve().as_uri()
+    conn = sqlite3.connect(f'{uri}?mode=ro', uri=True, timeout=5.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -161,7 +163,8 @@ def library(hub, query_params):
             locked = bool(r['locked'])
             vstate = r['vector_state'] or 'ready'
             pinned = bool(r['pinned'])
-            body = (r['body'] or '').strip()
+            raw_body = r['body'] or ''
+            body = raw_body.strip()
             why = (r['why_remembered'] or '').strip()
             sources = _json_load(r['sources_json'], [])
             if not isinstance(sources, list):
@@ -205,7 +208,9 @@ def library(hub, query_params):
                 if q not in hay:
                     continue
 
-            sha = r['body_sha256'] or hashlib.sha256(body.encode('utf-8')).hexdigest()
+            # Hash the stored body exactly as the edit endpoint does; a stripped copy would
+            # produce a permanent 409 for memories whose stored body ends with whitespace.
+            sha = r['body_sha256'] or hashlib.sha256(raw_body.encode('utf-8')).hexdigest()
             items.append({
                 'memory_id': mid,
                 'title': title,
@@ -224,6 +229,7 @@ def library(hub, query_params):
                 'peter_after_lan': r['peter_after_lan'],
                 'why': why,
                 'body': body,
+                'body_exact': raw_body,
                 'sha256': sha,
                 'recalled': recalled_counts.get(mid, 0),
                 'version_count': vcnt,
@@ -326,7 +332,12 @@ def overview(hub):
                         week_added_buckets[3 - (diff_days // 7)] += 1
 
             if 'versions' in tables:
-                for vr in conn.execute('SELECT memory_id, time, operation_reason FROM versions ORDER BY seq DESC LIMIT 400'):
+                # Filter by the reporting window (28 days covers both charts); the newest-400 cap
+                # silently undercounted a busy week.
+                window_start = (now_dt - timedelta(days=27)).strftime('%Y-%m-%d')
+                for vr in conn.execute(
+                        "SELECT memory_id, time, operation_reason FROM versions "
+                        "WHERE substr(time, 1, 10) >= ?", (window_start,)):
                     vdt = _parse_dt(vr['time'])
                     if vdt:
                         if vdt >= seven_days_ago:

@@ -680,8 +680,10 @@
     if (!CUSTOM_PAGES.has(page)) {
       showCustomSection(null);
     } else {
-      showCustomSection(page);
+      // Render first: a page that is not cached yet is created inside renderCustomPage,
+      // so showing it before the render would leave the section hidden on first entry.
       renderCustomPage(page);
+      showCustomSection(page);
     }
     if (page === 'activity') upgradeActivityLayout();
     updateSubnav(page);
