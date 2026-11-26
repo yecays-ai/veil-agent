@@ -84,11 +84,11 @@
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.169352,
-      "2": 0.062778
+      "1": 1.53994,
+      "2": 0.084864
     },
-    "calls": 286,
-    "total_cny": 1.23213
+    "calls": 379,
+    "total_cny": 1.624804
   },
   "comparison": [
     {
@@ -134,11 +134,11 @@
     "写入拒绝率来自前向模拟，未跑真实写入路径；HEAD 增量只估算 facts+growth 渲染"
   ],
   "experiment_id": "AB-A3",
-  "finished_at": "2026-11-26T17:20:54.416+08:00",
+  "finished_at": "2026-11-26T17:51:02.777+08:00",
   "fixed_baseline": "隔离回放 learned-context 历史 + P6-2/P6-3 实测占用",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:20:54.410+08:00",
+  "started_at": "2026-11-26T17:51:02.770+08:00",
   "status": "completed",
   "tier": 0,
   "title": "learned-context 四区独立存储预算",

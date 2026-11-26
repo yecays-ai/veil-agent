@@ -6,7 +6,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": {},
@@ -33,11 +33,11 @@
     "真实巩固需主模型多日生成 + 盲评，Tier 2 预算与隔离条件不足"
   ],
   "experiment_id": "AB-E1",
-  "finished_at": "2026-11-26T17:26:59.780+08:00",
+  "finished_at": "2026-11-26T17:51:06.067+08:00",
   "fixed_baseline": "近 7 天真实隔离切片（events+autonomy+tools）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:59.771+08:00",
+  "started_at": "2026-11-26T17:51:06.058+08:00",
   "status": "blocked",
   "tier": 2,
   "title": "认知巩固收益与跨时间认知修订",

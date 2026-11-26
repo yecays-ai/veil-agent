@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 5.58,
+          "mean_ms": 6.44,
           "n": 73,
-          "p50_ms": 1.22,
-          "p95_ms": 4.03
+          "p50_ms": 1.5,
+          "p95_ms": 4.48
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 12,
         "latency": {
-          "mean_ms": 1.7,
+          "mean_ms": 2.0,
           "n": 73,
-          "p50_ms": 1.23,
-          "p95_ms": 3.91
+          "p50_ms": 1.59,
+          "p95_ms": 4.52
         },
         "overall": {
           "cross_event_coverage": 0.3,
@@ -554,10 +554,10 @@
         },
         "k": 20,
         "latency": {
-          "mean_ms": 1.74,
+          "mean_ms": 1.92,
           "n": 73,
-          "p50_ms": 1.19,
-          "p95_ms": 3.9
+          "p50_ms": 1.39,
+          "p95_ms": 4.24
         },
         "overall": {
           "cross_event_coverage": 0.4,
@@ -745,10 +745,10 @@
         },
         "k": 30,
         "latency": {
-          "mean_ms": 1.74,
+          "mean_ms": 1.9,
           "n": 73,
-          "p50_ms": 1.2,
-          "p95_ms": 3.95
+          "p50_ms": 1.34,
+          "p95_ms": 4.24
         },
         "overall": {
           "cross_event_coverage": 0.7,
@@ -768,11 +768,11 @@
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.169352,
-      "2": 0.062778
+      "1": 1.53994,
+      "2": 0.084864
     },
-    "calls": 286,
-    "total_cny": 1.23213
+    "calls": 379,
+    "total_cny": 1.624804
   },
   "comparison": [
     {
@@ -810,7 +810,7 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R1a",
-  "finished_at": "2026-11-26T17:20:49.899+08:00",
+  "finished_at": "2026-11-26T17:50:58.566+08:00",
   "fixed_baseline": "Baseline-1 融合 0.65/0.35 + importance +0.05 max",
   "harness_version": "recall-lab-0.1",
   "notes": [
@@ -819,7 +819,7 @@
     "K=20: recall@K=0.6019, vector_fill=0.2377",
     "K=30: recall@K=0.6778, vector_fill=0.2616"
   ],
-  "started_at": "2026-11-26T17:20:48.573+08:00",
+  "started_at": "2026-11-26T17:50:57.032+08:00",
   "status": "completed",
   "tier": 0,
   "title": "混合候选池大小 K",

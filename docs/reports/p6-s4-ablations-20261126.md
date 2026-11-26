@@ -2,7 +2,7 @@
 
 > 工单：P6-S4（docs/tickets/454-p6-s4-ablations.md）｜设计依据：P6-4 第五章实验矩阵、第六章备份契约
 > 执行时间：2026-11-26 15:50–17:40（+08:00）｜分支：ticket/454-p6-s4-ablations
-> 基线：P6-S1 合并提交 fd59f7a（PR #452 squash），S2 774b4bd、S0 56abe3f；实验在 base main = fd59f7a 的独立 worktree 完成，提交前 rebase 到最新 origin/main
+> 基线：P6-S1 合并提交 fd59f7a（PR #452 squash），S2 774b4bd、S0 56abe3f；S1 合并后加固 #453 合并 b3d14c2（换模型待索引恢复与诊断透出）。实验在 base main = fd59f7a 的独立 worktree 完成；提交前 rebase 到 origin/main = b3d14c2 并在 rebase 后复跑门禁/单测
 > 实验设施：recall-lab/（隔离、只读、可复现）｜聚合结果：recall-lab/results/
 > 隐私：本报告只含聚合指标、哈希、计数与匿名化描述；不含真实聊天原文、记忆正文、人设、密钥、本机路径
 
@@ -19,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | Baseline-1 来源 | P6-S1「检索、卡片与元数据确定性修复」交付，PR #452，合并/squash 提交 **fd59f7a** |
-| 门禁复跑 | scripts/p6_s1_baseline.py，**18/18 检查通过**，输出存档 recall-lab/results/baseline-1-gate.json（code_commit=fd59f7a） |
+| 门禁复跑 | scripts/p6_s1_baseline.py，rebase 后 **20/20 检查通过**（S1 交付 18 项 + #453 加固新增 2 项），输出存档 recall-lab/results/baseline-1-gate.json（code_commit=仓库测试时 HEAD e5b3494，生产模块版本 b3d14c2） |
 | 隔离快照 brain.db | sha256 2e6dd769a7c3…b3492；241 条记忆（自动召回可见 225：bucket dynamic/permanent 且 type 非隐藏）、76 事件、120 关系、64 条 stage-evidence、6 条 quotes；vectors 241 条 × 1024 维 |
 | 隔离 chat.jsonl | sha256 a948c60acdec…bf76；9,529 行（user 3,152 / assistant 6,377），2026-10-19 → 2026-11-25 |
 | eval-v2 | 73 条，sha256 c11cff7967e8…a25a0e（见第四节） |
@@ -28,7 +28,7 @@
 | 判官固定条件 | deepseek-flash，json_object，thinking disabled，max_tokens 200，timeout 4.0s；候选布局=fused top-8 + vector top-8（生产 recall_judge 布局）；card 300 保守 prompt |
 | 价格上界 | 判官 deepseek 峰值 input 2 / cached 0.04 / output 8 CNY per 1M；Embedding BAAI/bge-m3 input 0 CNY per 1M（character.toml 配置价，2026-10-19 核对） |
 
-门禁结论：Baseline-1 与 S1 报告一致（CRLF 卡片 20/20、每轮 1 次 Embedding、日期过滤/权重、维度与模型身份、判官诊断、连续性），未发现需先排查的差异。
+门禁结论：rebase 到 b3d14c2 后复跑 Baseline-1 全部 20/20 通过（S1 交付 18 项 + #453 加固新增 2 项：换模型待索引恢复前置校验、诊断字段透出）；与 S1 报告一致（CRLF 卡片 20/20、每轮 1 次 Embedding、日期过滤/权重、维度与模型身份、判官诊断、连续性），未发现需先排查的差异。
 
 ## 三、隔离执行方式（recall-lab）
 
@@ -284,7 +284,7 @@
 ## 十三、交付物
 
 - recall-lab/：harness、变体、预算台账、指标、23 项合成单测、schema、README
-- recall-lab/results/：24 个实验聚合结果 + coverage.json + run-manifest.json + baseline-1-gate.json
+- recall-lab/results/：24 个实验聚合结果 + coverage.json + run-manifest.json + baseline-1-gate.json + budget-summary.json（预算聚合；原始 append-only JSONL 留在本地 .local-tmp，不进 git）
 - docs/reports/p6-s4-ablations-20261126.md（本文件）
 - docs/reports/p6-s4-decision-table-20261126.md（Lan 白话决策表）
 - docs/tickets/454-p6-s4-ablations.md、STATUS.md、HANDOFF.md 更新

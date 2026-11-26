@@ -29,7 +29,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -50,11 +50,11 @@
     "自主独处消息/日记自然度与不跑题率需要真实生成盲评，本次未执行；仅验证检索侧候选与预算"
   ],
   "experiment_id": "AB-A1b",
-  "finished_at": "2026-11-26T17:26:59.764+08:00",
+  "finished_at": "2026-11-26T17:51:06.052+08:00",
   "fixed_baseline": "AB-A1a 长尾池 + 自主活动切片",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:59.744+08:00",
+  "started_at": "2026-11-26T17:51:06.030+08:00",
   "status": "partial",
   "tier": 2,
   "title": "autonomy 闲暇唤醒低打扰联想分支",

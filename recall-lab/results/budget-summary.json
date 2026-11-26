@@ -1,0 +1,63 @@
+{
+  "by_tier_cny": {
+    "0": 0,
+    "1": 1.53994,
+    "2": 0.084864
+  },
+  "generated_at": "2026-11-26T09:49:42.682424+00:00",
+  "notes": [
+    "Every paid and failed provider call is counted, including harness-fix rerun duplicates; see the report budget chapter.",
+    "Embedding preparation is recorded at its configured price (0 CNY per 1M tokens) while model and token counts are kept."
+  ],
+  "rows": [
+    {
+      "experiment_or_category": "AB-R3a",
+      "input_tokens": 333364,
+      "output_tokens": 2184,
+      "settled_calls": 178,
+      "settled_cny": 0.6842,
+      "tier": 1
+    },
+    {
+      "experiment_or_category": "AB-R3c",
+      "input_tokens": 167483,
+      "output_tokens": 1347,
+      "settled_calls": 89,
+      "settled_cny": 0.345742,
+      "tier": 1
+    },
+    {
+      "experiment_or_category": "AB-R3d",
+      "input_tokens": 250483,
+      "output_tokens": 1129,
+      "settled_calls": 89,
+      "settled_cny": 0.509998,
+      "tier": 1
+    },
+    {
+      "experiment_or_category": "PREP-embedding",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "settled_calls": 15,
+      "settled_cny": 0.0,
+      "tier": 1
+    },
+    {
+      "experiment_or_category": "AB-C1",
+      "input_tokens": 10803,
+      "output_tokens": 60,
+      "settled_calls": 9,
+      "settled_cny": 0.084864,
+      "tier": 2
+    }
+  ],
+  "run_id_scope": "local append-only ledger (raw JSONL stays under .local-tmp, not committed; no keys/paths inside)",
+  "settled_rows": 380,
+  "tier_caps_cny": {
+    "0": 0.0,
+    "1": 6.0,
+    "2": 10.0
+  },
+  "total_cap_cny": 20.0,
+  "total_cny": 1.624804
+}

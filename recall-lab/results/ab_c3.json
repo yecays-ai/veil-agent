@@ -25,7 +25,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -53,11 +53,11 @@
     "仅费用/结构侧证据，无真实生成；回复完整度与模型主动读全文频次需真实请求验证，本次未执行"
   ],
   "experiment_id": "AB-C3",
-  "finished_at": "2026-11-26T17:26:59.738+08:00",
+  "finished_at": "2026-11-26T17:51:06.024+08:00",
   "fixed_baseline": "完整长事件召回切片",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:59.732+08:00",
+  "started_at": "2026-11-26T17:51:06.018+08:00",
   "status": "partial",
   "tier": 2,
   "title": "完整 story vs 标题+因果摘要+timeline 指针",

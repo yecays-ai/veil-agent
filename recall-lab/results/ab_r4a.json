@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 5.39,
+          "mean_ms": 4.96,
           "n": 73,
-          "p50_ms": 1.11,
-          "p95_ms": 3.64
+          "p50_ms": 1.17,
+          "p95_ms": 3.79
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.64,
+          "mean_ms": 1.7,
           "n": 73,
-          "p50_ms": 1.23,
-          "p95_ms": 3.72
+          "p50_ms": 1.21,
+          "p95_ms": 3.49
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -389,7 +389,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 377,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -422,11 +422,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R4a",
-  "finished_at": "2026-11-26T17:26:56.215+08:00",
+  "finished_at": "2026-11-26T17:51:03.292+08:00",
   "fixed_baseline": "K=8 最佳检索 + 停用词=True + minmax 融合",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:55.671+08:00",
+  "started_at": "2026-11-26T17:51:02.784+08:00",
   "status": "completed",
   "tier": 1,
   "title": "events.story 纳入向量索引",

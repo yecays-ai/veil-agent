@@ -21,7 +21,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -41,11 +41,11 @@
     "仅 token/结构侧证据；短闲聊注入上限会否降低陪伴自然度必须真实生成盲评，本次未执行"
   ],
   "experiment_id": "AB-C2b",
-  "finished_at": "2026-11-26T17:26:59.727+08:00",
+  "finished_at": "2026-11-26T17:51:06.012+08:00",
   "fixed_baseline": "完整单轮聊天切片",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:59.710+08:00",
+  "started_at": "2026-11-26T17:51:05.995+08:00",
   "status": "partial",
   "tier": 2,
   "title": "短闲聊记忆注入上限 Top-2+1 vs 不限",

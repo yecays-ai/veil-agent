@@ -67,7 +67,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -132,11 +132,11 @@
     "未用完整生产请求组装验证（隔离环境不加载人设/工具 schema 全量），结果为 provider 级缓存行为证据，需 S7 实施后做真机复测"
   ],
   "experiment_id": "AB-C1",
-  "finished_at": "2026-11-26T17:26:59.675+08:00",
+  "finished_at": "2026-11-26T17:51:05.963+08:00",
   "fixed_baseline": "完整请求组装观测 + 真实 provider 前缀缓存微探针",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:57.660+08:00",
+  "started_at": "2026-11-26T17:51:03.935+08:00",
   "status": "partial",
   "tier": 2,
   "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）",

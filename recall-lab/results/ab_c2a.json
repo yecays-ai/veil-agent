@@ -19,7 +19,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 378,
+    "calls": 379,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -63,11 +63,11 @@
     "仅 token/结构侧证据，无真实生成；幻觉回忆率需真实请求与盲评，本次未执行"
   ],
   "experiment_id": "AB-C2a",
-  "finished_at": "2026-11-26T17:26:59.695+08:00",
+  "finished_at": "2026-11-26T17:51:05.989+08:00",
   "fixed_baseline": "完整多步工具循环切片",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:26:59.681+08:00",
+  "started_at": "2026-11-26T17:51:05.969+08:00",
   "status": "partial",
   "tier": 2,
   "title": "非首轮省略 memory.recall.empty 等空提示",

@@ -1,178 +1,202 @@
 {
-  "baseline": "P6-S1 Baseline-1",
-  "generated_at": "2026-11-26T09:29:58.736890+00:00",
-  "code_commit": "fd59f7a67471e9175953f88313cc46054a39fc5d",
-  "python": "3.12.10",
-  "environment": "isolated tempdir, fictional data, fake embedder/judge model, no network",
-  "configuration": {
-    "embedding_model": "baseline-fake-embedding",
-    "retrieval": {
-      "backend": "brain",
-      "weight_vector": 0.65,
-      "weight_keyword": 0.35
-    },
-    "judge": {
-      "timeout_seconds": 1,
-      "source": "recall_judge.DEFAULTS",
-      "defaults": {
-        "enabled": true,
-        "timeout_seconds": 4,
-        "ombre_candidates": 8,
-        "vector_candidates": 8,
-        "breaker_failures": 3,
-        "breaker_seconds": 300
-      }
-    }
-  },
   "all_checks_pass": true,
+  "baseline": "P6-S1 Baseline-1",
   "checks": [
     {
+      "detail": "20/20",
       "name": "card: every CRLF card carries opening and ending",
-      "ok": true,
-      "detail": "20/20"
+      "ok": true
     },
     {
+      "detail": "6/20",
       "name": "card: old split loses the body on every CRLF sample",
-      "ok": true,
-      "detail": "6/20"
+      "ok": true
     },
     {
+      "detail": 1,
       "name": "embedding: exactly one call per turn",
-      "ok": true,
-      "detail": 1
+      "ok": true
     },
     {
+      "detail": 2,
       "name": "embedding: old path had two",
-      "ok": true,
-      "detail": 2
+      "ok": true
     },
     {
+      "detail": "[bucket_id:154282939910] 二十号\n十一月二十号的新事\n\n[bucket_id:141a78c164cd] 风筝\n蓝色风筝挂在墙上\n===",
       "name": "active search: date range filters hits",
-      "ok": true,
-      "detail": "[bucket_id:6e3de0b8c66b] 二十号\n十一月二十号的新事\n\n[bucket_id:b013f44d8251] 风筝\n蓝色风筝挂在墙上\n==="
+      "ok": true
     },
     {
+      "detail": "",
       "name": "active search: invalid date rejected",
-      "ok": true,
-      "detail": ""
+      "ok": true
     },
     {
-      "name": "active search: configured weights are readable",
-      "ok": true,
       "detail": {
         "backend": "brain",
-        "weight_vector": 0.65,
-        "weight_keyword": 0.35
-      }
+        "weight_keyword": 0.35,
+        "weight_vector": 0.65
+      },
+      "name": "active search: configured weights are readable",
+      "ok": true
     },
     {
+      "detail": 4,
       "name": "vector: mixed dimensions are skipped, not crashed",
-      "ok": true,
-      "detail": 4
+      "ok": true
     },
     {
+      "detail": "",
       "name": "vector: a different embedding model degrades to keyword",
-      "ok": true,
-      "detail": ""
+      "ok": true
     },
     {
+      "detail": "embedding_model_mismatch",
       "name": "vector: writer refuses another model vector",
-      "ok": true,
-      "detail": "embedding_model_mismatch"
+      "ok": true
     },
     {
-      "name": "vector: pending vectors still recover",
-      "ok": true,
       "detail": {
+        "pending": 0,
         "retried": 2,
-        "saved": 2,
-        "pending": 0
-      }
+        "saved": 2
+      },
+      "name": "vector: pending vectors still recover",
+      "ok": true
     },
     {
+      "detail": "empty",
       "name": "judge: normal empty is not marked degraded",
-      "ok": true,
-      "detail": "empty"
+      "ok": true
     },
     {
-      "name": "judge: a slow model is timeout:model",
-      "ok": true,
       "detail": {
-        "status": "failed",
-        "candidates": 0,
+        "candidates": 8,
+        "detail": "model",
+        "embedding_seconds": 0.0,
+        "embedding_wait_ms": 0.0,
+        "model_seconds": 0.61,
         "picked": [],
+        "reason": "timeout",
+        "status": "failed",
         "vector": [],
-        "embedding_seconds": 0,
-        "model_seconds": 0.609,
         "vector_note": {
           "skipped_dim": 1,
           "skipped_model": false
-        },
-        "reason": "timeout",
-        "detail": "model"
-      }
+        }
+      },
+      "name": "judge: a slow model is timeout:model",
+      "ok": true
     },
     {
-      "name": "judge: an embedding failure is its own degraded stage",
-      "ok": true,
       "detail": {
-        "status": "failed",
         "candidates": 0,
+        "detail": "RuntimeError",
+        "embedding_seconds": 0.0,
+        "model_seconds": 0.0,
         "picked": [],
-        "vector": [],
-        "embedding_seconds": 0,
-        "model_seconds": 0,
         "reason": "embedding_error",
-        "detail": "RuntimeError"
-      }
+        "status": "failed",
+        "vector": []
+      },
+      "name": "judge: an embedding failure is its own degraded stage",
+      "ok": true
     },
     {
-      "name": "judge: wake degrades explicitly to the pool",
-      "ok": true,
       "detail": {
-        "stage": "judge",
-        "reason": "timeout",
         "detail": "model",
-        "fallback": "pool"
-      }
+        "fallback": "pool",
+        "reason": "timeout",
+        "stage": "judge"
+      },
+      "name": "judge: wake degrades explicitly to the pool",
+      "ok": true
     },
     {
+      "detail": [
+        "3f4f59c4578e",
+        "a04d2f7679a6",
+        "c9b6b49b9d72",
+        "ef32fd81223d"
+      ],
       "name": "continuity: the follow-up carries the previous turn memory",
-      "ok": true,
-      "detail": [
-        "b19de40feeed",
-        "d91323eb41ad",
-        "f242a29ba81e"
-      ]
+      "ok": true
     },
     {
-      "name": "continuity: a repeated turn keeps cooldown",
-      "ok": true,
       "detail": [
         {
-          "id": "463613007ef8",
+          "id": "c9b6b49b9d72",
           "reason": "cooldown"
         },
         {
-          "id": "1578fe634c98",
+          "id": "141a78c164cd",
           "reason": "cooldown"
         },
         {
-          "id": "6cb1e0dbf15d",
+          "id": "2d1fce41f959",
           "reason": "cooldown"
         }
-      ]
+      ],
+      "name": "continuity: a repeated turn keeps cooldown",
+      "ok": true
     },
     {
-      "name": "continuity: removed dead branches leave continuity intact",
-      "ok": true,
       "detail": [
-        "b19de40feeed",
-        "d91323eb41ad",
-        "463613007ef8",
-        "f242a29ba81e"
-      ]
+        "3f4f59c4578e",
+        "a04d2f7679a6",
+        "9a1ea1fce647",
+        "c9b6b49b9d72",
+        "ef32fd81223d"
+      ],
+      "name": "continuity: removed dead branches leave continuity intact",
+      "ok": true
+    },
+    {
+      "detail": {
+        "blocked": "embedding_model_mismatch",
+        "current_model": "new-baseline-model",
+        "pending": 1,
+        "retried": 0,
+        "saved": 0,
+        "stored_model": "baseline-fake-embedding"
+      },
+      "name": "model switch: a paid retry is blocked before the explicit reindex",
+      "ok": true
+    },
+    {
+      "detail": {
+        "pending": 0,
+        "retried": 13,
+        "saved": 13
+      },
+      "name": "model switch: the explicit reindex restores pending recovery",
+      "ok": true
     }
   ],
-  "notes": "Baseline-1 gate re-run inside the isolated worktree; fictional data and fake models only. Sanitized copy: no temp paths. Original report: docs/reports/p6-s1-baseline-1-20261126.md"
+  "code_commit": "e5b3494944037cccb2521a8d49761ece833494a5",
+  "configuration": {
+    "embedding_model": "baseline-fake-embedding",
+    "judge": {
+      "defaults": {
+        "breaker_failures": 3,
+        "breaker_seconds": 300,
+        "enabled": true,
+        "ombre_candidates": 8,
+        "timeout_seconds": 4.0,
+        "vector_candidates": 8
+      },
+      "source": "recall_judge.DEFAULTS",
+      "timeout_seconds": 1.0
+    },
+    "retrieval": {
+      "backend": "brain",
+      "weight_keyword": 0.35,
+      "weight_vector": 0.65
+    }
+  },
+  "environment": "isolated tempdir, fictional data, fake embedder/judge model, no network",
+  "generated_at": "2026-11-26T09:49:42.682424+00:00",
+  "notes": "Baseline-1 gate re-run inside the isolated worktree after rebase onto the latest main; fictional data and fake models only; sanitized copy without temp paths. Original report: docs/reports/p6-s1-baseline-1-20261126.md",
+  "python": "3.12.10"
 }

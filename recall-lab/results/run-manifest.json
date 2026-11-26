@@ -5,10 +5,10 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
-  "code_commit": "fd59f7a67471e9175953f88313cc46054a39fc5d",
+  "code_commit": "e5b3494944037cccb2521a8d49761ece833494a5",
   "coverage": {
     "count": 24,
     "experiments": [
@@ -238,9 +238,9 @@
       "partial": 5
     }
   },
-  "elapsed_seconds": 3.1,
+  "elapsed_seconds": 9.7,
   "embedding": {
-    "cache_hits": 73,
+    "cache_hits": 149,
     "cost_cny": 0.0,
     "input_cny_per_million": 0.0,
     "model": "BAAI/bge-m3",
@@ -257,6 +257,23 @@
     "warnings": []
   },
   "experiments_run": [
+    "AB-R1a",
+    "AB-R1b",
+    "AB-R1c",
+    "AB-R4b",
+    "AB-R4c",
+    "AB-R5a",
+    "AB-R5b",
+    "AB-R5c",
+    "AB-A1a",
+    "AB-A2",
+    "AB-A3",
+    "AB-R4a",
+    "AB-R2",
+    "AB-R3a",
+    "AB-R3b",
+    "AB-R3c",
+    "AB-R3d",
     "AB-C1",
     "AB-C2a",
     "AB-C2b",
@@ -265,7 +282,7 @@
     "AB-E1",
     "AB-COMB"
   ],
-  "generated_at": "2026-11-26T17:27:00.762+08:00",
+  "generated_at": "2026-11-26T17:51:06.661+08:00",
   "harness_version": "recall-lab-0.1",
   "platform": "win32",
   "prices": {
