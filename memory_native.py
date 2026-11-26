@@ -1297,10 +1297,15 @@ class NativeMemoryTools:
         old_document = self.memory.raw_content_for(target_id)
         if old_document is None:
             return 'The complete target memory could not be read, so nothing was changed.', '被拒绝', summary
-        if not self._save_version(target_id, {'content': content, 'why_remembered': why},
-                                  old_document, operation_reason='hold(target_id) 重写'):
-            return 'The complete previous version could not be safely archived, so nothing was changed.', '出错', summary
-        trace_args = {'bucket_id': target_id, 'content': content}
+        if getattr(self.memory, 'brain_authority', None) is None:
+            if not self._save_version(target_id, {'content': content, 'why_remembered': why},
+                                      old_document, operation_reason='hold(target_id) 重写'):
+                return 'The complete previous version could not be safely archived, so nothing was changed.', '出错', summary
+        trace_args = {'bucket_id': target_id, 'content': content, 'edit_reason': 'hold(target_id) 重写'}
+        if getattr(self.memory, 'brain_authority', None) is not None:
+            # P6-S2 review: store the full old Markdown (including front matter) inside the single
+            # Brain version row instead of creating a second duplicate version row.
+            trace_args['archive_raw'] = True
         if isinstance(title, str) and title.strip():
             trace_args['title'] = title.strip()[:TITLE_LIMIT]
         if why.strip():

@@ -1,0 +1,396 @@
+{
+  "arms": [
+    {
+      "arm": "chat_only (current)",
+      "config": {
+        "allowed_sources": [
+          "chat"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 0.0,
+        "confirmed_promotions": 0,
+        "note": "event:/memory: 指针不能单独晋升；与当前实现一致"
+      }
+    },
+    {
+      "arm": "event_pointer_naive",
+      "config": {
+        "allowed_sources": [
+          "event",
+          "memory"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 1.0,
+        "confirmed_promotions": 76,
+        "note": "只要存在 event:/memory: 指针即晋升 -> 模型自己的故事可以自我确认"
+      }
+    },
+    {
+      "arm": "event_stage_evidence_chat (candidate, strict)",
+      "config": {
+        "allowed_sources": [
+          "chat",
+          "stage-evidence:chat",
+          "quotes"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 0.0,
+        "confirmed_promotions": 0,
+        "quote_verified": 3,
+        "unverified_events": 76,
+        "verified_events": 0
+      }
+    },
+    {
+      "arm": "event_request_lineage (weaker proxy)",
+      "config": {
+        "allowed_sources": [
+          "chat",
+          "request-lineage"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 1.0,
+        "confirmed_promotions": 5,
+        "note": "stage-evidence 全部是 tool 证据，只能证明来自某次真实请求，不能证明 Lan 原话支持该认知"
+      }
+    },
+    {
+      "arm": "s2_isolated_chat_only",
+      "config": {
+        "allowed_sources": [
+          "chat"
+        ],
+        "s2_write_path": true
+      },
+      "metrics": {
+        "cases": [
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S1_user_quote",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S2_multi_exp",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S4_peter_guess",
+            "invoke_status": "成功",
+            "should_promote": false
+          },
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S5_missing_ev",
+            "invoke_status": "成功",
+            "should_promote": false
+          }
+        ],
+        "circular_self_promotion_rate": 0.0,
+        "false_promoted": 0,
+        "invalid_total": 2,
+        "lan_sovereignty_ok": true,
+        "valid_promoted": 0,
+        "valid_total": 2
+      }
+    },
+    {
+      "arm": "s2_isolated_strict_event_chat_evidence",
+      "config": {
+        "allowed_sources": [
+          "chat",
+          "stage-evidence:chat",
+          "quotes"
+        ],
+        "s2_write_path": true
+      },
+      "metrics": {
+        "cases": [
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S1_user_quote",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S2_multi_exp",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S4_peter_guess",
+            "invoke_status": "成功",
+            "should_promote": false
+          },
+          {
+            "actual_source": "peter",
+            "actual_status": "uncertain",
+            "case": "S5_missing_ev",
+            "invoke_status": "成功",
+            "should_promote": false
+          }
+        ],
+        "circular_self_promotion_rate": 0.0,
+        "false_promoted": 0,
+        "invalid_total": 2,
+        "lan_sovereignty_ok": true,
+        "valid_promoted": 2,
+        "valid_total": 2
+      }
+    },
+    {
+      "arm": "s2_isolated_event_pointer_naive",
+      "config": {
+        "allowed_sources": [
+          "event"
+        ],
+        "s2_write_path": true
+      },
+      "metrics": {
+        "cases": [
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S1_user_quote",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S2_multi_exp",
+            "invoke_status": "成功",
+            "should_promote": true
+          },
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S4_peter_guess",
+            "invoke_status": "成功",
+            "should_promote": false
+          },
+          {
+            "actual_source": "evidence",
+            "actual_status": "confirmed",
+            "case": "S5_missing_ev",
+            "invoke_status": "成功",
+            "should_promote": false
+          }
+        ],
+        "circular_self_promotion_rate": 1.0,
+        "false_promoted": 2,
+        "invalid_total": 2,
+        "lan_sovereignty_ok": true,
+        "valid_promoted": 2,
+        "valid_total": 2
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 380,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "historical_confirmed_growth"
+    },
+    {
+      "a": 0,
+      "b": 2,
+      "delta": 2,
+      "metric": "s2_isolated_valid_promotions"
+    },
+    {
+      "a": 1.0,
+      "b": 0.0,
+      "delta": -1.0,
+      "metric": "s2_isolated_circular_self_promotion_rate"
+    }
+  ],
+  "evidence": {
+    "events": 76,
+    "events_with_request_lineage": 5,
+    "learned_context_history": {
+      "confirmed_observations": 0,
+      "relationship_observations": 3,
+      "versions": 51
+    },
+    "quote_verified": 3,
+    "quotes": 6,
+    "s2_isolated_write_verification": {
+      "arms": {
+        "chat_only": {
+          "cases": [
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S1_user_quote",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S2_multi_exp",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S4_peter_guess",
+              "invoke_status": "成功",
+              "should_promote": false
+            },
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S5_missing_ev",
+              "invoke_status": "成功",
+              "should_promote": false
+            }
+          ],
+          "circular_self_promotion_rate": 0.0,
+          "false_promoted": 0,
+          "invalid_total": 2,
+          "lan_sovereignty_ok": true,
+          "valid_promoted": 0,
+          "valid_total": 2
+        },
+        "event_pointer_naive": {
+          "cases": [
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S1_user_quote",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S2_multi_exp",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S4_peter_guess",
+              "invoke_status": "成功",
+              "should_promote": false
+            },
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S5_missing_ev",
+              "invoke_status": "成功",
+              "should_promote": false
+            }
+          ],
+          "circular_self_promotion_rate": 1.0,
+          "false_promoted": 2,
+          "invalid_total": 2,
+          "lan_sovereignty_ok": true,
+          "valid_promoted": 2,
+          "valid_total": 2
+        },
+        "strict_event_chat_evidence": {
+          "cases": [
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S1_user_quote",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "evidence",
+              "actual_status": "confirmed",
+              "case": "S2_multi_exp",
+              "invoke_status": "成功",
+              "should_promote": true
+            },
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S4_peter_guess",
+              "invoke_status": "成功",
+              "should_promote": false
+            },
+            {
+              "actual_source": "peter",
+              "actual_status": "uncertain",
+              "case": "S5_missing_ev",
+              "invoke_status": "成功",
+              "should_promote": false
+            }
+          ],
+          "circular_self_promotion_rate": 0.0,
+          "false_promoted": 0,
+          "invalid_total": 2,
+          "lan_sovereignty_ok": true,
+          "valid_promoted": 2,
+          "valid_total": 2
+        }
+      },
+      "s2_capture_chat_user_preserved": 2,
+      "s2_quotes_generated": {
+        "e-missing-ev": 0,
+        "e-multi-exp": 2,
+        "e-peter-guess": 0,
+        "e-user-quote": 2
+      }
+    },
+    "stage_evidence_kinds": {
+      "tool": 64
+    },
+    "stage_evidence_rows": 64
+  },
+  "evidence_gaps": [
+    "历史快照数据在 S2 合并前生成（0 条历史 confirmed 晋升），历史回放本身无法产出晋升；新证据链已通过 S2 隔离写入路径实测验证，但仍需上线后真实多轮对话积累观察"
+  ],
+  "experiment_id": "AB-A2",
+  "finished_at": "2026-11-26T19:09:16.637+08:00",
+  "fixed_baseline": "隔离回放 learned-context 历史 + event_ledger 证据链",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T19:09:16.481+08:00",
+  "status": "completed",
+  "tier": 0,
+  "title": "关系认知证据链与 confirmed 晋升边界",
+  "variable": "仅 chat: 证据 vs 允许经 stage-evidence(chat)/quotes 溯源的 event:",
+  "verdict": {
+    "lan_sovereignty_ok": true,
+    "reason": "历史快照（S2 前）64 条 stage-evidence 全为 tool、0/76 事件可溯源；在隔离副本运行最新 S2 写入链路验证：10 条高频 tool 调用下仍保留 2 条 user chat 证据，严格 event+stage-evidence(chat)/quotes 规则有效晋升 2/2、自写猜测/无证据循环自证率 0.0%（朴素 event 指针自证率 100%）、Lan 纠正/删除主权全部生效；建议 S3 在 S2 新证据链之上谨慎实施严格溯源晋升",
+    "recommended": true,
+    "s2_isolated_valid_promoted": "2/2",
+    "self_proof_rate": 0.0,
+    "verified_events_request_lineage": 5,
+    "verified_events_strict_historical": 0
+  }
+}

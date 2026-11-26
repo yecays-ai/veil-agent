@@ -1,0 +1,142 @@
+{
+  "arms": [
+    {
+      "arm": "full_story",
+      "config": {},
+      "metrics": {
+        "avg_story_chars": 961.2,
+        "blind_eval": {
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.5,
+          "factual_accuracy": 4.5,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.33,
+          "relationship_continuity": 4.0,
+          "work_interference": 0
+        },
+        "events": 76,
+        "latency": {
+          "mean_ms": 2431.92,
+          "n": 6,
+          "p50_ms": 2173.14,
+          "p95_ms": 3294.46
+        },
+        "total_tokens": 12616
+      }
+    },
+    {
+      "arm": "summary_pointer",
+      "config": {
+        "tools": [
+          "memory_timeline"
+        ]
+      },
+      "metrics": {
+        "avg_saved_tokens_est": 216.4,
+        "blind_eval": {
+          "emotional_fit": 4.33,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 5.0,
+          "forced_association": 1,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.5,
+          "work_interference": 0
+        },
+        "latency": {
+          "mean_ms": 3794.39,
+          "n": 6,
+          "p50_ms": 3962.25,
+          "p95_ms": 5017.02
+        },
+        "net_tokens_saved": -12031,
+        "summary_pointer_chars": 240,
+        "tool_call_rate": 0.8333,
+        "tool_calls_made": 5,
+        "total_tokens": 24647
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.784595,
+      "2": 0.777961
+    },
+    "calls": 838,
+    "total_cny": 2.562556
+  },
+  "comparison": [
+    {
+      "a": 12616,
+      "b": 24647,
+      "delta": -12031,
+      "metric": "net_tokens_saved_6samples"
+    },
+    {
+      "metric": "tool_call_rate",
+      "value": 0.8333
+    },
+    {
+      "a": 4.5,
+      "b": 5.0,
+      "delta": 0.5,
+      "metric": "factual_accuracy_delta"
+    }
+  ],
+  "evidence": {
+    "blind_eval_summary": {
+      "arms": {
+        "full_story": {
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.5,
+          "factual_accuracy": 4.5,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.33,
+          "relationship_continuity": 4.0,
+          "work_interference": 0
+        },
+        "summary_pointer": {
+          "emotional_fit": 4.33,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 5.0,
+          "forced_association": 1,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.5,
+          "work_interference": 0
+        }
+      },
+      "n": 6,
+      "wins": {
+        "full_story": 2,
+        "summary_pointer": 4,
+        "tie": 0
+      }
+    },
+    "labeler": "ai-assisted (human_confirmed=false; local Lan blind-review pack generated)",
+    "long_events": 75,
+    "story_chars_avg": 961.2
+  },
+  "evidence_gaps": [
+    "AI 辅助盲评（未经 Lan 人工验收）；本地已生成匿名对照材料供 Lan 抽检"
+  ],
+  "experiment_id": "AB-C3",
+  "finished_at": "2026-11-26T20:14:11.048+08:00",
+  "fixed_baseline": "完整长事件召回切片 + deepseek-flash 真实工具调用与回复盲评",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T20:13:55.728+08:00",
+  "status": "completed",
+  "tier": 2,
+  "title": "完整 story vs 标题+因果摘要+timeline 指针",
+  "variable": "注入完整 events.story vs 摘要+指针（含真实 memory_timeline 工具调用）",
+  "verdict": {
+    "long_events": 75,
+    "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 5/6 次（83%），净 token 变化 -12031（省为正），事实准确度 +0.50，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
+    "recommended": false,
+    "tool_call_rate": 0.8333
+  }
+}

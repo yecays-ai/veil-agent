@@ -79,13 +79,28 @@ class NativeHoldAuthorityTests(unittest.TestCase):
         self.assertIn('a new linked memory', recalled)
 
     def test_event_record_writes_brain_story_and_projection(self):
+        self.store.append('fake/chat.jsonl', {
+            'id': 'message-for-event', 'role': 'user',
+            'content': 'Lan said the ferry bell sounded blue.',
+            'time': '2026-11-25T10:00:00+08:00'})
         events = EventMemory(self.memory, settings={'enabled': True})
-        events.record('we walked to the old harbour and talked about the ferry', 'Old harbour')
+        events.record('we walked to the old harbour and talked about the ferry', 'Old harbour',
+                      at='2026-11-25T10:05:00+08:00',
+                      source={'message_ids': ['message-for-event']})
         rows = events.events()
         self.assertTrue(rows)
         event_id = next(iter(rows))
         detail = events.detail(event_id)
         self.assertTrue(detail and detail.get('story'))
+        memory_id = rows[event_id]['memory_id']
+        self.assertIn(memory_id, self.memory.state['entries'])
+        connection = sqlite3.connect(str(self.db))
+        try:
+            quote = connection.execute(
+                'SELECT speaker,text FROM quotes WHERE memory_id=?', (memory_id,)).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(quote, ('user', 'Lan said the ferry bell sounded blue.'))
 
     def test_panel_read_api_shape_matches_frontend(self):
         panel = self.tools.panel_entries()

@@ -14,7 +14,7 @@ from unittest.mock import Mock
 
 from memory_agent import SEARCH_SPARE_HITS, Memory, vault_path
 from memory_sidecar import Sidecar
-from recall_rotation import (Cooldown, asks_about_past, directory_line, drift_hits, excerpt, experience_chain,
+from recall_rotation import (Cooldown, asks_about_past, directory_line, excerpt, experience_chain,
                              front_matter, rotate, settings)
 from veil_agent import Budget, Character, Store, memory_ref_fields
 
@@ -464,12 +464,6 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(settings({})['cooldown_turns'], 3)
         self.assertEqual(settings({'recall': {'cooldown_turns': -1, 'random_chance': 3}})['random_chance'], 0.1)
         self.assertEqual(settings({'recall': {'enabled': False}})['random_chance'], 0.0)
-
-    def test_drift_section_is_parsed_without_separators(self):
-        text = ('[bucket_id:a]\nhit\n=== 忽然想起来（非检索命中） ===\n[联想浮现·非检索命中] [bucket_id:b]\nbee\n---\n'
-                '[联想浮现·非检索命中] [bucket_id:c]\nsee\n=== ombre:result-ids ===\n```json\n{"bucket_ids":["a"]}\n```')
-        self.assertEqual(drift_hits(text), [('b', '[bucket_id:b]\nbee'), ('c', '[bucket_id:c]\nsee')])
-        self.assertEqual(drift_hits('[bucket_id:a] plain'), [])
 
     def test_front_matter_reads_links_and_importance(self):
         raw = ('---\nid: x\nimportance: 7\nrelation_links:\n- target_bucket_id: y\n  type: same_event\n'

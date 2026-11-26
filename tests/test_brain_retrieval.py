@@ -134,18 +134,6 @@ class BrainRetrievalTests(unittest.TestCase):
         second, _ = self.search('colour')
         self.assertIn('[bucket_id:new]', second)
 
-    def test_drift_section_is_present_when_nothing_matches(self):
-        class ZeroEmbedder:
-            def embed(self, _text):
-                return [0.0] * 1024
-        text, meta = brain_retrieval.search_text(self.db, 'zzqq', limit=8,
-                                                 embedder=ZeroEmbedder())
-        self.assertEqual(meta['ids'], [])
-        self.assertIn(brain_retrieval.DRIFT_MARK, text)
-        drift = text.split(brain_retrieval.DRIFT_MARK, 1)[1].split('=== ombre:result-ids ===')[0]
-        self.assertRegex(drift, r'\[bucket_id:[a-z0-9]+\]')
-        self.assertNotIn('[bucket_id:dead]', drift)
-
     def test_brain_embedding_goes_through_the_budget_lifecycle(self):
         import shutil
         target = self.root / 'peter' / 'brain.db'

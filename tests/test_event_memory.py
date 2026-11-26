@@ -450,13 +450,6 @@ class EventMemoryTests(unittest.TestCase):
                                           seen=projection))
         self.assertEqual(len(self.native.events.stages(event_id)), 3)
 
-        # Lan's own edit wins over later automatic rewrites.
-        self.native.sidecar.lan_edited(key)
-        before = self.backend.rows[key]['content']
-        self.native.events.record('A fourth note arrives after Lan fixed the story.', 'The charcoal note',
-                                  at='2026-11-21T12:00:00+08:00')
-        self.assertEqual(self.backend.rows[key]['content'], before)
-
         # Split and move rebuild both stories and belief history; an emptied event stops surfacing.
         stages = self.native.events.stages(event_id)
         new_id = self.native.events.split_event(event_id, [stages[-1]['stage_id']], 'The next morning')

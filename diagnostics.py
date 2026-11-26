@@ -924,6 +924,7 @@ def trace(root, role, request_id='', run_id='', call_id=''):
         if ids and _text(row.get('request_id')) in ids:
             keep = ('ombre', 'hidden', 'judge', 'dropped', 'injected',
                     'budget_dropped', 'failure', 'query_chars',
+                    'retrieval', 'degraded',
                     'association', 'opening', 'relevant_recall',
                     'natural_association', 'carried', 'relationship_base',
                     'vector', 'budget', 'items', 'final_trim', 'reused',
@@ -934,7 +935,9 @@ def trace(root, role, request_id='', run_id='', call_id=''):
     if ids:
         costs = []
         for crow in _rows(_role_dir(root, role).parent / 'costs.jsonl', 400):
-            cid = _text(crow.get('request_id'))
+            # Chat settlements store the request id in 'id' (Budget.settle); reserve rows do too,
+            # so both fields map to the same request and never to a different category.
+            cid = _text(crow.get('request_id') or crow.get('id'))
             if cid and cid in ids:
                 costs.append({
                     'type': crow.get('type'),

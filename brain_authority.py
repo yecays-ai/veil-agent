@@ -16,6 +16,14 @@ import brain_writer
 from brain_authority_init import BrainDatabaseProblem, prepare as prepare_brain_database
 
 
+class ProjectionConflict(RuntimeError):
+    """The committed body changed between the caller's read and the bundle transaction."""
+
+
+class ProjectionLocked(RuntimeError):
+    """The projection target was locked between the caller's check and the bundle transaction."""
+
+
 class BrainAuthority:
     def __init__(self, cfg, store):
         self.cfg = cfg
@@ -58,7 +66,9 @@ class BrainAuthority:
             return ''
         if name == 'breath_search':
             return self.breath_search(args.get('query') or '',
-                                      args.get('max_results') or 8, embedder)
+                                      args.get('max_results') or 8, embedder,
+                                      date_from=str(args.get('date_from') or ''),
+                                      date_to=str(args.get('date_to') or ''))
         raise ValueError('unsupported authority tool: %s' % name)
 
     def _write(self, name, args, embedder):
@@ -87,14 +97,32 @@ class BrainAuthority:
         # would wrongly skip the first retry on the CI machine.
         if self._last_pending_retry and now - self._last_pending_retry < self._pending_retry_seconds:
             return
-        self._last_pending_retry = now
-        connection = self._connect()
+        # P6-S1 post-merge review: after an embedding-model switch every stored vector belongs to
+        # the old model. Skip the retry before taking the write lock / opening a payment path; the
+        # explicit embedding_reindex script is the intended operator step, not repeated paid calls.
+        model = self.embedding_model()
+        stored_model = ''
         try:
+            import brain_read
+            with brain_read.BrainRead(self.db_path) as reader:
+                stored_model = reader.embedding_model()
+        except Exception:
+            stored_model = ''
+        if stored_model and model and stored_model != model:
+            return
+        self._last_pending_retry = now
+        connection = None
+        try:
+            connection = self._connect()
             brain_writer.retry_pending_vectors(connection, embed)
         except Exception:
+            # P6-S2 review: callers invoke this after their bundle already committed. A reconnect or
+            # schema failure here must not turn a committed write into a reported failure; the memory
+            # simply stays vector_state='pending' for the next retry.
             pass
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def _hold(self, connection, args, embedder):
         content = args.get('content') or ''
@@ -173,7 +201,8 @@ class BrainAuthority:
         if changes:
             result = brain_writer.update_memory(connection, memory_id, changes, embedder=embedder,
                                                 operation_reason=args.get('edit_reason') or 'trace',
-                                                why_remembered=args.get('why_remembered') or '')
+                                                why_remembered=args.get('why_remembered') or '',
+                                                archive_raw=bool(args.get('archive_raw')))
             status = result['status']
         if args.get('archive') in (1, True):
             brain_writer.set_state(connection, memory_id, archived=True)
@@ -203,12 +232,146 @@ class BrainAuthority:
         return '\n\n'.join('[bucket_id:%s] %s\n%s' % (row['id'], row['title'] or row['name'] or row['id'],
                                                        row['body']) for row in rows)
 
-    def breath_search(self, query, limit, embedder):
+    def retrieval_settings(self):
+        """The operator's [memory.retrieval] weights, not a second hard-coded default (P6-S1 G-A09)."""
+        import brain_retrieval
+        return brain_retrieval.load_settings((getattr(self.cfg, 'memory', {}) or {}).get('retrieval'))
+
+    def embedding_model(self):
+        return str(((getattr(self.cfg, 'memory', {}) or {}).get('model')) or '').strip()
+
+    def breath_search(self, query, limit, embedder, *, date_from='', date_to=''):
+        """Active search: the same BrainRetrieval path automatic recall uses, including the
+        configured weights and the date_from/date_to filter (P6-S1 G-A09)."""
         import brain_retrieval
         text, _meta = brain_retrieval.search_text(
             self.db_path, query, limit=limit, embedder=embedder,
-            settings={'backend': 'brain', 'weight_vector': 0.65, 'weight_keyword': 0.35})
+            settings=self.retrieval_settings(), model=self.embedding_model(),
+            date_from=date_from, date_to=date_to)
         return text
+
+    def commit_event_bundle(self, *, event, stage=None, projection=None, title='',
+                            importance=None, pinned=None, embedder=None,
+                            old_story='', operation_reason='事件故事更新',
+                            ledger_rows=(), quotes=(), seen_projection=None,
+                            locked_event=None, locked_ledger_rows=(), abort_on_locked=False):
+        """P6-S2: atomically commit memory projection (single version), event, stage, and ledgers.
+
+        Ticket 453: the caller's locked check runs outside this transaction, so it is re-read inside
+        BEGIN IMMEDIATE. A locked target is never rewritten: ``locked_event`` (with
+        ``locked_ledger_rows``) is the reviewed-story view to commit instead of the candidate
+        projection, and without such a view a locked projection raises ProjectionLocked.
+        ``abort_on_locked`` also refuses a projection-less commit so a pending stage stays retryable
+        instead of committing a story under a locked memory.
+        """
+        import brain_events
+        embed = self._embed_callable(embedder)
+        with write_lock(self.store, self.cfg.id):
+            if self.freeze_path.exists():
+                raise RuntimeError('memory writes are frozen for cutover')
+            with self.mutex:
+                connection = self._connect()
+                try:
+                    brain_events.ensure_schema(connection)
+                    memory_id = event.get('memory_id')
+                    result = None
+                    locked = False
+                    vector, state = (None, None)
+                    embed_model = brain_writer.embedding_model_of(embed)
+                    if projection is not None and str(projection).strip():
+                        vector, state = brain_writer._prepare_memory_vector(projection, None, embed)
+                    connection.execute('BEGIN IMMEDIATE')
+                    # Ticket 453: the caller's locked check runs before this transaction, so the panel
+                    # can lock the target in between. Re-read it under BEGIN IMMEDIATE: never rewrite a
+                    # locked body. A prepared reviewed-story view is committed instead; without one a
+                    # locked projection is refused so the caller can keep the stage retryable.
+                    if memory_id:
+                        try:
+                            lock_row = connection.execute(
+                                'SELECT locked FROM sidecar_state WHERE memory_id=?',
+                                (memory_id,)).fetchone()
+                        except sqlite3.Error:
+                            lock_row = None
+                        locked = bool(lock_row and lock_row[0])
+                    if locked:
+                        if locked_event is not None:
+                            event = dict(locked_event)
+                            projection = None
+                            ledger_rows = tuple(ledger_rows) + tuple(locked_ledger_rows or ())
+                        elif abort_on_locked or (projection is not None and str(projection).strip()):
+                            raise ProjectionLocked('event projection target is locked')
+                    if memory_id and seen_projection is not None:
+                        current = connection.execute(
+                            'SELECT body FROM memories WHERE id=? AND is_deleted=0 AND is_tombstone=0',
+                            (memory_id,)).fetchone()
+                        if current is None or current[0].strip() != str(seen_projection).strip():
+                            raise ProjectionConflict('event projection changed concurrently')
+                    if projection is not None and str(projection).strip():
+                        if memory_id:
+                            changes = {'body': projection}
+                            if title:
+                                changes['title'] = title[:100]
+                            result = brain_writer.apply_update_memory(
+                                connection, memory_id, changes, vector=vector, state=state,
+                                operation_reason=operation_reason, embedder_model=embed_model)
+                        else:
+                            record = {
+                                'body': projection,
+                                'title': (title or event.get('title') or 'Event')[:100],
+                                'type': 'dynamic',
+                                'importance': 10 if pinned is True else (importance or 5),
+                                'pinned': bool(pinned is True),
+                                'domain': [], 'tags': [],
+                            }
+                            result = brain_writer.apply_create_memory(
+                                connection, record, vector=vector, state=state,
+                                embedder_model=embed_model)
+                            memory_id = result['memory_id']
+                            event = {**event, 'memory_id': memory_id}
+                    brain_events.upsert_event(connection, dict(event), commit=False, ensure=False)
+                    if stage is not None:
+                        brain_events.upsert_stage(connection, dict(stage), commit=False, ensure=False)
+                        if memory_id:
+                            connection.execute(
+                                'INSERT OR IGNORE INTO event_sources(event_id,ord,memory_id,part) '
+                                'VALUES(?,?,?,?)',
+                                (event['event_id'], 0, memory_id, 'projection'))
+                    if old_story and old_story != event.get('story'):
+                        brain_events.append_ledger(
+                            connection, 'event-version',
+                            {'event_id': event['event_id'], 'memory_id': memory_id,
+                             'old_story': old_story, 'old_content': None,
+                             'at': brain_writer.now()})
+                    for kind, row in ledger_rows:
+                        brain_events.append_ledger(connection, kind, dict(row))
+                    if memory_id:
+                        next_quote = connection.execute(
+                            'SELECT COALESCE(MAX(ord), -1) + 1 FROM quotes WHERE memory_id=?',
+                            (memory_id,)).fetchone()[0]
+                        for offset, quote in enumerate(quotes):
+                            connection.execute(
+                                'INSERT INTO quotes(memory_id,ord,speaker,text) VALUES(?,?,?,?)',
+                                (memory_id, int(next_quote) + offset,
+                                 quote.get('speaker'), quote.get('text')))
+                    brain_writer.apply_digest(connection)
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+                finally:
+                    connection.close()
+        if embed is not None:
+            # Runs after this bundle committed, outside the role write lock (embedding is a network
+            # call). retry_pending_vectors re-checks body and vector_state inside its own write
+            # transaction, so a concurrent rewrite can never be indexed with a stale vector, and it
+            # never raises: a retry failure must not turn a committed write into a reported failure.
+            self._retry_pending(embed)
+        return {
+            'memory_id': (result or {}).get('memory_id') or event.get('memory_id'),
+            'index_pending': (result or {}).get('vector_state') == 'pending',
+            'changed': bool(result and result.get('changed', True)),
+            'locked': locked,
+        }
 
 def _split(value):
     if isinstance(value, str):

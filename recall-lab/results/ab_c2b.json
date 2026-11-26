@@ -1,0 +1,129 @@
+{
+  "arms": [
+    {
+      "arm": "uncapped_6",
+      "config": {
+        "cap": null
+      },
+      "metrics": {
+        "blind_eval": {
+          "emotional_fit": 4.17,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 4.67,
+          "forced_association": 2,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 3.83,
+          "relationship_continuity": 4.33,
+          "work_interference": 0
+        },
+        "real_prompt_tokens": 18760
+      }
+    },
+    {
+      "arm": "cap_top2+1",
+      "config": {
+        "cap": 3
+      },
+      "metrics": {
+        "avg_memory_tokens": 255.9,
+        "blind_eval": {
+          "emotional_fit": 3.83,
+          "experience_behavior_impact": 3.83,
+          "factual_accuracy": 5.0,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 3.83,
+          "work_interference": 0
+        },
+        "excess_memories": 18,
+        "observed_requests_with_picks": 220,
+        "real_prompt_tokens": 14218,
+        "real_tokens_saved": 4542,
+        "requests_over_cap": 10,
+        "saved_tokens_est": 4606.2
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.784595,
+      "2": 0.755124
+    },
+    "calls": 832,
+    "total_cny": 2.539719
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 4542,
+      "delta": 4542,
+      "metric": "real_tokens_saved_6samples"
+    },
+    {
+      "a": 3.83,
+      "b": 4.17,
+      "delta": 0.34,
+      "metric": "naturalness_delta"
+    },
+    {
+      "a": 4.17,
+      "b": 3.83,
+      "delta": -0.34,
+      "metric": "emotional_fit_delta"
+    }
+  ],
+  "evidence": {
+    "blind_eval_summary": {
+      "arms": {
+        "cap_top2+1": {
+          "emotional_fit": 3.83,
+          "experience_behavior_impact": 3.83,
+          "factual_accuracy": 5.0,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 3.83,
+          "work_interference": 0
+        },
+        "uncapped_6": {
+          "emotional_fit": 4.17,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 4.67,
+          "forced_association": 2,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 3.83,
+          "relationship_continuity": 4.33,
+          "work_interference": 0
+        }
+      },
+      "n": 6,
+      "wins": {
+        "cap_top2+1": 2,
+        "tie": 1,
+        "uncapped_6": 3
+      }
+    },
+    "labeler": "ai-assisted (human_confirmed=false; local Lan blind-review pack generated)",
+    "light_chat_real_messages": 2245,
+    "recall_diagnostics_entries": 220
+  },
+  "evidence_gaps": [
+    "AI 辅助盲评（未经 Lan 人工验收）；本地已生成匿名对照材料供 Lan 抽检"
+  ],
+  "experiment_id": "AB-C2b",
+  "finished_at": "2026-11-26T20:13:55.713+08:00",
+  "fixed_baseline": "完整单轮聊天切片 + deepseek-flash 真实生成盲评",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T20:13:55.690+08:00",
+  "status": "completed",
+  "tier": 2,
+  "title": "短闲聊记忆注入上限 Top-2+1 vs 不限",
+  "variable": "light_chat recalled 上限 3 条 vs 不限",
+  "verdict": {
+    "reason": "短闲聊 6 条真实生成盲评：Top-2+1 实省 4542 tokens（真实诊断 10/220 超 3 条），自然度 +0.34 / 情绪贴合 -0.34，胜负 {\"uncapped_6\": 3, \"cap_top2+1\": 2, \"tie\": 1}",
+    "recommended": false
+  }
+}

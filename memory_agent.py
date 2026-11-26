@@ -14,6 +14,7 @@ import random
 import re
 import subprocess
 import threading
+import time
 import uuid
 
 import prompts
@@ -1068,16 +1069,21 @@ class Memory:
             self._embedder = QueryEmbedder(self.cfg.memory['base_url'], self.cfg.memory['model'], key.strip())
         return self._embedder
 
-    def search_candidates(self, query, asked, *, mode='automatic'):
+    def search_candidates(self, query, asked, *, mode='automatic', prefetched=None,
+                          prefetched_timeout=None):
         """Ticket 430: same Ombre-shaped search text, from Brain when configured.
 
-        A failure here never changes the answer by hiding it: the caller gets Ombre's result and
+        P6-S1 G-A05: when the judge already started the embedding for this exact query, this method
+        reuses that vector, so one turn pays for one embedding call and one budget settlement. A
+        failure here never changes the answer by hiding it: the caller gets the keyword fallback and
         the diagnostic keeps the reason. The authoritative read/write path is untouched.
         """
         if getattr(self, 'last_recall_debug', None) is None:
             self.last_recall_debug = {}
         settings = getattr(self, 'retrieval_settings', None) or {'backend': 'ombre'}
         brain_db = self.store.root / self.cfg.id / 'brain.db'
+        cfg = getattr(self, 'cfg', None)
+        model = str(((getattr(cfg, 'memory', None) or {}).get('model')) or '').strip()
         if settings['backend'] == 'brain' and not brain_db.is_file():
             self.last_recall_debug['retrieval'] = {'backend': 'brain',
                                                    'fallback': 'FileNotFoundError'}
@@ -1086,7 +1092,27 @@ class Memory:
             settled_amount = Decimal(0)
             usage_tokens = None
             accounting = 'embedding-estimate'
+            shared_error = ''
             try:
+                if prefetched is not None:
+                    wait = prefetched_timeout if prefetched_timeout and prefetched_timeout > 0 else 30.0
+                    wait_started = time.monotonic()
+                    try:
+                        shared_vector = prefetched.result(timeout=wait)
+                    except Exception as exc:
+                        shared_error = type(exc).__name__
+                        raise RuntimeError('prefetched_embedding_failed') from exc
+                    embedding_wait_ms = round((time.monotonic() - wait_started) * 1000, 1)
+                    if shared_vector is not None:
+                        # P6-S1 G-A05: this is the judge's embedding for the same query; the budget
+                        # was already reserved and settled by the judge, so no second booking here.
+                        text, meta = brain_retrieval_search(
+                            brain_db, query, limit=asked, query_vector=shared_vector,
+                            settings=settings, model=model)
+                        self.last_recall_debug['retrieval'] = {
+                            'backend': 'brain', 'embedding': 'shared',
+                            'embedding_wait_ms': embedding_wait_ms, **meta}
+                        return text
                 embedder = self.embedder()
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
@@ -1097,7 +1123,7 @@ class Memory:
                 try:
                     text, meta = brain_retrieval_search(
                         brain_db, query, limit=asked, embedder=embedder,
-                        settings=settings)
+                        settings=settings, model=model)
                     reported = getattr(embedder, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
                         amount = Decimal(reported) * rate / Decimal(1_000_000)
@@ -1116,6 +1142,9 @@ class Memory:
             except Exception as exc:
                 self.last_recall_debug['retrieval'] = {'backend': 'brain',
                                                        'fallback': type(exc).__name__}
+                if shared_error:
+                    self.last_recall_debug['retrieval']['embedding_failure'] = shared_error
+                    self.last_recall_debug['retrieval']['shared_embedding'] = 'failed'
                 try:
                     self.store.append(self.diagnostics, {
                         'time': self.budget.clock() if getattr(self, 'budget', None) else '',
@@ -1129,9 +1158,10 @@ class Memory:
             # nothing or spending a second paid search in another process.
             try:
                 text, meta = brain_retrieval_search(
-                    brain_db, query, limit=asked, embedder=None, settings=settings)
+                    brain_db, query, limit=asked, embedder=None, settings=settings, model=model)
+                previous = self.last_recall_debug.get('retrieval') or {}
                 self.last_recall_debug['retrieval'] = {
-                    'backend': 'brain', 'degraded': 'keyword_only', **meta}
+                    **previous, 'backend': 'brain', 'degraded': 'keyword_only', **meta}
                 return text
             except Exception as exc:
                 self.last_recall_debug['retrieval'] = {'backend': 'brain',
@@ -1146,6 +1176,23 @@ class Memory:
                 return ''
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
+
+    def _merge_embedding_wait(self, debug, judge):
+        """Record the shared embedding's real wait time in the turn diagnostics.
+
+        judge.last_choice starts its own clock after search_candidates already consumed the same
+        future, so its embedding_seconds is usually 0 on the shared path. The retrieval side measured
+        the actual wait; copy it over for P4/P5 and keep the source explicit.
+        """
+        retrieval = debug.get('retrieval') or {}
+        wait_ms = retrieval.get('embedding_wait_ms')
+        if wait_ms is None:
+            return
+        debug['judge']['embedding_wait_ms'] = wait_ms
+        try:
+            judge.last_choice['embedding_wait_ms'] = wait_ms
+        except Exception:
+            pass
 
     def assisted_recall(self, query, recent, settings, normal):
         """Search again with the last rounds, keep only candidates close to that text; may keep none."""
@@ -1465,7 +1512,7 @@ class Memory:
         which is what tests and the readiness probe want.
         """
         from recall_relevance import cosine
-        from recall_rotation import (EVENT_LINKS, asks_about_past, drift_hits, excerpt, experience_chain,
+        from recall_rotation import (EVENT_LINKS, asks_about_past, excerpt, experience_chain,
                                      front_matter, is_followup, rotate as rotated, same_event)
         self._turn_notice_local.seen = set()
         self.last_context_refs = []
@@ -1486,7 +1533,7 @@ class Memory:
             # Ticket 422: three separate paths plus the base that is always carried, and the reason
             # each natural-association candidate was passed over.
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
-            'association': {}, 'carried': [], 'retrieval': {}}
+            'association': {}, 'carried': [], 'retrieval': {}, 'degraded': ''}
         recall_cfg = self.recall_settings
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
@@ -1497,13 +1544,14 @@ class Memory:
             self.rotation.turn += 1
         opening = []
         normal = []
-        drift = []
         pool = []
         judged = False
         # Ticket 422 review: weak association needs a candidate pool that is not only Ombre's random
         # "忽然想起来". Ombre's `breath` (its own importance-ordered list, already fetched for the
-        # opening and cached for this conversation) is that pool; the random drift stays available as
-        # a lower-priority extra. No extra model call, no whole-library scan by us.
+        # opening and cached for this conversation) is that pool. No extra model call, no
+        # whole-library scan by us. P6-S1: the random drift section was a dead branch (it only fired
+        # when a vector-backed search returned fewer than three hits, which never happens) and was
+        # removed together with its diagnostics; the importance-ordered pool is unchanged.
         try:
             breath_blocks = blocks(self.opening)
         except Exception as exc:
@@ -1513,14 +1561,19 @@ class Memory:
         judge = (self.judge if self.judge is not None and (wake or not rotate and not widen and not settings)
                  and query.strip() else None)
         prefetched = None
+        prefetched_timeout = None
         if judge is not None and judge.active():
-            prefetched = judge.prefetch(query)   # embedding her sentence overlaps with Ombre's own search below
+            # P6-S1 G-A05: this one embedding is shared with search_candidates below, so the same
+            # query is embedded (and booked) once per turn instead of once per caller.
+            prefetched = judge.prefetch(query)
+            prefetched_timeout = float(judge.settings['timeout_seconds']) + 1.0
         try:
             # Ticket 381: Ombre also returns archived memories, and its top three are cut before we look at
             # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
             # drop what Peter may not see, and only then keep the visible pool.
             asked = recall_cfg['rotation_candidates'] if widen else 3 + SEARCH_SPARE_HITS
-            raw = self.search_candidates(query, asked)
+            raw = self.search_candidates(query, asked, prefetched=prefetched,
+                                         prefetched_timeout=prefetched_timeout)
             normal = ordinary_hits(raw, limit=asked)
             self.last_recall_debug['ombre'] = [key for key, _ in normal]
             pool = self.context_visible(normal, failure_stage='recall_visibility')
@@ -1530,9 +1583,10 @@ class Memory:
             # Ticket 419: the candidate pool stays finite (search cost), but its size is the
             # configured pool, not a hidden "at most three shown".
             normal = pool
-            drift = drift_hits(raw)
         except Exception as exc:
             self.last_recall_debug['failure'] = 'breath_search'
+            self.last_recall_debug['degraded'] = {'stage': 'retrieval',
+                                                  'error': type(exc).__name__}
             self.retrieval_failure('breath_search', exc)
         # Ticket 427: Ombre's feel channel is gone. Every memory Peter writes is already first person and
         # carries its feeling, so a second emotional index no longer adds anything (and it bypassed the judge).
@@ -1544,18 +1598,37 @@ class Memory:
                                       candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
                 self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
                 # Review fix: "nothing relevant to her sentence" is an answer about related recall only.
                 # It no longer vetoes a memory that surfaces on its own; the two paths are deduped below.
-            except JudgeFailed:
-                self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
+            except JudgeFailed as failure:
+                # P6-S1 G-A12: keep the failing stage and both timings in the turn diagnostics so P4/P5
+                # can tell normal-empty / embedding-timeout / model-timeout / degraded-recall apart.
+                # Keep the real candidate count from last_choice: 0 would hide how many cards the
+                # failed request actually carried.
+                self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
+                self.last_recall_debug['judge'].update({
+                    'status': 'failed', 'reason': failure.reason, 'detail': failure.detail,
+                    'picked': []})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
+                self.last_recall_debug['degraded'] = {
+                    'stage': 'judge', 'reason': failure.reason, 'detail': failure.detail,
+                    'fallback': 'pool' if wake else 'today_pool'}
                 if wake:
-                    normal, drift = list(pool), []
+                    normal = list(pool)
             except Exception as exc:
-                self.last_recall_debug['judge'] = {'status': 'failed', 'candidates': 0, 'picked': []}
+                self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
+                self.last_recall_debug['judge'].update({
+                    'status': 'failed', 'picked': [],
+                    'reason': 'unexpected', 'detail': type(exc).__name__})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
+                self.last_recall_debug['degraded'] = {
+                    'stage': 'judge', 'reason': 'unexpected', 'detail': type(exc).__name__,
+                    'fallback': 'pool' if wake else 'today_pool'}
                 self.retrieval_failure('recall_judge', exc)
                 if wake:
-                    normal, drift = list(pool), []
+                    normal = list(pool)
         kinds = {key: 'search' for key, _ in normal}
         if settings:
             try:
@@ -1571,7 +1644,7 @@ class Memory:
             self.retrieval_failure('opening', exc)
             opening_candidates = []
         opening_visible = self.context_visible(opening_candidates, failure_stage='opening_visibility')
-        metas = self._recall_meta([key for key, _ in combined + opening_visible + breath_blocks + drift])
+        metas = self._recall_meta([key for key, _ in combined + opening_visible + breath_blocks])
         if wake:
             candidates = list(dict(combined).items())
         elif widen:
@@ -1588,7 +1661,7 @@ class Memory:
                      if key not in seen]
             carry = [(key, body) for key, body in self.context_visible(carry, failure_stage='followup_visibility')
                      if body.strip()]
-        vectors = (self._recall_vectors([key for key, _ in combined + drift])
+        vectors = (self._recall_vectors([key for key, _ in combined])
                    if recall_cfg['dedup'] else {})
         threshold = recall_cfg['dedup_similarity']
 
@@ -1694,9 +1767,6 @@ class Memory:
             for key, body in breath_blocks:
                 origin.setdefault(key, 'importance')
                 pool_rows.append((key, body))
-            for key, body in drift:
-                origin.setdefault(key, 'drift')
-                pool_rows.append((key, body))
             visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
             considered = []
             association_dropped = []
@@ -1719,7 +1789,7 @@ class Memory:
             self.last_recall_debug['association'] = {
                 'candidates': len(visible_pool),
                 'from_importance': len({key for key, _ in breath_blocks}),
-                'from_drift': len({key for key, _ in drift}),
+                'from_drift': 0,   # P6-S1: the dead random-drift branch was removed
                 'picked': [choice['key']] if choice['key'] else [],
                 'dropped': listed,
                 'dropped_more': (max(0, len(association_dropped) - len(listed))
@@ -1741,8 +1811,8 @@ class Memory:
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
-                'from_drift': len({key for key, _ in drift}), 'picked': [], 'dropped': [],
-                'reason': 'no_candidates' if not (breath_blocks or drift) else 'not_applicable'}
+                'from_drift': 0, 'picked': [], 'dropped': [],
+                'reason': 'no_candidates' if not breath_blocks else 'not_applicable'}
         if opening_visible:
             pinned = [item for item in opening_visible if '核心准则' in item[1].split('\n', 1)[0]
                       or str(metas.get(item[0], {}).get('pinned', '')).lower() == 'true']
@@ -1964,38 +2034,6 @@ class Memory:
                            'auxiliary_allowance': auxiliary_allowance}
         self.last_memory_budget = dict(debug['budget'])
         return messages
-
-    def reuse_recall(self, history, messages, calibration):
-        """Omit exact current blocks only after their history copies survived request trimming."""
-        import recall_budget
-        contents = [row.get('content') for row in history if isinstance(row.get('content'), str)]
-        complete = {item['id'] for item in self.last_recall_debug.get('items', [])
-                    if item.get('complete')}
-        reused = []
-        result = [dict(message) for message in messages]
-        for block in (self._pending_recall or {}).get('blocks', []):
-            key, text = block['id'], block.get('text') or ''
-            if (key not in complete or not text or not any(text.strip() in content for content in contents)):
-                continue
-            for message in result:
-                content = message.get('content')
-                if isinstance(content, str) and text in content:
-                    message['content'] = content.replace(text, '', 1)
-                    reused.append(key)
-                    break
-        if reused:
-            debug = self.last_recall_debug
-            debug['reused'] = reused
-            debug['injected'] = [key for key in debug.get('injected', []) if key not in reused]
-            debug['opening'] = [key for key in debug.get('opening', []) if key not in reused]
-            for item in debug.get('items', []):
-                if item['id'] in reused:
-                    item.update({'source': 'history', 'tokens': 0, 'reused': True})
-            self.last_memory_budget['memory_used'] = recall_budget.tokens_for_messages(result, calibration)
-            debug['budget'] = dict(self.last_memory_budget)
-            # Keep the effective-context references for follow-ups and rollback: these full stories
-            # are still supplied to the model, in the retained history instead of a second copy.
-        return result
 
     SURFACED_LIMIT = 40
 

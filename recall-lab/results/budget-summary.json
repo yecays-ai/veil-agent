@@ -1,0 +1,175 @@
+{
+  "generated_at": "2026-11-26T13:35:16.137362+00:00",
+  "total_cap_cny": 20.0,
+  "total_settled_cny": 3.084122,
+  "remaining_cny": 16.915878,
+  "settled_calls": 1006,
+  "by_tier_cny": {
+    "0": 0.0,
+    "1": 2.160207,
+    "2": 0.923915
+  },
+  "tier_caps_cny": {
+    "0": 0.0,
+    "1": 6.0,
+    "2": 10.0
+  },
+  "rows": [
+    {
+      "experiment_or_category": "AB-COMB",
+      "tier": 1,
+      "settled_calls": 126,
+      "settled_cny": 0.375612,
+      "input_tokens": 177189,
+      "output_tokens": 1419
+    },
+    {
+      "experiment_or_category": "AB-R1a-judge",
+      "tier": 1,
+      "settled_calls": 36,
+      "settled_cny": 0.187766,
+      "input_tokens": 92159,
+      "output_tokens": 431
+    },
+    {
+      "experiment_or_category": "AB-R2",
+      "tier": 1,
+      "settled_calls": 140,
+      "settled_cny": 0.035315,
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    {
+      "experiment_or_category": "AB-R3a",
+      "tier": 1,
+      "settled_calls": 178,
+      "settled_cny": 0.6842,
+      "input_tokens": 333364,
+      "output_tokens": 2184
+    },
+    {
+      "experiment_or_category": "AB-R3a-wake",
+      "tier": 1,
+      "settled_calls": 6,
+      "settled_cny": 0.021574,
+      "input_tokens": 10483,
+      "output_tokens": 76
+    },
+    {
+      "experiment_or_category": "AB-R3c",
+      "tier": 1,
+      "settled_calls": 89,
+      "settled_cny": 0.345742,
+      "input_tokens": 167483,
+      "output_tokens": 1347
+    },
+    {
+      "experiment_or_category": "AB-R3d",
+      "tier": 1,
+      "settled_calls": 89,
+      "settled_cny": 0.509998,
+      "input_tokens": 250483,
+      "output_tokens": 1129
+    },
+    {
+      "experiment_or_category": "PREP-embedding",
+      "tier": 1,
+      "settled_calls": 15,
+      "settled_cny": 0.0,
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    {
+      "experiment_or_category": "AB-A1a",
+      "tier": 2,
+      "settled_calls": 28,
+      "settled_cny": 0.038309,
+      "input_tokens": 40542,
+      "output_tokens": 1960
+    },
+    {
+      "experiment_or_category": "AB-A1a-vs-none",
+      "tier": 2,
+      "settled_calls": 24,
+      "settled_cny": 0.08179,
+      "input_tokens": 28984,
+      "output_tokens": 5612
+    },
+    {
+      "experiment_or_category": "AB-A1a-vs-prod",
+      "tier": 2,
+      "settled_calls": 12,
+      "settled_cny": 0.028582,
+      "input_tokens": 13198,
+      "output_tokens": 2688
+    },
+    {
+      "experiment_or_category": "AB-A1b",
+      "tier": 2,
+      "settled_calls": 38,
+      "settled_cny": 0.115259,
+      "input_tokens": 51276,
+      "output_tokens": 7829
+    },
+    {
+      "experiment_or_category": "AB-C1",
+      "tier": 2,
+      "settled_calls": 9,
+      "settled_cny": 0.084864,
+      "input_tokens": 10803,
+      "output_tokens": 60
+    },
+    {
+      "experiment_or_category": "AB-C1-real",
+      "tier": 2,
+      "settled_calls": 12,
+      "settled_cny": 0.03434,
+      "input_tokens": 41000,
+      "output_tokens": 95
+    },
+    {
+      "experiment_or_category": "AB-C2a",
+      "tier": 2,
+      "settled_calls": 35,
+      "settled_cny": 0.052728,
+      "input_tokens": 32593,
+      "output_tokens": 3774
+    },
+    {
+      "experiment_or_category": "AB-C2b",
+      "tier": 2,
+      "settled_calls": 42,
+      "settled_cny": 0.137724,
+      "input_tokens": 78718,
+      "output_tokens": 6599
+    },
+    {
+      "experiment_or_category": "AB-C3",
+      "tier": 2,
+      "settled_calls": 51,
+      "settled_cny": 0.117345,
+      "input_tokens": 68207,
+      "output_tokens": 7432
+    },
+    {
+      "experiment_or_category": "AB-COMB-E2E",
+      "tier": 2,
+      "settled_calls": 18,
+      "settled_cny": 0.042464,
+      "input_tokens": 28892,
+      "output_tokens": 2350
+    },
+    {
+      "experiment_or_category": "AB-E1",
+      "tier": 2,
+      "settled_calls": 58,
+      "settled_cny": 0.19051,
+      "input_tokens": 100442,
+      "output_tokens": 12031
+    }
+  ],
+  "notes": [
+    "Every paid and failed provider call is counted from append-only budget-ledger.jsonl.",
+    "Includes Phase 1/2 runs, real persona reruns, full-context blind-eval fix, and pre-merge AB-COMB E2E / Hybrid+Rerank+Judge gap checks."
+  ]
+}

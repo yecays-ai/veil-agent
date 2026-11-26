@@ -126,6 +126,7 @@ class ExperienceMemory:
             self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar,
                                       budget=budget, cost_category=COST_CATEGORY,
                                       daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
+            self.events.locked = self.sidecar.locked
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -738,6 +739,23 @@ class ExperienceMemory:
                                                   'deferred_key': key, 'reason': 'target event closed',
                                                   'time': self.budget.clock()})
                     continue
+                if saved == 'locked':
+                    # Still locked: finish nothing so a later run tries this key again.
+                    continue
+                if saved == 'fact_mismatch':
+                    # P6-S2 review: this draft dropped a fact the experience already holds. Keep the
+                    # complete draft for review and finish the key; never record it as applied.
+                    self.store.append(self.path, {'kind': 'update-pending-review',
+                                                  'memory_id': memory_id,
+                                                  'deferred_key': key,
+                                                  'covers': row.get('covers'),
+                                                  'draft': str(row.get('text') or ''),
+                                                  'time': self.budget.clock()})
+                    self.store.append(self.path, {'kind': 'deferred-conflict', 'memory_id': memory_id,
+                                                  'deferred_key': key,
+                                                  'reason': 'fact mismatch; draft kept for review',
+                                                  'time': self.budget.clock()})
+                    continue
                 if saved:
                     self.store.append(self.path, {'kind': 'deferred-applied', 'memory_id': memory_id,
                                                   'deferred_key': key, 'time': self.budget.clock()})
@@ -832,8 +850,10 @@ class ExperienceMemory:
         if source_key and any(row.get('kind') == 'update' and row.get('source_key') == source_key
                               and row.get('memory_id') == memory_id for row in self._events()):
             return True
-        if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+        if not self._alive(memory_id):
             return False
+        if self.sidecar.locked(memory_id):
+            return 'locked'
         status = self._event_status(memory_id)
         if status in ('merged', 'closed'):
             # Ticket 421 review: revise() refuses a closed experience. Do not raise (that would keep the
@@ -849,6 +869,12 @@ class ExperienceMemory:
                 if not self.events.revise(event_id, update['text'].strip(),
                                           self.memory.title_for(memory_id) or 'Event',
                                           seen=previous, why='经历整理：按后来的变化重写'):
+                    status = getattr(self.events, 'last_revise_status', '')
+                    if status in ('fact_mismatch', 'locked'):
+                        return status
+                    if status == 'closed':
+                        self._preserve_rejected_update(update, seen, source_key, 'event closed')
+                        return 'closed'
                     return False
                 self.store.append(self.path, {'kind': 'update', 'memory_id': memory_id, 'text': update['text'],
                                               'time': self.budget.clock(), 'event_id': event_id,
@@ -860,11 +886,13 @@ class ExperienceMemory:
         document = self.memory.raw_content_for(memory_id)
         if document is None:
             return False
-        # Same archive Peter's own edits use, so Lan can see and restore the earlier wording.
-        self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
-            'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：按后来的变化重写',
-            'why_remembered': '', 'old_content': document})
-        self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
+        if getattr(self.memory, 'brain_authority', None) is None:
+            # Legacy fake-backend path only; BrainAuthority.trace writes a single versions row.
+            self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
+                'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '经历整理：按后来的变化重写',
+                'why_remembered': '', 'old_content': document})
+        self.memory.call('trace', {'bucket_id': memory_id, 'content': text,
+                                   'edit_reason': '经历整理：按后来的变化重写'})
         getattr(self.memory, 'bucket_details_cache', {}).pop(memory_id, None)
         stored = self.memory.content_for(memory_id, refresh=True)
         if stored is None or stored.strip() != text:
@@ -993,10 +1021,34 @@ class ExperienceMemory:
                        'problem': item['problem']} for item in pending]
             dropped += len(pending)
             for item in pending:
-                # Ticket 386: a draft that could not be fixed is not saved, but its text is not lost either.
+                # Ticket 386 / P6-S2: preserve unfixed drafts in both failure log and durable review queue
+                # so nothing is silently lost when the cursor advances.
                 self._record_failure('fix', 'unfixed_draft', kind=item['kind'], problem=item['problem'],
                                      draft=item['text'], **({'title': item['title']} if item['kind'] == 'entry'
                                                              else {'id': item['id']}))
+            if pending:
+                self.store.append(self.path, {
+                    'kind': 'manual-review',
+                    'source_key': source_key,
+                    'covers': span,
+                    'message_ids': message_ids,
+                    'items': [{'kind': item['kind'],
+                               'id': item.get('id'),
+                               'title': item.get('title'),
+                               'continues': item.get('continues'),
+                               'problem': item['problem'],
+                               'draft': item['text']} for item in pending],
+                    'time': self.budget.clock(),
+                })
+                if self.events is not None:
+                    try:
+                        self.store.append(f'{self.cfg.id}/event-review.jsonl', {
+                            'at': self.budget.clock(),
+                            'event_id': '',
+                            'reason': f'experience manual-review ({len(pending)} unfixed draft(s), source_key={source_key})',
+                        })
+                    except Exception:
+                        pass
             for update in updates:
                 if self.sidecar.locked(update['id']):
                     # Ticket 421: Lan locked the reviewed story; the new development is not dropped.
@@ -1021,6 +1073,36 @@ class ExperienceMemory:
                     # Ticket 421 review: a closed experience is a terminal rejection, not a transient
                     # failure. The draft is preserved by _save_update; advance the cursor and keep going.
                     rejected.append({'memory_id': update['id'], 'reason': 'event closed'})
+                    continue
+                if saved == 'fact_mismatch':
+                    # P6-S2 review: this draft was rejected because it dropped facts the experience
+                    # already holds. Committing it as a new stage would put the rejected rewrite on the
+                    # timeline; keep the complete draft for review and never append it as progress.
+                    self.store.append(self.path, {
+                        'kind': 'update-pending-review',
+                        'memory_id': update['id'],
+                        'source_key': update_key,
+                        'covers': span,
+                        'draft': update['text'],
+                        'time': self.budget.clock(),
+                    })
+                    continue
+                if saved == 'locked':
+                    # Lan locked it between the check above and the write. Keep the draft once and let
+                    # _apply_deferred handle it later; never count it as an applied update.
+                    deferred_key = f'{source_key}:{update["id"]}'
+                    known = {row.get('deferred_key') for row in self._events()
+                             if row.get('kind') == 'deferred-update'}
+                    if deferred_key not in known:
+                        deferred.append({'memory_id': update['id'], 'text': update['text'],
+                                         'reason': 'locked during write; kept for review'})
+                        self.store.append(self.path, {'kind': 'deferred-update',
+                                                      'memory_id': update['id'],
+                                                      'text': update['text'],
+                                                      'seen': next((c['text'] for c in candidates
+                                                                    if c['id'] == update['id']), None),
+                                                      'deferred_key': deferred_key, 'covers': span,
+                                                      'time': self.budget.clock()})
                     continue
                 if not saved:
                     self.store.append(self.path, {'kind': 'update-conflict', 'memory_id': update['id'],

@@ -442,6 +442,13 @@ class Hub(ScreenPopMixin):
                         # Review: a follow-up carry is pasted this turn; only a block dropped because
                         # the history already had it is "reused".
                         'carried': list(item.get('carried') or []),
+                        # P6-S1: structured retrieval/degradation details (shared embedding,
+                        # model/dimension mismatch, judge reason/detail/timings). Kept as plain
+                        # dicts so the API stays additive for older desktop builds.
+                        'retrieval': item.get('retrieval')
+                        if isinstance(item.get('retrieval'), dict) else {},
+                        'degraded': item.get('degraded')
+                        if isinstance(item.get('degraded'), dict) else {},
                         # Ticket 422: the three recall paths and the base that is carried every turn.
                         'relationship_base': item.get('relationship_base')
                         if isinstance(item.get('relationship_base'), dict) else {},
