@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 import prompts
+import brain_events
+from brain_authority import ProjectionConflict
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -96,9 +98,63 @@ def entities(text):
     return found
 
 
+_NATURAL_API_KEY = re.compile(
+    r'(?i)(api[_ -]?key)(\s+is\s+)(?:bearer\s+)?[^\s,;]{4,}'
+    r'(?:\s+(?!password\b|passwd\b|secret\b|access[_ -]?token\b|authorization\b|'
+    r'bearer\b|api[_ -]?key\b)[^\s,;]{4,})*')
+_SENSITIVE_KV = re.compile(
+    r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer|密码|密钥)'
+    r'(\s*[:=：]\s*(?:bearer\s+)?|(?<=\bbearer)\s+)'
+    r'[^\s,;]{4,}')
+_OPAQUE_SECRET = re.compile(
+    r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9_-]{12,})\b')
+
+
+def _redact_evidence_text(text):
+    """Mask API keys/tokens on model-visible evidence output boundaries without mutating chat logs."""
+    if not text:
+        return ''
+    text = _NATURAL_API_KEY.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
+    text = _SENSITIVE_KV.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
+    return _OPAQUE_SECRET.sub('[已隐藏的凭据]', text)
+
+
+def _extract_date_parts(text):
+    """(month, day, year_or_None, span) for every date expression in text.
+
+    Digit boundaries keep a longer number such as ``11-250`` from being read as November 25
+    (P6-S2 review); a year written with the date is returned so it can participate in matching.
+    """
+    text = text or ''
+    found = []
+    pattern = re.compile(r'(?:(?P<year>\d{4})\s*[-/年]\s*)?'
+                         r'(?P<month>\d{1,2})\s*[-/月]\s*(?P<day>\d{1,2})\s*日?')
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        if start and text[start - 1].isdigit():
+            continue
+        if end < len(text) and text[end].isdigit():
+            continue
+        month, day = int(match.group('month')), int(match.group('day'))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        year = int(match.group('year')) if match.group('year') else None
+        found.append((month, day, year, (start, end)))
+    months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+              'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+    for match in re.finditer(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})\b',
+                             text, re.I):
+        month = months.get(match.group(1).lower()[:3])
+        day = int(match.group(2))
+        if month and 1 <= day <= 31:
+            found.append((month, day, None, match.span()))
+    return found
+
+
 def facts(text):
     text = text or ''
-    return {'dates': sorted(set(_DATE.findall(text))),
+    dates = [text[start:end].strip() for _m, _d, _y, (start, end) in _extract_date_parts(text)]
+    return {'dates': sorted(set(d for d in dates if d)),
             'numbers': sorted(set(_NUMBER.findall(text))),
             'files': sorted(set(match.group(0).strip() for match in _FILE.finditer(text)))}
 
@@ -271,7 +327,7 @@ class EventMemory:
             out['count'] = count
         ids = source.get('message_ids')
         if isinstance(ids, list):
-            ids = [item for item in ids if isinstance(item, str) and item][:40]
+            ids = [item for item in ids if isinstance(item, str) and item]
             if ids:
                 out['message_ids'] = ids
         return out
@@ -369,7 +425,8 @@ class EventMemory:
                 lines.append(f"  facts: {', '.join((extra.get('files') or []) + (extra.get('numbers') or []))[:300]}")
             if include_evidence:
                 for proof in self._evidence_for(stage.get('stage_id')):
-                    lines.append(f"  evidence ({proof.get('kind')}): {str(proof.get('text') or '')[:300]}")
+                    safe_text = _redact_evidence_text(str(proof.get('text') or ''))
+                    lines.append(f"  evidence ({proof.get('kind')}): {safe_text[:300]}")
         next_offset = offset + len(chunk) if offset + len(chunk) < len(stages) else None
         lines.append('' if next_offset is None else f"… 下一段从 offset={next_offset} 继续")
         return '\n'.join(lines), next_offset, len(stages)
@@ -507,6 +564,10 @@ class EventMemory:
             # a refused or failed retry must leave the original pending stage recoverable.
             self._supersede_pending(source_key, stage_id)
         old_story = event.get('story')
+        memory_id = event.get('memory_id')
+        # P6-S2 review: capture the committed projection baseline before calling the story model so
+        # any panel edit committed while the model runs is detected inside the write transaction.
+        old_projection = self.memory.content_for(memory_id, refresh=True) if memory_id else None
         story, story_source, through, story_pending = self._write_story(
             self.stages(event['event_id']) + [stage], self._story(event['event_id'], extra=stage), event)
         if story_pending:
@@ -528,27 +589,44 @@ class EventMemory:
             return {'event_id': event['event_id'], 'title': event.get('title') or title,
                     'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
                     'locked': False, 'confidence': confidence, 'pending': True, 'version_conflict': True}
+        authority = getattr(self.memory, 'brain_authority', None)
         changed, locked = False, False
         memory_id = event.get('memory_id')
-        try:
-            memory_id, changed, locked = self._write_projection(
-                event, projection, title or event.get('title') or 'Event',
-                importance=importance, pinned=pinned)
-        except Exception:
-            changed, locked = False, False
-        if memory_id:
+        if authority is None:
             try:
-                self.store.append(self.projections_path,
-                                  {'stage_id': stage_id, 'event_id': event['event_id'], 'memory_id': memory_id})
+                memory_id, changed, locked = self._write_projection(
+                    event, projection, title or event.get('title') or 'Event',
+                    importance=importance, pinned=pinned)
             except Exception:
-                pass
-        if old_story and old_story != story:
-            self.store.append(self.versions_path, {
-                'event_id': event['event_id'], 'memory_id': memory_id,
-                'old_story': old_story, 'old_content': None,
-                'at': datetime.now().astimezone().isoformat()})
+                changed, locked = False, False
+        elif memory_id:
+            try:
+                locked = bool(callable(self.locked) and self.locked(memory_id))
+                note = self.sidecar.all().get(memory_id) if self.sidecar is not None else {}
+                edited = (note or {}).get('lan_edited')
+                if edited and str(edited) > str(event.get('last_story_at') or ''):
+                    locked = True
+                if callable(getattr(self.memory, 'refresh_visibility', None)):
+                    locked = locked or not self.memory.refresh_visibility(memory_id)
+            except Exception:
+                return {'event_id': event['event_id'], 'title': event.get('title') or title,
+                        'memory_id': memory_id, 'updated': updated, 'changed': False,
+                        'locked': False, 'confidence': confidence, 'pending': True}
+            changed = not locked
+        else:
+            changed = True
+
+        try:
+            collected = self._capture_evidence(stage, persist=False)
+        except Exception:
+            collected = []
+        explicit_quotes = self._explicit_user_quotes(stage)
+        source_seen = self._normalise_source(self._evidence_source(collected))
+        if source_seen and not stage.get('source'):
+            stage['source'] = source_seen
+
         reviewed = {key: event.get(key) for key in
-                    ('story_source', 'story_through', 'story_through_id', 'story_coverage')}
+                    ('story_source', 'story_through', 'story_through_id', 'story_coverage', 'last_story_at')}
         event.update({
             'memory_id': memory_id or event.get('memory_id'),
             'last_at': occurred.isoformat() if occurred else event.get('last_at'),
@@ -566,42 +644,99 @@ class EventMemory:
             'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
             'confidence': confidence,
             'dirty': story_pending or (not changed and not locked),
-            'last_story_at': datetime.now().astimezone().isoformat(),
+            'last_story_at': (reviewed['last_story_at'] if locked
+                              else datetime.now().astimezone().isoformat()),
             'revision': int(event.get('revision') or 0) + 1,
         })
         if 'first_at_known' not in event:
-            # A brand-new event starts with this stage; an existing (possibly legacy) event keeps its
-            # earlier assumption rather than rewriting the first stage's date from the newest one.
             event['first_at_known'] = stage['at_known'] if not updated else event.get('first_at_known', True)
         event['last_at_known'] = stage['at_known']
+        ledger_rows = []
         if locked:
             event.update({'story': old_story or event.get('story') or '',
                           'story_source': reviewed['story_source'],
                           'story_through': reviewed['story_through'],
                           'story_through_id': reviewed['story_through_id'],
                           'story_coverage': reviewed['story_coverage'] or [],
-                          'story_pending': True, 'dirty': True})
+                          'last_story_at': reviewed['last_story_at'],
+                          'story_pending': True, 'dirty': True,
+                          'pending_review': True})
             story_pending = True
-            event['pending_review'] = True
-            self._review(event['event_id'], 'locked event got a new stage; the stage was saved and the reviewed '
-                                            'story waits for unlock')
-        try:
-            self.store.append(self.events_path, event)
-            self.store.append(self.stages_path, {**stage, 'state': 'committed'})
-        except Exception:
-            return {'event_id': event['event_id'], 'title': event.get('title') or title,
-                    'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
-                    'locked': False, 'confidence': confidence, 'pending': True}
+            ledger_rows.append(('event-review', {
+                'at': saved_at.isoformat(), 'event_id': event['event_id'],
+                'reason': 'locked event got a new stage; reviewed story waits for unlock'}))
         if event.get('status') == 'uncertain':
-            self._review(event['event_id'], 'low confidence grouping; candidate links kept')
-        try:
-            collected = self._capture_evidence(stage)
-            source_seen = self._normalise_source(self._evidence_source(collected))
-            if source_seen and not stage.get('source'):
-                # Keep the source range on the committed stage too, not only in the evidence rows.
-                self.store.append(self.stages_path, {**stage, 'state': 'committed', 'source': source_seen})
-        except Exception:
-            pass
+            ledger_rows.append(('event-review', {
+                'at': saved_at.isoformat(), 'event_id': event['event_id'],
+                'reason': 'low confidence grouping; candidate links kept'}))
+        evidence_rows, quote_rows = self._stage_evidence_ledger(
+            stage, event['event_id'], collected, explicit_quotes, saved_at)
+        ledger_rows.extend(evidence_rows)
+
+        if authority is not None:
+            try:
+                result = authority.commit_event_bundle(
+                    event=event, stage={**stage, 'state': 'committed'},
+                    projection=None if locked else projection,
+                    title=title or event.get('title') or 'Event',
+                    importance=importance, pinned=pinned,
+                    embedder=self.memory.embedder(), old_story=old_story or '',
+                    operation_reason='事件故事更新', ledger_rows=ledger_rows,
+                    quotes=quote_rows,
+                    seen_projection=old_projection)
+                memory_id = result['memory_id']
+                event['memory_id'] = memory_id
+                changed = result['changed'] or locked
+                self._last_projection_pending = result['index_pending']
+                self.memory.bucket_details_cache.pop(memory_id, None)
+                try:
+                    if old_projection is None and callable(getattr(self.memory, 'record_native', None)):
+                        self.memory.record_native(
+                            {'content': projection, 'title': title or event.get('title') or 'Event'},
+                            f'新建→{memory_id}')
+                    elif callable(getattr(self.memory, 'record_native_update', None)):
+                        # P6-S2 review: a locked event keeps its committed body. The candidate story
+                        # must never become the readable cached body before Lan confirms it.
+                        confirmed = old_projection if locked else projection
+                        if confirmed:
+                            self.memory.record_native_update(memory_id, confirmed)
+                except Exception:
+                    pass
+            except ProjectionConflict:
+                # The committed body changed between the read above and the transaction; nothing new
+                # was overwritten and the stage stays journaled for recovery.
+                return {'event_id': event['event_id'], 'title': event.get('title') or title,
+                        'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
+                        'locked': locked, 'confidence': confidence, 'pending': True,
+                        'version_conflict': True}
+            except Exception:
+                return {'event_id': event['event_id'], 'title': event.get('title') or title,
+                        'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
+                        'locked': locked, 'confidence': confidence, 'pending': True}
+        else:
+            if memory_id:
+                try:
+                    self.store.append(self.projections_path,
+                                      {'stage_id': stage_id, 'event_id': event['event_id'], 'memory_id': memory_id})
+                except Exception:
+                    pass
+            if old_story and old_story != story:
+                self.store.append(self.versions_path, {
+                    'event_id': event['event_id'], 'memory_id': memory_id,
+                    'old_story': old_story, 'old_content': None,
+                    'at': datetime.now().astimezone().isoformat()})
+            try:
+                self.store.append(self.events_path, event)
+                self.store.append(self.stages_path, {**stage, 'state': 'committed'})
+                ledger_paths = {kind: f'{self.cfg.id}/{name}'
+                                for name, kind in brain_events.EVENT_LEDGER_FILES.items()}
+                for kind, row in ledger_rows:
+                    if kind in ledger_paths:
+                        self.store.append(ledger_paths[kind], row)
+            except Exception:
+                return {'event_id': event['event_id'], 'title': event.get('title') or title,
+                        'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
+                        'locked': locked, 'confidence': confidence, 'pending': True}
         return {'event_id': event['event_id'], 'title': event.get('title') or title,
                 'memory_id': event.get('memory_id'), 'updated': updated, 'changed': changed,
                 'locked': locked, 'confidence': confidence, 'story_pending': story_pending,
@@ -613,27 +748,84 @@ class EventMemory:
     @_serialized
     def revise(self, event_id, text, title='', seen=None, why='整理'):
         """Replace the event's narrative without appending it as a new stage (tidy revisions)."""
+        self.last_revise_status = ''
         event = self.events().get(event_id)
         if event is None or event.get('status') in ('merged', 'closed') or not self._visible(event):
+            self.last_revise_status = 'closed'
             return False
         memory_id = event.get('memory_id')
         old_story = event.get('story') or ''
         old_projection = None
         if memory_id:
             if callable(self.locked) and self.locked(memory_id):
+                self.last_revise_status = 'locked'
                 return False
             old_projection = self.memory.content_for(memory_id, refresh=True)
             if seen is not None and old_projection is not None and old_projection.strip() != str(seen).strip():
+                self.last_revise_status = 'conflict'
                 return False
         text = ' '.join((text or '').split())
         if not text:
+            self.last_revise_status = 'empty'
             return False
         missing = self._missing_facts(self.stages(event_id), text)
         if missing:
             self._review(event_id, 'tidy revision dropped facts: ' + ', '.join(missing[:10]))
+            self.last_revise_status = 'fact_mismatch'
             return False
         revision_id = 'r-' + uuid.uuid4().hex[:12]
         stamp = datetime.now().astimezone().isoformat()
+        projection = self._projection(text)
+        explicit_title = title.strip()[:100] if isinstance(title, str) and title.strip() else ''
+        authority = getattr(self.memory, 'brain_authority', None)
+        if authority is not None:
+            updated_event = dict(event)
+            updated_event.update({
+                'story': text, 'dirty': False, 'last_story_at': stamp,
+                'story_source': 'tidy', 'revision_id': revision_id,
+                'title': (explicit_title or event.get('title') or '')[:100],
+            })
+            embedder = None
+            try:
+                embedder = self.memory.embedder()
+            except Exception:
+                embedder = None
+            try:
+                authority.commit_event_bundle(
+                    event=updated_event,
+                    projection=projection if memory_id else None,
+                    title=explicit_title,
+                    embedder=embedder,
+                    old_story=old_story,
+                    operation_reason='事件故事修订',
+                    # P6-S2 review: the body checked above may have changed since; re-check inside the
+                    # transaction so a draft based on the old text can never overwrite a newer save.
+                    seen_projection=old_projection if memory_id else None,
+                    ledger_rows=(
+                        ('event-revision', {'state': 'done', 'event_id': event_id,
+                                            'revision_id': revision_id, 'story': text, 'at': stamp}),
+                        ('event-op', {'at': stamp, 'op': 'revise', 'event_id': event_id,
+                                      'why': why, 'before': old_story[:500], 'after': text[:500]}),
+                    ),
+                )
+            except ProjectionConflict:
+                self.last_revise_status = 'conflict'
+                return False
+            except Exception:
+                self.last_revise_status = 'write_failed'
+                return False
+            if memory_id:
+                try:
+                    self.memory.bucket_details_cache.pop(memory_id, None)
+                except Exception:
+                    pass
+                if callable(getattr(self.memory, 'record_native_update', None)):
+                    try:
+                        self.memory.record_native_update(memory_id, projection)
+                    except Exception:
+                        pass
+            self.last_revise_status = 'ok'
+            return True
         if old_story and old_story != text:
             self.store.append(self.versions_path, {'event_id': event_id, 'memory_id': memory_id,
                                                    'old_story': old_story, 'at': stamp, 'reason': why})
@@ -641,13 +833,13 @@ class EventMemory:
             self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
                 'memory_id': memory_id, 'fields': ['content'], 'operation_reason': '事件故事修订',
                 'why_remembered': '', 'old_content': old_projection})
-        projection = self._projection(text)
         self.store.append(self.revisions_path, {'state': 'begin', 'event_id': event_id,
                                                 'revision_id': revision_id, 'story': text, 'at': stamp})
         if memory_id:
             try:
                 self.memory.call('trace', {'bucket_id': memory_id, 'content': projection})
             except Exception:
+                self.last_revise_status = 'write_failed'
                 return False
             try:
                 self.memory.bucket_details_cache.pop(memory_id, None)
@@ -655,6 +847,7 @@ class EventMemory:
                 pass
             written = self.memory.content_for(memory_id, refresh=True)
             if written is not None and written.strip() != projection.strip():
+                self.last_revise_status = 'write_failed'
                 return False
         event.update({'story': text, 'dirty': False, 'last_story_at': stamp,
                       'story_source': 'tidy', 'revision_id': revision_id,
@@ -664,6 +857,7 @@ class EventMemory:
                                                 'revision_id': revision_id, 'at': stamp})
         self.store.append(self.ops_path, {'at': stamp, 'op': 'revise', 'event_id': event_id,
                                           'why': why, 'before': old_story[:500], 'after': text[:500]})
+        self.last_revise_status = 'ok'
         return True
 
     @_serialized
@@ -714,9 +908,47 @@ class EventMemory:
                 event = {**snapshot, 'story': self._story(event_id, extra=clean), 'dirty': True}
                 if not event.get('memory_id') and projected:
                     event['memory_id'] = projected
+            # P6-S2 review: a stage whose bundle failed had its evidence and quotes rolled back with
+            # that transaction. Recovering it must go through the same bundle path and commit the
+            # stage together with its evidence; marking it committed alone would lose the chain.
+            try:
+                collected = self._capture_evidence(clean, persist=False)
+            except Exception:
+                collected = []
+            explicit_quotes = self._explicit_user_quotes(clean)
+            stamp = _when(clean.get('saved_at')) or _when(clean.get('at')) or datetime.now().astimezone()
+            ledger_rows, quote_rows = self._stage_evidence_ledger(
+                clean, event_id, collected, explicit_quotes, stamp)
+            authority = getattr(self.memory, 'brain_authority', None)
+            if authority is not None:
+                need_projection = not event.get('memory_id')
+                embedder = None
+                if need_projection:
+                    try:
+                        embedder = self.memory.embedder()
+                    except Exception:
+                        embedder = None
+                try:
+                    bundle_event = {**event, 'dirty': False} if need_projection else event
+                    authority.commit_event_bundle(
+                        event=bundle_event, stage={**clean, 'state': 'committed'},
+                        projection=(self._projection(event['story']) if need_projection else None),
+                        title=(event.get('title') or 'Event') if need_projection else '',
+                        importance=event.get('importance'), pinned=event.get('pinned'),
+                        embedder=embedder, old_story='', operation_reason='待提交阶段恢复',
+                        ledger_rows=ledger_rows, quotes=quote_rows)
+                    fixed += 1
+                except Exception:
+                    continue
+                continue
             try:
                 self.store.append(self.events_path, event)
                 self.store.append(self.stages_path, {**clean, 'state': 'committed'})
+                ledger_paths = {kind: f'{self.cfg.id}/{name}'
+                                for name, kind in brain_events.EVENT_LEDGER_FILES.items()}
+                for kind, row in ledger_rows:
+                    if kind in ledger_paths:
+                        self.store.append(ledger_paths[kind], row)
                 fixed += 1
             except Exception:
                 continue
@@ -1003,17 +1235,21 @@ class EventMemory:
         return max(1000, budget)
 
     def _merge_many(self, stages, previous, budget=None):
-        """Write every batch independently, then join them so the request never grows with the story."""
+        """Weave incremental batches into `previous` when present, or build from scratch in batches."""
         story, through = previous, None
         progressed = pending = False
         for chunk in self._story_batches(stages, budget):
             if not chunk:
                 continue
-            merged = self._merge_story_chunk('', chunk)
+            # P6-S2 review: every accepted merge must still carry the facts already accepted in the
+            # story so far, not just this batch's facts. Otherwise a later batch can replace the
+            # earlier story while the caller treats the result as the complete narrative.
+            carried = [{'text': story, 'facts': facts(story)}] if story else []
+            merged = self._merge_story_chunk(story, chunk, carried=carried)
             if merged is None:
                 pending = True
                 break
-            story = '\n\n'.join(part for part in (story, merged) if part)
+            story = merged
             progressed = True
             through = chunk[-1].get('at') or chunk[-1].get('saved_at') or through
         return (story if progressed else ''), pending, through
@@ -1085,8 +1321,12 @@ class EventMemory:
         material = sum(len(str(stage.get('text') or '')) for stage in chunk)
         return max(1200, min(8000, material // 2))
 
-    def _merge_story_chunk(self, previous, chunk):
-        """One model call over one batch. None when the answer is unusable or drops a fact."""
+    def _merge_story_chunk(self, previous, chunk, carried=None):
+        """One model call over one batch. None when the answer is unusable or drops a fact.
+
+        `carried` holds pseudo-stages for facts already accepted in `previous`, so a later merge may
+        not silently rewrite the earlier narrative without them (P6-S2 review).
+        """
         prompt_id = 'memory.event.story.merge' if previous else 'memory.event.story'
         payload = {
             'existing_story': previous,
@@ -1097,6 +1337,7 @@ class EventMemory:
                          'valid_from': stage.get('at'), 'invalid_at': stage.get('invalid_at')}
                         for stage in chunk if stage.get('interpretation')],
         }
+        check_stages = list(chunk) + list(carried or [])
         persona = str(getattr(self.cfg, 'persona', '') or '')
         messages = [{'role': 'system', 'content': prompts.text(prompt_id)}]
         if persona:
@@ -1107,7 +1348,7 @@ class EventMemory:
             story, finish = self._call_story_model(messages, max_tokens)
             if not story or finish == 'length':
                 continue
-            missing = self._missing_facts(chunk, story)
+            missing = self._missing_facts(check_stages, story)
             if not missing:
                 return story
             messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
@@ -1136,18 +1377,94 @@ class EventMemory:
             return '', None
 
     @staticmethod
-    def _missing_facts(stages, story):
+    def _month_day_set(text):
+        """Normalize date expressions like 11-25, 11/25, 11月25日, 2026-11-25, Nov 25 into (month, day)."""
+        return {(month, day) for month, day, _year, _span in EventMemory._date_parts(text)}
+
+    @staticmethod
+    def _date_parts(text):
+        return _extract_date_parts(text)
+
+    @classmethod
+    def _independent_numbers(cls, text):
+        """Numbers that stand on their own, excluding the digits inside a date expression.
+
+        ``On 11-25 we ordered 25 tickets`` keeps an independent 25: a draft that converts the date
+        format but drops the ticket count must not pass (P6-S2 review).
+        """
+        text = text or ''
+        if not text:
+            return set()
+        blanked = list(text)
+        for _month, _day, _year, (start, end) in cls._date_parts(text):
+            blanked[start:end] = ' ' * (end - start)
+        return set(_NUMBER.findall(''.join(blanked)))
+
+    @classmethod
+    def _missing_facts(cls, stages, story):
         missing = []
-        story_numbers = set(_NUMBER.findall(story or ''))
+        story_text = story or ''
+        story_numbers = set(_NUMBER.findall(story_text))
+        story_free_numbers = cls._independent_numbers(story_text)
+        story_dates = cls._date_parts(story_text)
         for stage in stages:
             extra = stage.get('facts') if isinstance(stage.get('facts'), dict) else {}
-            for value in (extra.get('dates') or []) + (extra.get('files') or []):
-                if str(value) and str(value) not in story:
+            independent = cls._independent_numbers(str(stage.get('text') or ''))
+            matched_date_tokens = set()
+            missing_date_numbers = set()
+            for value in (extra.get('dates') or []):
+                sval = str(value)
+                if not sval:
+                    continue
+                if cls._contains_number_token(story_text, sval):
+                    for num in _NUMBER.findall(sval):
+                        matched_date_tokens.add(num)
+                    continue
+                parts = cls._date_parts(sval)
+                matched = [part for part in parts
+                           if any(part[0] == smonth and part[1] == sday
+                                  and (part[2] is None or syear == part[2])
+                                  for smonth, sday, syear, _span in story_dates)]
+                if not parts or len(matched) != len(parts):
+                    missing.append(sval)
+                    missing_date_numbers.update(_NUMBER.findall(sval))
+                    continue
+                for month, day, year, _span in matched:
+                    matched_date_tokens.add(str(month))
+                    matched_date_tokens.add(str(day))
+                    # A known year must survive a format change: '2026-11-25' may become
+                    # '2026年11月25日', but never '2025-11-25' or a yearless date that drops it.
+                    if year is not None and any(
+                            syear == year for smonth, sday, syear, _span in story_dates
+                            if smonth == month and sday == day):
+                        matched_date_tokens.add(str(year))
+            # Only the digits that belong to a date may be exempted; the same value written as an
+            # independent quantity stays required.
+            matched_date_tokens -= independent
+            for value in (extra.get('files') or []):
+                if str(value) and str(value) not in story_text:
                     missing.append(str(value))
             for value in extra.get('numbers') or []:
-                if str(value) not in story_numbers:
-                    missing.append(str(value))
+                sval = str(value)
+                if sval in matched_date_tokens or sval in missing_date_numbers:
+                    continue
+                if sval in story_numbers:
+                    # A value that only occurs inside a date in the story cannot satisfy an
+                    # independent quantity from the stage (P6-S2 review).
+                    if sval in independent and sval not in story_free_numbers:
+                        missing.append(sval)
+                    continue
+                missing.append(sval)
         return list(dict.fromkeys(missing))
+
+    @staticmethod
+    def _contains_number_token(text, value):
+        """True when `value` occurs in `text` as a whole token, not as part of a longer number."""
+        if not value:
+            return False
+        if not text:
+            return False
+        return re.search(r'(?<!\d)' + re.escape(value) + r'(?!\d)', text) is not None
 
     def _belief_history(self, event_id, extra=None):
         history = []
@@ -1233,11 +1550,11 @@ class EventMemory:
             stamp = datetime.now().astimezone().isoformat()
             self.store.append(self.versions_path, {'event_id': event['event_id'], 'memory_id': memory_id,
                                                    'old_content': old, 'at': stamp})
-            # The existing memory page restores from memory-versions.jsonl; write the same record so an
-            # event rewrite is recoverable through the original entry point too.
-            self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
-                'memory_id': memory_id, 'fields': ['content'],
-                'operation_reason': '事件故事重写', 'why_remembered': '', 'old_content': old})
+            if getattr(self.memory, 'brain_authority', None) is None:
+                # Legacy fake-backend path only; BrainAuthority.trace writes a single versions row.
+                self.store.append(f'{self.cfg.id}/memory-versions.jsonl', {
+                    'memory_id': memory_id, 'fields': ['content'],
+                    'operation_reason': '事件故事重写', 'why_remembered': '', 'old_content': old})
         try:
             result = self.memory.call('trace', {'bucket_id': memory_id, 'content': text})
             self._last_projection_pending = '检索索引待重试' in str(result)
@@ -1517,10 +1834,62 @@ class EventMemory:
                                              'event_id': event_id, 'reason': reason})
 
     # --- evidence --------------------------------------------------------------------------
-    def _capture_evidence(self, stage):
+    def _explicit_user_quotes(self, stage):
+        source = stage.get('source') if isinstance(stage.get('source'), dict) else {}
+        wanted = {item for item in (source.get('message_ids') or [])
+                  if isinstance(item, str) and item}
+        if not wanted:
+            return []
+        try:
+            rows = self.store.read(f'{self.cfg.id}/chat.jsonl')
+        except Exception:
+            return []
+        quotes = []
+        for row in rows:
+            message_id = row.get('message_id') or row.get('id')
+            text = row.get('content') or row.get('text')
+            if (message_id in wanted and row.get('role') == 'user'
+                    and isinstance(text, str) and text.strip()):
+                quotes.append({'message_id': message_id, 'speaker': 'user',
+                               'text': ' '.join(text.split())})
+        return quotes
+
+    def _stage_evidence_ledger(self, stage, event_id, collected, explicit_quotes, saved_at):
+        """Ledger rows and user quotes for one stage; shared by record() and retry_pending()."""
+        stage_id = stage.get('stage_id')
+        at = stage.get('at') or (saved_at.isoformat() if saved_at is not None else '')
+        rows = [('stage-evidence', {**item, 'stage_id': stage_id, 'event_id': event_id})
+                for item in collected]
+        explicit_ids = ((stage.get('source') or {}).get('message_ids')
+                        if isinstance(stage.get('source'), dict) else [])
+        if explicit_ids:
+            resolved_ids = {item['message_id'] for item in explicit_quotes}
+            rows.append(('stage-evidence', {
+                'at': at, 'stage_id': stage_id, 'event_id': event_id, 'kind': 'chat-message-ids',
+                'message_ids': list(dict.fromkeys(explicit_ids)),
+                'unresolved_message_ids': [mid for mid in dict.fromkeys(explicit_ids)
+                                           if mid not in resolved_ids],
+                'text': ''}))
+            for quote in explicit_quotes:
+                rows.append(('stage-evidence', {
+                    'at': at, 'stage_id': stage_id, 'event_id': event_id, 'kind': 'chat',
+                    'role': 'user', 'message_id': quote['message_id'], 'text': quote['text']}))
+        quotes = []
+        quote_seen = set()
+        for quote in ([{'speaker': 'user', 'text': item.get('text')}
+                       for item in collected
+                       if item.get('kind') == 'chat' and item.get('role') == 'user' and item.get('text')]
+                      + [{'speaker': 'user', 'text': item['text']} for item in explicit_quotes]):
+            key = (quote['speaker'], quote['text'])
+            if key not in quote_seen:
+                quote_seen.add(key)
+                quotes.append(quote)
+        return rows, quotes
+
+    def _capture_evidence(self, stage, *, persist=True):
         now = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         cutoff = now - timedelta(minutes=max(1, self.settings['evidence_minutes']))
-        collected = []
+        by_kind = {'chat': [], 'tool': [], 'autonomy': []}
         for kind, path in (('chat', f'{self.cfg.id}/chat.jsonl'),
                            ('tool', f'{self.cfg.id}/tools.jsonl'),
                            ('autonomy', f'{self.cfg.id}/autonomy.jsonl')):
@@ -1530,17 +1899,58 @@ class EventMemory:
                 continue
             for row in rows:
                 stamp = _when(row.get('time'))
-                if stamp is None or stamp < cutoff:
+                # P6-S2 review: nothing that happened after the stage can be its evidence. Keep the
+                # earlier cutoff and also refuse a row newer than the stage's own time.
+                if stamp is None or stamp < cutoff or stamp > now:
                     continue
                 text = row.get('content') if kind == 'chat' else (
                     row.get('detail') or row.get('path') or row.get('text') or row.get('summary'))
                 if not isinstance(text, str) or not text.strip():
                     continue
-                collected.append({'kind': kind, 'at': stamp.isoformat(),
-                                  'saved_at': datetime.now().astimezone().isoformat(),
-                                  'message_id': row.get('message_id') or row.get('call_id') or row.get('id'),
-                                  'text': ' '.join(text.split())[:self.settings['evidence_chars']]})
-        for item in collected[-max(1, self.settings['evidence_items']):]:
-            item.update({'stage_id': stage['stage_id'], 'event_id': stage['event_id']})
-            self.store.append(self.evidence_path, item)
-        return collected
+                item = {'kind': kind, 'at': stamp.isoformat(),
+                        'saved_at': datetime.now().astimezone().isoformat(),
+                        'message_id': row.get('message_id') or row.get('call_id') or row.get('id'),
+                        'text': ' '.join(text.split())[:self.settings['evidence_chars']]}
+                if kind == 'chat' and isinstance(row.get('role'), str):
+                    item['role'] = row['role']
+                by_kind[kind].append(item)
+        # Guarantee chat evidence is never squeezed out by high-frequency tool calls:
+        # reserve per-kind quotas (prioritizing user chat messages) then fill remaining slots chronologically.
+        limit = max(1, self.settings['evidence_items'])
+        user_chat = [item for item in by_kind['chat'] if item.get('role') == 'user']
+        chat_pick = (user_chat[-3:] if user_chat else by_kind['chat'][-3:])
+        # Deduplicate while preserving order
+        seen_keys = set()
+        picked = []
+        for pool in (chat_pick, by_kind['tool'][-2:], by_kind['autonomy'][-1:]):
+            for item in pool:
+                key = (item['kind'], item.get('message_id'), item['at'])
+                if key not in seen_keys and len(picked) < limit:
+                    seen_keys.add(key)
+                    picked.append(item)
+        rest = sorted(by_kind['chat'] + by_kind['tool'] + by_kind['autonomy'], key=lambda x: x['at'])
+        for item in reversed(rest):
+            if len(picked) >= limit:
+                break
+            key = (item['kind'], item.get('message_id'), item['at'])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                picked.append(item)
+        # Also record explicit chat message_ids from stage.source (e.g., day_end running hours after chat).
+        src = stage.get('source') if isinstance(stage.get('source'), dict) else {}
+        for mid in (src.get('message_ids') or []):
+            if len(picked) >= limit:
+                break
+            if not isinstance(mid, str) or not mid:
+                continue
+            if any(item.get('kind') == 'chat' and item.get('message_id') == mid for item in picked):
+                continue
+            picked.append({'kind': 'chat', 'at': stage.get('at') or now.isoformat(),
+                           'saved_at': datetime.now().astimezone().isoformat(),
+                           'message_id': mid, 'text': ''})
+        picked.sort(key=lambda x: x['at'])
+        if persist:
+            for item in picked:
+                row = {**item, 'stage_id': stage['stage_id'], 'event_id': stage['event_id']}
+                self.store.append(self.evidence_path, row)
+        return picked

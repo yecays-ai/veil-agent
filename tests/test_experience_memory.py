@@ -573,6 +573,10 @@ class WritingTests(Fixture):
         last = self.store.read('fake/experience-memory.jsonl')[-1]
         self.assertEqual((last['dropped'], last['unfixed'][0]['title']), (1, '照抄'))
         self.assertIn('word for word', last['unfixed'][0]['problem'])
+        reviews = [row for row in self.store.read('fake/experience-memory.jsonl')
+                   if row.get('kind') == 'manual-review']
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]['items'][0]['draft'], quoted)
 
     def test_a_memory_saved_before_the_sidecar_noted_saves_is_found_by_its_creation_time(self):
         self.ombre.items['early'] = {'title': 'drawers', 'content': '11月15日上午我把工具放进了新抽屉。'}

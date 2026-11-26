@@ -1,22 +1,26 @@
 # HANDOFF
 
-## P6-S0 · `ticket/449-p6-s0-baseline-sync`（施工/验收交接）
+> 更新时间：2026-11-26T03:58:00Z
 
-- **基线**：基于 `origin/main`（`2408bb6`，含 `#446` 全局配置审计与 `#448` 全局管理中心首批只读配置总览及桌面回归）。
-- **本单交付**：
-  - 将 P3-4 维护窗口已验证的确定性排序补丁同步入 `scripts/p3_4_cleanup.py`，并在 `tests/test_p3_4_cleanup.py` 补充排序确定性单元测试；
-  - 同步脱敏后的 `docs/reports/p3-4-final-acceptance-20261125.md`、`docs/reports/p6-0-memory-audit-20261126.md`、`docs/reports/p6-1-retrieval-judge-association-audit-20261126.md`、`docs/reports/p6-2-relationship-weight-evolution-audit-20261126.md`、`docs/reports/p6-3-context-budget-audit-20261126.md`、`docs/reports/p6-4-brain-architecture-integration-20261126.md` 与 `docs/tickets/449-p6-s0-baseline-sync.md`；
-  - 统一 `STATUS.md` 与 `HANDOFF.md`（对齐 `#446`/`#448`、P3-4 完成态与 P6-4 批准施工路线）。
-- **仓库基线**：P6-4 所引用的全部 P6-0～P6-3 审计依据均已脱敏入库，后续开发窗口可直接从 `docs/reports/` 读取完整证据链。
+## P6-S2 · `ticket/450-p6-s2-write-contract-and-recovery`
 
-## 下一阶段已批准路线（`P6-4` 定稿）
+- **停点**：已完成 CodeRabbit 二轮全部 14 项（11 条行内 + 3 条 diff 外）定点修复及新增回归测试，已推送至 PR #450 并关闭本轮已解决讨论串，等待 CI 与审查。正式目录和真实记忆未写入。
+- **核心交付**：
+  - `BrainAuthority.commit_event_bundle()` 已接入 `EventMemory.record()`、`revise()` 与 `retry_pending()`；`record()` 在生成故事前取基线并保留 `locked` 分支的 `last_story_at`；`revise()` 未提供新标题时不覆盖面板标题；`retry_pending()` 缺 `memory_id` 时同步创建投影与 `quotes`。
+  - `brain_writer` 将 `ensure_schema()` DDL 与 `retry_pending_vectors()` 状态变更均与 `apply_digest()` 纳入同一 SQLite 事务；`apply_update_memory(..., archive_raw=True)` 在 Brain `hold` 重写时由单条版本保存完整旧 Markdown（`restore_version` 安全剥离 front matter）。
+  - `event_memory` 统一 `facts()` 与 `_date_parts()` 对含年份中文日期的提取，阶段已知年份时严格要求匹配日期同年份（不再被编号等独立数字拼凑），`timeline()` 对模型可见证据边界统一脱敏 API Key（`chat.jsonl` 原文不变）。
+  - `ExperienceMemory.__init__` 为常驻 `self.events` 绑定 `self.sidecar.locked`；`_save_update` 区分目标缺失与 `'locked'`。
+  - `brain_backup._merge_new_rows` 对缺失 `sidecar_events` 跳过合并；`scripts/p6_s2_recover_history.py` 追加恢复 marker 前检查末尾行完整性，缺少换行时自动补换行、末行损坏则拒绝写入。
+- **验证证据**：`test_p6_s2_review_fixes`、`test_p6_s2_write_and_recovery`、`test_event_memory`、`test_experience_memory`、全部 `brain_*` 与 `memory_*`、`test_p3_4_cleanup` 共 15 个套件 **291/291 通过**。
 
-1. **`P6-S2`（下一窗口第一步）**：基于最新 `main` 开立独立 worktree，优先确立统一单事务写入与单份 `versions` 契约（`BrainAuthority` + `BrainEvents`），落地 `ExperienceMemory` 防丢稿与日期归一化、`_capture_evidence` 时间排序+分通道配额保留 `chat` 原话、`brain_backup` 协同快照与故障恢复演练，并完成历史失败批次审计与 `2026-11-25` 58 条丢稿消息的幂等恢复（同时可在 `recall-lab` 零代码冲突并行制作只读 `eval-v2` 独立标注集）。
-2. **`P6-S1`**：在 `S2` 契约之上修复 CRLF `card_text`/`_with_metadata`、同轮单次 Embed 复用、`breath_search` 日期/权重、移除 `reuse_recall` 死代码与 `drift` 死分支、判官独立超时，产出 `Baseline-1`。
-3. **`P6-S4`**：在 `recall-lab` 隔离回放运行 21 项严格单变量原子消融（总预算硬上限 `¥20.00`，按 `Tier 0 (¥0) → Tier 1 (≤¥6) → Tier 2 (≤¥10)` 价值排序执行，含 `AB-E1` 巩固收益验证）。
-4. **依实验结果实施 `P6-S3 / P6-S5 → P6-S6 → P6-S7`**；严格保留 `input_token_ratio`/`tool_groups` 归 M2、`parse_cache_usage` 归 M3、瞄一眼/弹幕连续性不削减。
+## 下一个窗口第一步
 
-## 正式运行与数据安全红线
+1. 读取 PR 最新 CI 与审查结论，只处理功能、数据完整性、隐私或安全方面的实质问题。
+2. 本单只要求提交 PR 后停止，不得合并；也不得对正式 `data/peter` 执行历史恢复。
+3. 合并后再从最新 `main` 开 P6-S1 独立 worktree。
 
-- 正式运行目录固定只跟 `main`；不得在正式运行目录开发或向正式 Peter 发消息/写记忆/启停进程。
-- 回退严禁直接用旧备份覆盖有新增记录的 `brain.db`；必须使用 `brain_backup.py` 安全恢复与协同对账流程。
+## 维护窗口红线
+
+- 正式恢复必须先创建协同 bundle，再 dry-run 给 Lan 看 58 条消息的目标与追加预览；只有 Lan 明确确认后才执行 apply。
+- 代码回退不得用旧 DB 覆盖新增记忆。恢复必须走 `restore_bundle`，并检查 0 重复、0 悬空引用。
+- `.local-tmp/p6-s2-history-preview/` 是 worktree 内忽略的隔离副本，不提交；其中含真实数据副本，worktree 清理时一并删除，不得发布到 PR。

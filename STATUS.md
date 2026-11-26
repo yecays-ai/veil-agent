@@ -1,29 +1,20 @@
 # 当前状态
 
-## P6-S0 · 基线同步与 P3-4 确定性清理补丁入库（`ticket/449-p6-s0-baseline-sync`）
+> 更新时间：2026-11-26T03:58:00Z（P6-S2 二轮审查修复完成）
 
-- **目标**：同步 P3-4 维护窗口已验证的 `scripts/p3_4_cleanup.py` 确定性排序补丁、P3-4 验收报告、P6-0/P6-4 审计与整合设计报告，并对齐 `main` 最新状态（`#446` + `#448` + P3-4 + P6-4）。
-- **现状**：已在独立 worktree 完成补丁合入、确定性排序单元测试与脱敏文档同步，准备提交 PR 与 CI 检查（见 [工单 449](docs/tickets/449-p6-s0-baseline-sync.md)）。
-- **验证**：隔离运行 `tests/test_p3_4_cleanup.py` 及相关离线单元测试。
-- **下一步**：PR 合并后，基于最新 `main` 按既定顺序 **`P6-S0 → P6-S2 → P6-S1 → P6-S4 → 依据实验结果实施 P6-S3 / P6-S5 → P6-S6 → P6-S7`** 启动 `P6-S2`。
+## P6-S2 · 统一写入事务、防丢稿、证据链与协同恢复
 
-## P6-4｜VEIL Brain 全局架构整合与施工设计（定稿完成，已批准按序推进）
+- **当前目标**：让事件记忆在写入中断、经历整理失败和备份恢复后仍保持正文、故事、阶段、版本与用户原话证据一致，且可幂等恢复历史丢稿。
+- **现状**：分支 `ticket/450-p6-s2-write-contract-and-recovery` 已完成 CodeRabbit 首轮 29 项与二轮全部 14 项审查修复并推送更新至 PR #450。二轮补齐：缺失 `sidecar_events` 兼容、`ensure_schema` DDL 与 `apply_digest` 单事务提交、`retry_pending_vectors` 同事务更新摘要、`record()` 生成故事前采集基线且 `locked` 不推进 `last_story_at`、`revise()` 无新标题时不覆盖面板标题、`retry_pending()` 首创投影同步写入 `quotes`、`facts()`/`_missing_facts()` 统一中文含年份日期与严格年份归属、`timeline()` 模型可见证据脱敏、`hold` 重写由单条 Brain 版本保存完整旧 Markdown、`scripts/p6_s2_recover_history.py` 末行完整性保护，以及 `ExperienceMemory` 常驻锁绑定与 `'locked'` 状态区分。
+- **隔离验收**：P6-S2 专项、审查回归、事件、经历、Brain（writer/read/native_hold/backup/store/export）及 P3-4 等 15 个核心测试套件共 **291/291 全部通过**。
+- **下一步**：等待 PR #450 最新 CI 与复审确认；不得自行合并 PR，也不得对正式 `data/peter` 执行恢复，必须另开维护窗口并由 Lan 确认 dry-run 预览。
+- **验收步骤**：维护窗口创建协同 bundle；先 dry-run 核对 58 条目标消息和追加预览；确认后 apply，并在记忆详情/时间线检查 11 月 25 日经历连续且无重复；相同命令二次执行须返回 `already_recovered`。
 
-- **交付**：[p6-4-brain-architecture-integration-20261126.md](docs/reports/p6-4-brain-architecture-integration-20261126.md)（架构整合定稿），完整引用以下已同步入库的脱敏专项审计依据：
-  - [p6-0-memory-audit-20261126.md](docs/reports/p6-0-memory-audit-20261126.md)（开源调研与差距审计）
-  - [p6-1-retrieval-judge-association-audit-20261126.md](docs/reports/p6-1-retrieval-judge-association-audit-20261126.md)（检索、判官与自然联想审计）
-  - [p6-2-relationship-weight-evolution-audit-20261126.md](docs/reports/p6-2-relationship-weight-evolution-audit-20261126.md)（关系认知、记忆权重与动态演化审计）
-  - [p6-3-context-budget-audit-20261126.md](docs/reports/p6-3-context-budget-audit-20261126.md)（上下文组装、注入与预算审计）
-- **核定路线**：`P6-S0`（基线同步）→ `P6-S2`（单事务写入/版本契约 + 防丢稿 + 证据链 + 协同备份与故障恢复演练 + `2026-11-25` 58 条丢稿幂等恢复）→ `P6-S1`（检索/卡片/元数据确定性修复）→ `P6-S4`（21 项严格单变量原子消融，`¥20` 总预算硬上限）→ 依据实验结果实施 `P6-S3` / `P6-S5` → `P6-S6` → `P6-S7`。
-- **边界**：严格分离 P6 与 M2（`input_token_ratio` 校准与 `tool_groups` 瘦身）、M3（`parse_cache_usage` 与 `tools` 缓存边界）及后续聊天体验专项调优（完整保留瞄一眼与弹幕连续性及时间感知，本阶段不削减）。
+## P6 路线
 
-## 全局管理中心 · 首批（`#448` / `2408bb6`，已合并）
+`P6-S0` 已由 `#449` 合并；本单 P6-S2 完成 PR 后，按定稿顺序进入 `P6-S1`（检索、卡片与元数据确定性修复），再进入 `P6-S4` 消融实验。P6 不改 M2 的 `input_token_ratio/tool_groups`、不改 M3 的缓存协议，也不削减瞄一眼/弹幕连续性。
 
-- **目标**：让用户看清模型用途的配置选择、实际生效与待重启状态，保留聊天「＋」菜单和生活记录日历。
-- **首批**：只读注册契约（`config_registry.py`）、五种模型用途总览（`GET /api/config/overview`）及桌面回归测试（121 项 Python + 25 项桌面 + 隔离 Electron 假后端 smoke 通过；正式打包及用户体验待验）。
-- **#446 全局配置审计（已合并 `0a688ad`）**：八域取证与 668 项配置清单（`docs/reports/config-audit/`）。
+## 正式底座
 
-## Brain 正式底座（P3-0 ~ P3-4 已合并并完成正式部署）
-
-- P2 正式体验由 Lan 确认通过；P3-0 至 P3-4 已合并并完成正式维护部署（[P3-4 最终验收报告](docs/reports/p3-4-final-acceptance-20261125.md)）：正式清理、Ombre 物理卸载、数据对账（mismatch 0）、vault 导出与 Brain 备份恢复演练均通过；确定性排序补丁随 Ticket 449 合入 `main`。
-- P3 的保存、想起、事件续写与费用连续体验持续由 Lan 在正式实例观察；未启动正式 P4/P5 界面施工。
+- P3-0 至 P3-4 已合并并完成正式维护部署；全局管理中心首批 `#448` 已合并。
+- 正式运行目录固定跟随 `main`。本单未向正式 Peter 发消息、未启停正式进程、未修改正式源码或真实记忆；所有写入测试与历史恢复均在独立 worktree 隔离副本完成。

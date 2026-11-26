@@ -15,12 +15,14 @@ import uuid
 SCHEMA_ADDITIONS = (
     "ALTER TABLE memories ADD COLUMN vector_state TEXT NOT NULL DEFAULT 'ready'",
 )
-TABLES = """
-CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT);
-CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT);
-CREATE TABLE IF NOT EXISTS write_journal(seq INTEGER PRIMARY KEY, time TEXT, operation TEXT,
-    memory_id TEXT, detail_json TEXT, status TEXT);
-"""
+TABLE_NAMES = ('tombstones', 'delete_requests', 'write_journal', 'experience_recoveries')
+TABLE_DDLS = (
+    'CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT)',
+    'CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT)',
+    'CREATE TABLE IF NOT EXISTS write_journal(seq INTEGER PRIMARY KEY, time TEXT, operation TEXT, memory_id TEXT, detail_json TEXT, status TEXT)',
+    'CREATE TABLE IF NOT EXISTS experience_recoveries(source_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, event_id TEXT NOT NULL, stage_id TEXT NOT NULL, created_at TEXT NOT NULL)',
+)
+TABLES = ';\n'.join(TABLE_DDLS) + ';\n'
 
 
 def _sha(value):
@@ -34,10 +36,43 @@ def now():
 
 def ensure_schema(connection):
     columns = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
-    if 'vector_state' not in columns:
-        connection.execute(SCHEMA_ADDITIONS[0])
-    connection.executescript(TABLES)
-    connection.commit()
+    need_vector_state = 'vector_state' not in columns
+    present = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    missing_tables = any(name not in present for name in TABLE_NAMES)
+    if not need_vector_state and not missing_tables:
+        if connection.in_transaction:
+            connection.commit()
+        return
+    # P6-S2 review: run schema DDL and apply_digest() in ONE transaction (avoid executescript(),
+    # which breaks transaction boundaries). Otherwise creating empty experience_recoveries before
+    # apply_digest() leaves meta.digest stale across crashes.
+    if connection.in_transaction:
+        connection.commit()
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        if need_vector_state:
+            connection.execute(SCHEMA_ADDITIONS[0])
+        for ddl in TABLE_DDLS:
+            connection.execute(ddl)
+        try:
+            apply_digest(connection)
+        except sqlite3.Error:
+            # A database without meta/canonical tables must still open for repair; the first real
+            # write or import stores the digest.
+            pass
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def apply_digest(connection):
+    """Update the canonical digest inside the caller's current transaction."""
+    from veil_brain import canonical_digest
+    connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('digest', ?)",
+                       (canonical_digest(connection),))
 
 
 def refresh_digest(connection):
@@ -46,13 +81,8 @@ def refresh_digest(connection):
     check_db()/the cutover snapshot compare meta.digest with the actual rows; a live authority
     database must not look "corrupt" merely because a memory was saved after the import.
     """
-    try:
-        from veil_brain import canonical_digest
-        connection.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('digest', ?)",
-                           (canonical_digest(connection),))
-        connection.commit()
-    except Exception:
-        pass
+    apply_digest(connection)
+    connection.commit()
 
 
 def new_id(connection):
@@ -127,13 +157,15 @@ def _journal(connection, operation, memory_id, detail, status):
                         json.dumps(detail, ensure_ascii=False, sort_keys=True), status))
 
 
-def create_memory(connection, record, *, vector=None, embedder=None):
-    """Insert one memory. Returns saved or saved_index_pending; raises on a DB failure."""
-    ensure_schema(connection)
+def _prepare_memory_vector(body, vector, embedder):
+    return _vector({'body': body}, vector, embedder)
+
+
+def apply_create_memory(connection, record, *, vector=None, state='pending'):
+    """Insert a memory inside an already-open transaction (no commit/digest)."""
     body = record.get('body') or ''
     if not body.strip():
         raise ValueError('empty memory body')
-    vector, state = _vector({**record, 'body': body}, vector, embedder)
     memory_id = record.get('id') or new_id(connection)
     title = record.get('title') or ''
     created = record.get('created') or now()
@@ -146,35 +178,95 @@ def create_memory(connection, record, *, vector=None, embedder=None):
     frontmatter_json = json.dumps({'id': memory_id, 'title': title,
                                    'type': record.get('type') or 'dynamic',
                                    'created': created}, ensure_ascii=False, sort_keys=True)
+    connection.execute(
+        'INSERT INTO memories(id,bucket,file_rel,title,name,body,body_sha256,raw_markdown,'
+        'raw_sha256,frontmatter_raw,frontmatter_json,created,last_active,type,importance,'
+        'domain_json,tags_json,why_remembered,meaning,is_hidden,is_tombstone,is_deleted,'
+        'pinned,extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (memory_id, record.get('bucket') or 'dynamic',
+         record.get('file_rel') or ('dynamic/%s.md' % memory_id), title, title, body,
+         _sha(body), raw, _sha(raw), frontmatter, frontmatter_json, created, created,
+         record.get('type') or 'dynamic', record.get('importance') or 5,
+         json.dumps(record.get('domain') or [], ensure_ascii=False),
+         json.dumps(record.get('tags') or [], ensure_ascii=False),
+         record.get('why_remembered') or '', record.get('meaning') or '',
+         int(bool(record.get('hidden'))), 0, 0,
+         int(bool(record.get('pinned'))), '{}', state))
+    if vector:
+        blob = _vector_blob(vector)
+        connection.execute(
+            'INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,updated_at,content_hash) '
+            'VALUES(?,?,?,?,?,?)',
+            (memory_id, len(vector), blob, _sha(blob), now(), _sha(body)))
+    _journal(connection, 'create', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
+    return {'status': 'saved' if state == 'ready' else 'saved_index_pending',
+            'memory_id': memory_id, 'vector_state': state}
+
+
+def apply_update_memory(connection, memory_id, changes, *, vector=None, state=None,
+                        operation_reason='', why_remembered='', archive_raw=False):
+    """Update a memory + archive single version inside an already-open transaction."""
+    row = connection.execute('SELECT body,raw_markdown,file_rel,vector_state FROM memories WHERE id=? AND '
+                             'is_deleted=0 AND is_tombstone=0', (memory_id,)).fetchone()
+    if row is None:
+        raise KeyError(memory_id)
+    old_body, old_raw, file_rel, old_state = row
+    changes = dict(changes)
+    if changes.get('body') == old_body:
+        changes.pop('body', None)
+    body_changed = 'body' in changes
+    body = changes.get('body', old_body) if body_changed else old_body
+    if not isinstance(body, str) or not body.strip():
+        raise ValueError('empty memory body')
+    eff_state = (state or 'pending') if body_changed else old_state
+    if not changes:
+        return {'status': 'saved' if old_state == 'ready' else 'saved_index_pending',
+                'memory_id': memory_id, 'vector_state': old_state, 'changed': False}
+    fields = sorted(changes)
+    archived_old = old_raw if (archive_raw and isinstance(old_raw, str) and old_raw) else old_body
+    connection.execute('INSERT INTO versions(memory_id,time,operation_reason,why_remembered,'
+                       'fields_json,old_content,old_sha256) VALUES(?,?,?,?,?,?,?)',
+                       (memory_id, now(), operation_reason[:500], why_remembered[:500],
+                        json.dumps(fields), archived_old, _sha(archived_old)))
+    raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
+    raw = _with_metadata(raw, {'title': changes.get('title'),
+                               'importance': changes.get('importance'),
+                               'pinned': changes.get('pinned')})
+    connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
+                       'title=COALESCE(?,title),importance=COALESCE(?,importance),'
+                       'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'
+                       'vector_state=COALESCE(?,vector_state) WHERE id=?',
+                       (body, _sha(body), raw, _sha(raw), changes.get('title'),
+                        changes.get('importance'), changes.get('pinned'),
+                        why_remembered or None, eff_state if body_changed else None, memory_id))
+    if body_changed and eff_state == 'ready' and vector:
+        blob = _vector_blob(vector)
+        connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
+                           'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
+                           (memory_id, len(vector), blob, _sha(blob), now(), _sha(body)))
+    elif body_changed:
+        connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
+    _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': eff_state}, eff_state)
+    return {'status': 'saved' if eff_state == 'ready' else 'saved_index_pending',
+            'memory_id': memory_id, 'vector_state': eff_state, 'changed': True}
+
+
+def create_memory(connection, record, *, vector=None, embedder=None):
+    """Insert one memory. Returns saved or saved_index_pending; raises on a DB failure."""
+    ensure_schema(connection)
+    body = record.get('body') or ''
+    if not body.strip():
+        raise ValueError('empty memory body')
+    vector, state = _vector({**record, 'body': body}, vector, embedder)
     try:
         connection.execute('BEGIN IMMEDIATE')
-        connection.execute(
-            'INSERT INTO memories(id,bucket,file_rel,title,name,body,body_sha256,raw_markdown,'
-            'raw_sha256,frontmatter_raw,frontmatter_json,created,last_active,type,importance,'
-            'domain_json,tags_json,why_remembered,meaning,is_hidden,is_tombstone,is_deleted,'
-            'pinned,extra_json,vector_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (memory_id, record.get('bucket') or 'dynamic',
-             record.get('file_rel') or ('dynamic/%s.md' % memory_id), title, title, body,
-             _sha(body), raw, _sha(raw), frontmatter, frontmatter_json, created, created,
-             record.get('type') or 'dynamic', record.get('importance') or 5,
-             json.dumps(record.get('domain') or [], ensure_ascii=False),
-             json.dumps(record.get('tags') or [], ensure_ascii=False),
-             record.get('why_remembered') or '', record.get('meaning') or '',
-             int(bool(record.get('hidden'))), 0, 0,
-             int(bool(record.get('pinned'))), '{}', state))
-        if vector:
-            connection.execute(
-                'INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,updated_at,content_hash) '
-                'VALUES(?,?,?,?,?,?)',
-                (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)), now(), _sha(body)))
-        _journal(connection, 'create', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
+        result = apply_create_memory(connection, record, vector=vector, state=state)
+        apply_digest(connection)
         connection.commit()
-        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
-    return {'status': 'saved' if state == 'ready' else 'saved_index_pending',
-            'memory_id': memory_id, 'vector_state': state}
+    return result
 
 
 def _vector_blob(values):
@@ -183,58 +275,29 @@ def _vector_blob(values):
 
 
 def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
-                  operation_reason='', why_remembered=''):
-    """Rewrite a memory, archiving the old body first, in one transaction."""
+                  operation_reason='', why_remembered='', archive_raw=False):
+    """Rewrite a memory, archiving the old version first, in one transaction."""
     ensure_schema(connection)
-    row = connection.execute('SELECT body,raw_markdown,file_rel,vector_state FROM memories WHERE id=? AND '
-                             'is_deleted=0 AND is_tombstone=0', (memory_id,)).fetchone()
-    if row is None:
-        raise KeyError(memory_id)
-    old_body, old_raw, file_rel, old_state = row
     body_changed = 'body' in changes
-    body = changes.get('body', old_body) if body_changed else old_body
-    if not isinstance(body, str) or not body.strip():
+    body = changes.get('body') if body_changed else None
+    if body_changed and (not isinstance(body, str) or not body.strip()):
         raise ValueError('empty memory body')
     if body_changed:
         vector, state = _vector({'body': body}, vector, embedder)
     else:
-        # A metadata-only trace (title/pinned/importance) must not re-embed the unchanged body:
-        # Memory.call reserved no embedding budget, and a failed embedding must not drop the
-        # existing vector. The stored vector and state stay exactly as they were.
-        vector, state = None, old_state
-    fields = sorted(changes)
+        vector, state = None, None
     try:
         connection.execute('BEGIN IMMEDIATE')
-        connection.execute('INSERT INTO versions(memory_id,time,operation_reason,why_remembered,'
-                           'fields_json,old_content,old_sha256) VALUES(?,?,?,?,?,?,?)',
-                           (memory_id, now(), operation_reason[:500], why_remembered[:500],
-                            json.dumps(fields), old_body, _sha(old_body)))
-        raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
-        raw = _with_metadata(raw, {'title': changes.get('title'),
-                                   'importance': changes.get('importance'),
-                                   'pinned': changes.get('pinned')})
-        connection.execute('UPDATE memories SET body=?,body_sha256=?,raw_markdown=?,raw_sha256=?,'
-                           'title=COALESCE(?,title),importance=COALESCE(?,importance),'
-                           'pinned=COALESCE(?,pinned),why_remembered=COALESCE(?,why_remembered),'
-                           'vector_state=COALESCE(?,vector_state) WHERE id=?',
-                           (body, _sha(body), raw, _sha(raw), changes.get('title'),
-                            changes.get('importance'), changes.get('pinned'),
-                            why_remembered or None, state if body_changed else None, memory_id))
-        if body_changed and state == 'ready':
-            connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
-                               'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
-                               (memory_id, len(vector), _vector_blob(vector), _sha(_vector_blob(vector)),
-                                now(), _sha(body)))
-        elif body_changed:
-            connection.execute('DELETE FROM vectors WHERE memory_id=?', (memory_id,))
-        _journal(connection, 'update', memory_id, {'body_sha256': _sha(body), 'vector_state': state}, state)
+        result = apply_update_memory(
+            connection, memory_id, changes, vector=vector, state=state,
+            operation_reason=operation_reason, why_remembered=why_remembered,
+            archive_raw=archive_raw)
+        apply_digest(connection)
         connection.commit()
-        refresh_digest(connection)
     except Exception:
         connection.rollback()
         raise
-    return {'status': 'saved' if state == 'ready' else 'saved_index_pending',
-            'memory_id': memory_id, 'vector_state': state}
+    return result
 
 
 def set_state(connection, memory_id, *, locked=None, archived=None, deleted=None,
@@ -337,7 +400,17 @@ def restore_version(connection, memory_id, seq, *, vector=None, embedder=None):
                              (memory_id, seq)).fetchone()
     if row is None:
         raise KeyError('version')
-    return update_memory(connection, memory_id, {'body': row[0]}, vector=vector,
+    old_content = row[0] or ''
+    changes = {'body': old_content}
+    if isinstance(old_content, str) and old_content.startswith('---\n'):
+        from memory_agent import parse_frontmatter
+        meta, body = parse_frontmatter(old_content)
+        if body.strip():
+            changes = {'body': body.strip()}
+            title = meta.get('title') or meta.get('name')
+            if isinstance(title, str) and title.strip():
+                changes['title'] = title.strip()[:100]
+    return update_memory(connection, memory_id, changes, vector=vector,
                          embedder=embedder, operation_reason='restore version %s' % seq)
 
 
@@ -374,19 +447,40 @@ def retry_pending_vectors(connection, embedder):
     for memory_id, body in rows:
         try:
             values = embedder(body)
-            if not values or len(values) != 1024:
-                continue
-            with connection:
-                connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
-                                   'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
-                                   (memory_id, len(values), _vector_blob(values),
-                                    _sha(_vector_blob(values)), now(), _sha(body)))
-                connection.execute("UPDATE memories SET vector_state='ready' WHERE id=?", (memory_id,))
-            saved += 1
         except Exception:
+            values = None
+        if not values or len(values) != 1024:
             continue
-    if saved:
-        refresh_digest(connection)
+        # P6-S2 review: the embedding call runs outside the role write lock, so the body may have
+        # been rewritten (or already indexed) while we waited. Only write the vector and mark the
+        # row ready when it still holds the body we embedded and is still pending; a newer body
+        # must never be replaced by this stale vector.
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+        except sqlite3.Error:
+            continue
+        try:
+            current = connection.execute(
+                "SELECT body,vector_state FROM memories WHERE id=? AND is_deleted=0 "
+                "AND is_tombstone=0", (memory_id,)).fetchone()
+            if not current or current[0] != body or current[1] != 'pending':
+                connection.rollback()
+                continue
+            blob = _vector_blob(values)
+            connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
+                               'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
+                               (memory_id, len(values), blob, _sha(blob), now(), _sha(body)))
+            connection.execute("UPDATE memories SET vector_state='ready' "
+                               "WHERE id=? AND body=? AND vector_state='pending'", (memory_id, body))
+            apply_digest(connection)
+            connection.commit()
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            continue
+        saved += 1
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}
 
 
