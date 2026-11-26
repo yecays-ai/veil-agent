@@ -7,11 +7,11 @@
       },
       "metrics": {
         "blind_eval": {
-          "emotional_fit": 3.83,
-          "experience_behavior_impact": 3.67,
+          "emotional_fit": 4.17,
+          "experience_behavior_impact": 3.83,
           "factual_accuracy": 4.83,
           "forced_association": 0,
-          "hallucinated_memory": 1,
+          "hallucinated_memory": 0,
           "memory_naturalness": 4.33,
           "relationship_continuity": 4.33,
           "work_interference": 0
@@ -28,11 +28,11 @@
         "blind_eval": {
           "emotional_fit": 3.83,
           "experience_behavior_impact": 3.5,
-          "factual_accuracy": 4.17,
-          "forced_association": 1,
-          "hallucinated_memory": 1,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 3.83,
+          "factual_accuracy": 4.5,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         },
         "rejected_ungrounded": 0,
@@ -47,16 +47,16 @@
     "by_tier": {
       "0": 0.0,
       "1": 1.784595,
-      "2": 0.705629
+      "2": 0.881451
     },
-    "calls": 821,
-    "total_cny": 2.490224
+    "calls": 862,
+    "total_cny": 2.666046
   },
   "comparison": [
     {
-      "a": 3.67,
+      "a": 3.83,
       "b": 3.5,
-      "delta": -0.17,
+      "delta": -0.33,
       "metric": "experience_behavior_impact"
     },
     {
@@ -72,19 +72,19 @@
         "evidence_constrained_consolidation": {
           "emotional_fit": 3.83,
           "experience_behavior_impact": 3.5,
-          "factual_accuracy": 4.17,
-          "forced_association": 1,
-          "hallucinated_memory": 1,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 3.83,
+          "factual_accuracy": 4.5,
+          "forced_association": 0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         },
         "no_consolidation": {
-          "emotional_fit": 3.83,
-          "experience_behavior_impact": 3.67,
+          "emotional_fit": 4.17,
+          "experience_behavior_impact": 3.83,
           "factual_accuracy": 4.83,
           "forced_association": 0,
-          "hallucinated_memory": 1,
+          "hallucinated_memory": 0,
           "memory_naturalness": 4.33,
           "relationship_continuity": 4.33,
           "work_interference": 0
@@ -92,8 +92,8 @@
       },
       "n": 6,
       "wins": {
-        "evidence_constrained_consolidation": 3,
-        "no_consolidation": 3,
+        "evidence_constrained_consolidation": 2,
+        "no_consolidation": 4,
         "tie": 0
       }
     },
@@ -107,17 +107,17 @@
     "短期历史切片回放不能替代多日真实运行与 Lan 主观验收；S6 如实施必须带独立开关、日预算硬顶与不覆盖用户锁定规则"
   ],
   "experiment_id": "AB-E1",
-  "finished_at": "2026-11-26T20:00:00.296+08:00",
+  "finished_at": "2026-11-26T20:15:09.614+08:00",
   "fixed_baseline": "严格按历史时间切片前瞻回放（只能读当时已发生信息）+ deepseek-flash 真实跨阶段行为对照",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T19:59:16.204+08:00",
+  "started_at": "2026-11-26T20:14:51.026+08:00",
   "status": "completed",
   "tier": 2,
   "title": "认知巩固收益与跨时间认知修订",
   "variable": "无巩固对照组 vs 有证据约束的跨时间前瞻巩固实验组（T1->T2->T3）",
   "verdict": {
-    "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 3, \"evidence_constrained_consolidation\": 3, \"tie\": 0}、经验行为影响 -0.17。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
+    "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 4, \"evidence_constrained_consolidation\": 2, \"tie\": 0}、经验行为影响 -0.33。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
     "recommended": false,
     "self_guess_promoted": 0,
     "valid_insights_total": 8,

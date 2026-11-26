@@ -850,7 +850,14 @@ def run_c2b(ctx):
     unc_sc = be['arms'].get('uncapped_6') or {}
     nat_delta = round((cap_sc.get('memory_naturalness') or 0) - (unc_sc.get('memory_naturalness') or 0), 2)
     emo_delta = round((cap_sc.get('emotional_fit') or 0) - (unc_sc.get('emotional_fit') or 0), 2)
-    recommended = len(over) > 0 and nat_delta >= -0.3 and emo_delta >= -0.3 and (cap_sc.get('hallucinated_memory') or 0) == 0
+    fact_delta = round((cap_sc.get('factual_accuracy') or 0) - (unc_sc.get('factual_accuracy') or 0), 2)
+    wins_cap = be['wins'].get('cap_top2+1', 0)
+    wins_unc = be['wins'].get('uncapped_6', 0)
+    recommended = (
+        len(over) > 0 and wins_cap >= wins_unc
+        and nat_delta >= -0.3 and emo_delta >= -0.3 and fact_delta >= -0.3
+        and (cap_sc.get('hallucinated_memory') or 0) == 0
+    )
     ctx.save_detail('ab_c2b_replies', c2b['records'])
     result.update({'status': 'completed',
                    'arms': [{'arm': 'uncapped_6', 'config': {'cap': None},

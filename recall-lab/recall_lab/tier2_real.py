@@ -194,7 +194,7 @@ def blind_eval_pair(chat_client, *, experiment, scenario_id, user_message, refer
     user_prompt = (
         f'场景类型：{"工作/任务态（重点检查是否被无关旧事干扰）" if is_work else "日常陪伴/对话/自主活动"}\n'
         f'用户输入/上下文：\n{user_message[:600]}\n\n'
-        f'可供核验的真实参考背景（事实基准）：\n{reference_context[:1200]}\n\n'
+        f'可供核验的完整真实参考背景（包含角色实际读到的全部记忆与笔记，切勿在未核对全文时误判捏造）：\n{reference_context[:12000]}\n\n'
         f'=== Reply A ===\n{reply_a[:900]}\n\n'
         f'=== Reply B ===\n{reply_b[:900]}'
     )
@@ -482,7 +482,7 @@ def run_a1a_a1b_real(ctx, chat_client):
                                  'latency_ms': r['latency_ms'], 'cost_cny': r['cost_cny']}
             total_cost += r['cost_cny']
 
-        ref_ctx = _format_memories_block(
+        ref_ctx = (learned_head + '\n\n' if learned_head else '') + _format_memories_block(
             ctx.snapshot, list(dict.fromkeys(
                 list(s.expected) + recalled_ids
                 + [x for x in (ch_prod.get('key'), ch_strat.get('key')) if x])))
@@ -552,7 +552,8 @@ def run_a1a_a1b_real(ctx, chat_client):
             replies[arm_name] = {'text': r['text'], 'assoc_id': aid,
                                  'latency_ms': r['latency_ms'], 'cost_cny': r['cost_cny']}
             total_cost += r['cost_cny']
-        ref_ctx = _format_memories_block(ctx.snapshot, [assoc_id] if assoc_id else list(s.expected))
+        ref_ctx = (learned_head + '\n\n' if learned_head else '') + _format_memories_block(
+            ctx.snapshot, list(dict.fromkeys(([assoc_id] if assoc_id else []) + list(s.expected))))
         ev = blind_eval_pair(
             chat_client, experiment='AB-A1b', scenario_id=s.sample_id,
             user_message=s.query, reference_context=ref_ctx or '（闲暇自主唤醒）',
@@ -714,7 +715,8 @@ def run_c2a_c2b_real(ctx, chat_client):
                 c2a_tok_omit += r['prompt_tokens']
         ev = blind_eval_pair(
             chat_client, experiment='AB-C2a', scenario_id=s.sample_id,
-            user_message=s.query, reference_context='（本轮召回为空，不存在任何应提及的旧记忆；重点核验是否捏造回忆）',
+            user_message=s.query,
+            reference_context=(learned_head + '\n\n（本轮自动召回为空，除上述长期笔记外不存在其他召回记忆；重点核验是否捏造回忆）'),
             arm_x_name='keep_empty_hint', arm_x_reply=replies['keep_empty_hint']['text'],
             arm_y_name='omit_empty_hint', arm_y_reply=replies['omit_empty_hint']['text'],
             is_work=(s.category == 'trap'))
@@ -750,7 +752,8 @@ def run_c2a_c2b_real(ctx, chat_client):
                 c2b_tok_uncapped += r['prompt_tokens']
             else:
                 c2b_tok_cap += r['prompt_tokens']
-        ref_ctx = _format_memories_block(ctx.snapshot, list(dict.fromkeys(list(s.expected) + all_ids[:3])))
+        ref_ctx = (learned_head + '\n\n' if learned_head else '') + _format_memories_block(
+            ctx.snapshot, list(dict.fromkeys(list(s.expected) + all_ids)))
         ev = blind_eval_pair(
             chat_client, experiment='AB-C2b', scenario_id=s.sample_id,
             user_message=s.query, reference_context=ref_ctx,
@@ -870,7 +873,8 @@ def run_c3_real_tool(ctx, chat_client):
 
         ptr_tok += step_tokens
         ptr_lat.append(step_latency)
-        ref_ctx = _format_memories_block(ctx.snapshot, long_eids, summary_pointer=False)
+        ref_ctx = (learned_head + '\n\n' if learned_head else '') + _format_memories_block(
+            ctx.snapshot, long_eids, summary_pointer=False)
         ev = blind_eval_pair(
             chat_client, experiment='AB-C3', scenario_id=s.sample_id,
             user_message=s.query, reference_context=ref_ctx,
@@ -1060,7 +1064,8 @@ def run_e1_forward_consolidation(ctx, chat_client):
             total_cost += r['cost_cny']
         ev = blind_eval_pair(
             chat_client, experiment='AB-E1', scenario_id=s.sample_id,
-            user_message=s.query, reference_context=rec_block + '\n\n' + consolidated_block[:600],
+            user_message=s.query,
+            reference_context=(learned_head + '\n\n' if learned_head else '') + rec_block + '\n\n' + consolidated_block,
             arm_x_name='no_consolidation', arm_x_reply=replies['no_consolidation']['text'],
             arm_y_name='evidence_constrained_consolidation',
             arm_y_reply=replies['evidence_constrained_consolidation']['text'],
