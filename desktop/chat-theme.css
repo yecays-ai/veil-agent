@@ -1,0 +1,302 @@
+/* ==========================================================================
+   VEIL 聊天基础外观样式 (chat-theme.css) — Tier 2
+   位于全局 Design System 之后、userData/chat-custom.css (#custom-style) 之前。
+   完整保留消息动作、语音/图片/表情包/虚拟卡片、「＋」菜单与独立伴侣小窗布局。
+   ========================================================================== */
+
+:root {
+  --custom-chat-font-size: 14px;
+  --custom-chat-line-height: 1.62;
+  --custom-bubble-padding: 10px 15px;
+  --custom-avatar-size: 36px;
+  --custom-avatar-radius: 50%;
+  --bubble-r: 18px;
+  --bubble-tail: 10px;
+}
+
+/* 全局 Peter 圆头像：零边框细纹、零阴影边线 */
+img.peter-avatar,
+.avatar-btn,
+.avatar-preview-frame,
+body .msg-avatar-trigger {
+  border-radius: var(--custom-avatar-radius, 50%) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+/* 对话空间背景与流畅留白 */
+#log.page[data-page-view="chat"] {
+  background: var(--custom-chat-bg, rgb(var(--veil-canvas-rgb) / var(--view-alpha, var(--window-alpha))));
+}
+
+/* 消息气泡：Apple iMessage 无缝 CSS mask 小尾巴 + yecays-ai/veil 连续分组圆角 + 仅首句左列圆头像 */
+#log .col {
+  padding: 18px 20px 28px;
+  gap: 8px;
+}
+
+body .msg-assistant-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin-left: 46px;
+  margin-top: 6px;
+  margin-bottom: -2px;
+  min-height: 18px;
+}
+body .msg-assistant-head .msg-avatar-trigger {
+  position: absolute;
+  left: -46px;
+  top: 2px;
+  width: var(--custom-avatar-size, 36px) !important;
+  height: var(--custom-avatar-size, 36px) !important;
+  min-width: 36px !important;
+  min-height: 36px !important;
+  flex: none;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 140ms var(--ease-spring);
+  z-index: 2;
+}
+body .msg-assistant-head .msg-avatar-trigger:hover { transform: scale(1.06); }
+body .msg-assistant-head .msg-avatar-trigger img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 50%;
+}
+body .msg-assistant-head .msg-assistant-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--veil-soft);
+  padding-left: var(--bubble-tail);
+}
+
+body .msg {
+  position: relative;
+  width: fit-content;
+  max-width: var(--custom-bubble-max-width, min(74%, 600px));
+  padding: var(--custom-bubble-padding, 10px 15px);
+  font-size: var(--custom-chat-font-size, 14px);
+  line-height: var(--custom-chat-line-height, 1.62);
+  border: 0 !important;
+  border-radius: 20px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.045);
+  transition: transform 120ms ease, filter 140ms ease;
+}
+body .msg.grouped {
+  margin-top: -5px !important;
+}
+
+body .msg.assistant {
+  margin-left: 46px;
+  background: var(--custom-assistant-bubble-bg, rgb(var(--bubble-rgb)));
+  color: var(--custom-assistant-bubble-text, var(--veil-ink));
+}
+body .msg.user {
+  margin-right: 6px;
+  background: var(--custom-user-bubble-bg, rgb(var(--user-rgb)));
+  color: var(--custom-user-bubble-text, var(--veil-ink));
+}
+
+/* 行云流水的 iOS 底部小尾巴（保留四圆角，零贴纸接缝、零镂空裁剪问题） */
+body .msg.assistant:not(.sticker-msg):not(.virtual-card-message):not(:has(+ .msg.assistant.grouped)) {
+  border-bottom-left-radius: 6px !important;
+}
+body .msg.assistant:not(.sticker-msg):not(.virtual-card-message):not(:has(+ .msg.assistant.grouped))::after {
+  content: "";
+  position: absolute;
+  left: -7.5px;
+  bottom: 0;
+  width: 8px;
+  height: 14px;
+  background: var(--custom-assistant-bubble-bg, rgb(var(--bubble-rgb)));
+  clip-path: path("M 8 0 C 8 6.5 5 11.5 0 13.5 C 4 14 6.5 12.5 8 10 Z");
+  pointer-events: none;
+}
+body .msg.user:not(.sticker-msg):not(.virtual-card-message):not(:has(+ .msg.user.grouped)) {
+  border-bottom-right-radius: 6px !important;
+}
+body .msg.user:not(.sticker-msg):not(.virtual-card-message):not(:has(+ .msg.user.grouped))::after {
+  content: "";
+  position: absolute;
+  right: -7.5px;
+  bottom: 0;
+  width: 8px;
+  height: 14px;
+  background: var(--custom-user-bubble-bg, rgb(var(--user-rgb)));
+  clip-path: path("M 0 0 C 0 6.5 3 11.5 8 13.5 C 4 14 1.5 12.5 0 10 Z");
+  pointer-events: none;
+}
+
+/* 连续气泡组内收紧圆角（yecays-ai/veil 同款） */
+body .msg.assistant:not(.grouped):has(+ .msg.assistant.grouped) {
+  border-bottom-left-radius: 6px !important;
+}
+body .msg.assistant.grouped:has(+ .msg.assistant.grouped) {
+  border-top-left-radius: 6px !important;
+  border-bottom-left-radius: 6px !important;
+}
+body .msg.assistant.grouped:not(:has(+ .msg.assistant.grouped)) {
+  border-top-left-radius: 6px !important;
+}
+body .msg.user:not(.grouped):has(+ .msg.user.grouped) {
+  border-bottom-right-radius: 6px !important;
+}
+body .msg.user.grouped:has(+ .msg.user.grouped) {
+  border-top-right-radius: 6px !important;
+  border-bottom-right-radius: 6px !important;
+}
+body .msg.user.grouped:not(:has(+ .msg.user.grouped)) {
+  border-top-right-radius: 6px !important;
+}
+
+/* 保持贴纸、虚拟卡片边界不被裁剪 */
+body .msg.virtual-card-message {
+  margin-left: 46px;
+}
+body .msg.sticker-msg {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 2px 0 !important;
+}
+
+/* 语音气泡播放三角形完美居中 */
+body .voice-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+body .voice-play {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  flex: none;
+  display: grid !important;
+  place-items: center !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: var(--veil-accent) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.10) !important;
+}
+body .voice-play svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+body .voice-transcript-toggle,
+body .voice-retry {
+  min-height: 0 !important;
+  padding: 2px 6px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* 保持贴纸胶囊与纯贴纸边界（兼容 #418 测试） */
+#log .msg.sticker-msg {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 2px 0 !important;
+}
+
+/* 轻量浮动底部单框输入栏（去掉多余内部框线） */
+body:not(.detached-window) #composer-footer {
+  background: var(--custom-composer-area-bg, rgb(var(--veil-canvas-rgb) / var(--window-alpha)));
+  border-top: 1px solid var(--veil-rule);
+}
+#composer {
+  background: var(--custom-composer-bg, var(--glass-card-strong)) !important;
+  border: var(--custom-composer-border, 1px solid var(--veil-rule-strong)) !important;
+  border-radius: var(--custom-composer-radius, 24px) !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04) !important;
+  padding: 5px 7px !important;
+}
+#composer .chat-input-shell {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 2px !important;
+}
+#composer #box {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+#composer #send {
+  background: var(--veil-accent) !important;
+  color: #fff !important;
+  border-radius: 999px !important;
+  border: 0 !important;
+}
+
+/* ==========================================================================
+   独立伴侣小窗模式 (Detached Companion Window)
+   紧凑标题栏带置顶切换、外观 CSS、头像入口与返回主工作区
+   ========================================================================== */
+
+.detached-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 50px;
+  padding: 0 12px;
+  background: var(--glass-card-strong, var(--veil-paper));
+  border-bottom: 1px solid var(--veil-rule);
+  backdrop-filter: blur(18px);
+  -webkit-app-region: drag;
+}
+.detached-header[hidden] { display: none !important; }
+.detached-person { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.detached-person img {
+  width: 28px; height: 28px;
+  border-radius: var(--custom-avatar-radius, 10px);
+  object-fit: cover;
+  cursor: pointer;
+}
+.detached-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  -webkit-app-region: no-drag;
+}
+.detached-actions button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--veil-rule);
+  border-radius: 8px;
+  background: var(--glass-card);
+  color: var(--veil-ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.detached-actions button:hover { border-color: var(--veil-accent); background: var(--veil-accent-soft); color: var(--veil-accent); }
+.detached-actions button[aria-pressed="true"] {
+  background: var(--veil-accent); color: #fff; border-color: transparent;
+}
+
+body.detached-window[data-current-page="chat"] #log .col {
+  padding: 12px 12px 20px;
+}
+body.detached-window[data-current-page="chat"] #log .msg {
+  max-width: 88%;
+}

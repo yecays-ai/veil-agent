@@ -922,11 +922,31 @@ def trace(root, role, request_id='', run_id='', call_id=''):
         chain['context'][-1]['trim_note'] = _redact(row.get('trim_note'))
     for row in recalls:
         if ids and _text(row.get('request_id')) in ids:
-            chain['recall'] = {key: row.get(key) for key in
-                               ('ombre', 'hidden', 'judge', 'dropped', 'injected',
-                                'budget_dropped', 'failure', 'query_chars',
-                                'retrieval', 'degraded')}
+            keep = ('ombre', 'hidden', 'judge', 'dropped', 'injected',
+                    'budget_dropped', 'failure', 'query_chars',
+                    'retrieval', 'degraded',
+                    'association', 'opening', 'relevant_recall',
+                    'natural_association', 'carried', 'relationship_base',
+                    'vector', 'budget', 'items', 'final_trim', 'reused',
+                    'retrieval_mode')
+            chain['recall'] = {key: row.get(key) for key in keep if key in row}
             break
+    # Also attach cost entries from costs.jsonl if present for these request_ids.
+    if ids:
+        costs = []
+        for crow in _rows(_role_dir(root, role).parent / 'costs.jsonl', 400):
+            # Chat settlements store the request id in 'id' (Budget.settle); reserve rows do too,
+            # so both fields map to the same request and never to a different category.
+            cid = _text(crow.get('request_id') or crow.get('id'))
+            if cid and cid in ids:
+                costs.append({
+                    'type': crow.get('type'),
+                    'category': crow.get('category'),
+                    'amount': crow.get('amount'),
+                    'model': crow.get('model'),
+                })
+        if costs:
+            chain['costs'] = costs
     for row in tools:
         if only_call:
             if _text(row.get('call_id')) != call_id:

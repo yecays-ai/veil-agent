@@ -94,6 +94,67 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertEqual(next(row for row in rows if row['memory_id'] == created['memory_id'])['body'],
                          'archived through brain')
 
+    def test_lan_can_archive_and_restore_a_memory_through_brain(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'archivable memory', 'title': 'Arch'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        ok, message = tools.panel_archive(memory_id)
+        self.assertTrue(ok, message)
+        self.assertIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
+        ok, message = tools.panel_unarchive(memory_id)
+        self.assertTrue(ok, message)
+        self.assertNotIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
+
+    def test_panel_edit_refuses_a_stale_hash_and_saves_with_the_current_one(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        entry = next(item for item in tools.panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body'},
+                                       expected_sha256='0' * 64)
+        self.assertFalse(ok)
+        self.assertIn('更新', message)
+        self.assertEqual('hash me', self.memory.content_for(memory_id))
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body'},
+                                       expected_sha256=entry['sha256'])
+        self.assertTrue(ok, message)
+        self.assertEqual('new body', self.memory.content_for(memory_id))
+
+    def test_atomic_edit_archives_the_raw_markdown_for_title_restore(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'old body', 'title': 'Old Title'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        entry = next(item for item in tools.panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body', 'title': 'New Title'},
+                                       expected_sha256=entry['sha256'])
+        self.assertTrue(ok, message)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            archived = connection.execute(
+                'SELECT old_content FROM versions WHERE memory_id=? ORDER BY seq DESC LIMIT 1',
+                (memory_id,)).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertIn('Old Title', archived)
+        self.assertIn('old body', archived)
+        pages = tools.panel_versions(memory_id)
+        self.assertEqual('Old Title', pages[0]['title'])
+
+    def test_panel_entries_expose_the_same_sha_as_the_edit_lock(self):
+        from brain_p4_api import memory_sha256
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
+        memory_id = text.split('→')[1]
+        hub = SimpleNamespace(chat=SimpleNamespace(cfg=self.memory.cfg, store=self.store,
+                                                    memory=self.memory))
+        entry = next(item for item in NativeMemoryTools(self.memory).panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        self.assertEqual(memory_sha256(hub, memory_id), entry['sha256'])
 
 if __name__ == '__main__':
     unittest.main()

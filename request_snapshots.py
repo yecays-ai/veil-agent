@@ -48,6 +48,7 @@ TITLES = {
     'memory.opening': '开场记忆',
     'memory.ongoing': '正在进行的事',
     'memory.short_notes': '短期便签',
+    'relationship_base': '关系底座',
     'work_checkpoint': '工作断点',
     'investigation_checkpoint': '调查断点',
     'background': '背景资料（本轮命中）',

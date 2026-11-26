@@ -1,0 +1,71 @@
+/* Compact Brain and historical audit surfaces; design tokens & theme variables apply. */
+.brain-workspace, .audit-inventory { display: grid; gap: 14px; min-width: 0; }
+.brain-toolbar, .audit-badges, .audit-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.brain-toolbar .menu_button, .audit-inventory button, .audit-toolbar input, .audit-toolbar select {
+  font: inherit; color: var(--veil-ink, var(--text)); background: var(--veil-paper, var(--panel));
+  border: 1px solid var(--veil-rule, var(--line)); border-radius: 10px; padding: 6px 11px; min-height: 32px;
+  cursor: pointer; transition: border-color .16s ease, background .16s ease;
+}
+.brain-toolbar .menu_button:hover, .audit-inventory button:hover {
+  border-color: var(--veil-accent); background: var(--veil-accent-soft);
+}
+.brain-body, .brain-recall-detail, .brain-recall-list { display: grid; gap: 12px; min-width: 0; align-content: start; }
+.brain-health { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.brain-health > .brain-metrics, .brain-health > .brain-toolbar { grid-column: 1 / -1; }
+.brain-recall { grid-template-columns: minmax(185px, 1fr) minmax(0, 2.4fr); align-items: start; }
+.brain-metrics, .brain-pairs { margin: 0; display: grid; gap: 10px; min-width: 0; }
+.brain-metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr)); }
+.brain-metrics > div, .workspace-detail-card {
+  border: 1px solid var(--veil-rule, var(--line)); border-radius: 14px;
+  background: var(--glass-card, var(--panel)); backdrop-filter: blur(16px);
+  padding: 14px; min-width: 0;
+}
+.workspace-detail-card h3 { font-size: 13.5px; margin: 0 0 8px; font-weight: 650; }
+.brain-pairs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr)); gap: 6px 12px; }
+.brain-pairs > div { border-top: 1px solid var(--veil-rule, var(--line)); padding: 6px 0; min-width: 0; }
+.brain-metrics dt, .brain-pairs dt { font-size: 11px; color: var(--veil-soft); }
+.brain-metrics dd, .brain-pairs dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.brain-metrics dd { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.brain-feed { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 195px), 1fr)); gap: 8px; }
+.brain-feed li { padding: 10px; border-radius: 10px; background: var(--surface-muted, var(--panel-2)); min-width: 0; overflow-wrap: anywhere; }
+.brain-feed time { display: block; color: var(--veil-soft); font-size: 11px; margin-top: 3px; }
+.brain-recall-list { gap: 4px; max-height: 460px; overflow: auto; }
+.brain-recall-list button {
+  width: 100%; text-align: left; padding: 8px 10px; border: 1px solid transparent;
+  border-radius: 10px; background: var(--surface-muted, var(--panel-2));
+  color: var(--veil-ink, var(--text)); overflow-wrap: anywhere; cursor: pointer;
+}
+.brain-recall-list button[aria-pressed="true"] { border-color: var(--veil-accent); background: var(--veil-accent-soft); }
+.brain-workspace details { margin-top: 6px; }
+.brain-workspace summary, .audit-table summary { cursor: pointer; }
+.brain-workspace pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-inline-error { color: var(--veil-danger, var(--danger)); margin: 4px 0; overflow-wrap: anywhere; }
+.workspace-inline-error dt { color: inherit; }
+.audit-badges > span { padding: 3px 9px; border-radius: 999px; background: var(--surface-muted, var(--panel-2)); font-size: 11px; }
+.audit-badges strong { font-variant-numeric: tabular-nums; margin-right: 4px; }
+.audit-toolbar { display: grid; grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(95px, 1fr)); gap: 8px; }
+.audit-toolbar label { display: grid; gap: 3px; font-size: 11px; color: var(--veil-soft); min-width: 0; }
+.audit-toolbar input, .audit-toolbar select { min-width: 0; }
+.audit-table-frame { overflow: auto; border: 1px solid var(--veil-rule, var(--line)); border-radius: 12px; background: var(--veil-paper, var(--panel)); min-width: 0; }
+.audit-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.audit-table th:first-child { width: 48%; }
+.audit-table th, .audit-table td { padding: 7px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--veil-rule, var(--line)); overflow-wrap: anywhere; }
+.audit-table th { font-size: 11px; background: var(--surface-muted, var(--panel-2)); color: var(--veil-soft); }
+.audit-table tr:last-child td { border-bottom: 0; }
+.audit-table td:not(:first-child) { color: var(--veil-soft); }
+.audit-table dl { display: grid; grid-template-columns: minmax(65px, 1fr) minmax(0, 2.5fr); gap: 3px 7px; margin: 7px 0 0; font-size: 11px; }
+.audit-table dt { color: var(--veil-soft); }
+.audit-table dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.audit-pagination { justify-content: space-between; }
+.audit-status { margin: 0; font-size: 11px; color: var(--veil-soft); }
+@media (max-width: 700px) {
+  .brain-health, .brain-recall { grid-template-columns: 1fr; }
+  .brain-recall-list { max-height: 230px; }
+  .audit-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audit-table th, .audit-table td { padding-inline: 5px; }
+}
+@media (max-width: 450px) {
+  .audit-table dl { grid-template-columns: 1fr; }
+  .audit-table dd { margin-bottom: 4px; }
+  .audit-table th:first-child { width: 40%; }
+}

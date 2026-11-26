@@ -815,6 +815,19 @@ model = "sonnet"
         models = [row['model'] for row in store.read('costs.jsonl') if row['type'] == 'reserve']
         self.assertEqual(models, ['fake-model', '[k]fake-sonnet'])
 
+    def test_limits_only_save_keeps_configuration_and_selection(self):
+        # Ticket 456 review: the budget workspace posts only limits; it must not wipe the rest.
+        cfg, model_id = self.add_relay()
+        cfg.models.use('peter', model_id)
+        before = cfg.models.public()
+        view = cfg.models.save({'limits': {'daily_cny': '11', 'monthly_cny': '26'}})
+        self.assertEqual(['relay'], [row['name'] for row in view['endpoints']])
+        self.assertIn(model_id, [row['id'] for row in view['models']])
+        self.assertEqual(model_id, view['use']['peter'])
+        self.assertEqual({'daily_cny': '11', 'monthly_cny': '26'}, view['limits'])
+        self.assertEqual([row['id'] for row in before['endpoints']], [row['id'] for row in view['endpoints']])
+        self.assertIn('sk-fake-relay-1234', (self.root / '.env').read_text(encoding='utf-8'))
+
     def test_limits_are_validated(self):
         cfg = load_character(self.root, 'test')
         with self.assertRaises(SettingsError):

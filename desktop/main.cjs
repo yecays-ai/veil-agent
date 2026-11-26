@@ -10,8 +10,13 @@ let pet, chat, menu, connecting = false, quitting = false, drag, petResize, agen
 const detachedWindows = new Map(), mergingViews = new Set();
 const screenPopWindows = new Map(), screenPopInFlight = new Set();
 let screenPopPollTimer = null, screenPopPolling = false, quitFlushStarted = false;
-const VIEW_NAMES = new Set(['chat', 'peter', 'activity', 'context', 'memory', 'life', 'mcp', 'more']);
-const settings = { size: 320, theme: 'light' };
+const VIEW_NAMES = new Set([
+  'chat', 'peter', 'activity', 'context', 'memory', 'life', 'mcp', 'more',
+  'brain-home', 'brain-health', 'brain-recall', 'brain-cognition', 'workspace-events',
+  'workspace-work', 'workspace-home', 'workspace-budget', 'workspace-access',
+  'workspace-inventory', 'diagnostics', 'instructions',
+]);
+const settings = { size: 320, theme: 'light', visualTheme: 'rose' };
 const petURL = pathToFileURL(path.join(__dirname, 'pet.html')).href;
 const chatURL = pathToFileURL(path.join(__dirname, 'chat.html')).href;
 const screenPopURL = pathToFileURL(path.join(__dirname, 'screen-pop.html')).href;
@@ -99,14 +104,15 @@ async function createDetachedWindow(view, point) {
   const existing = detachedWindows.get(view);
   if (existing && !existing.isDestroyed()) { existing.showInactive(); return true; }
   if (!agentEndpoint) return false;
-  const fallbackSize = view === 'chat' ? { width: 520, height: 680 } : view === 'life' ? { width: 980, height: 700 } : { width: 430, height: 680 };
+  const fallbackSize = view === 'chat' ? { width: 420, height: 680 } : view === 'life' ? { width: 980, height: 700 } : { width: 460, height: 680 };
   const fallback = { x: Number.isFinite(point?.x) ? Math.round(point.x - 170) : 80,
     y: Number.isFinite(point?.y) ? Math.round(point.y - 35) : 80, ...fallbackSize };
   const saved = settings.detachedBounds?.[view];
   const restored = restoredWindowBounds(saved, fallback, { width: 340, height: 420 });
+  const pinned = settings.detachedPinned?.[view] !== false;
   const current = new BrowserWindow({ ...restored.bounds, minWidth: view === 'life' ? 520 : 340, minHeight: 420, frame: false,
     transparent: true, backgroundColor: '#00000000', resizable: true, hasShadow: true,
-    alwaysOnTop: true, skipTaskbar: true, title: `Peter · ${view}`, show: false,
+    alwaysOnTop: pinned, skipTaskbar: true, title: `Peter · ${view}`, show: false,
     webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'), contextIsolation: true,
       nodeIntegration: false, sandbox: true } });
   detachedWindows.set(view, current); safeContents(current, url => url === viewURL(view));
@@ -462,7 +468,7 @@ function detachedViewFromEvent(event) {
 const fromChatPage = event => fromChat(event) || detachedViewFromEvent(event) !== null;
 // Memory page actions the renderer may post (ticket 363 added versions, archive, lock and seen).
 const MEMORY_POSTS = ['/api/memory/edit', '/api/memory/delete', '/api/memory/versions', '/api/memory/restore-version',
-  '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen',
+  '/api/memory/archive', '/api/memory/archived', '/api/memory/unarchive', '/api/memory/lock', '/api/memory/seen',
   '/api/memory/event/split', '/api/memory/event/move'];
 function allowedChatRequest(pathname, method) {
   if (method === 'GET') {
@@ -475,7 +481,25 @@ function allowedChatRequest(pathname, method) {
     if (url.pathname === '/api/memory/event') {
       return keys.length === 1 && keys[0] === 'id' && /^[A-Za-z0-9_-]{1,80}$/.test(url.searchParams.get('id') || '');
     }
-    if (url.pathname === '/api/memory/panel' || url.pathname === '/api/config/overview') return keys.length === 0;
+    if (url.pathname === '/api/memory/panel' || url.pathname === '/api/config/overview' || url.pathname === '/api/config/inventory' || url.pathname === '/api/budget/summary' || url.pathname === '/api/brain/overview' || url.pathname === '/api/peter-page/versions') return keys.length === 0;
+    if (url.pathname === '/api/memory/library') {
+      const allowedKeys = new Set(['q', 'status', 'kind', 'source', 'sort', 'limit', 'offset']);
+      return keys.every(key => allowedKeys.has(key)) &&
+        (url.searchParams.get('q') === null || (url.searchParams.get('q') || '').length <= 200) &&
+        (url.searchParams.get('limit') === null || /^\d{1,3}$/.test(url.searchParams.get('limit') || '')) &&
+        (url.searchParams.get('offset') === null || /^\d{1,6}$/.test(url.searchParams.get('offset') || ''));
+    }
+    if (url.pathname === '/api/brain/health') {
+      return keys.every(key => ['from', 'to'].includes(key)) &&
+        keys.every(key => {
+          const val = url.searchParams.get(key) || '';
+          return val === '' || /^\d{4}-\d{2}-\d{2}$/.test(val);
+        });
+    }
+    if (url.pathname === '/api/brain/health/export') {
+      return keys.every(key => key === 'format') &&
+        (url.searchParams.get('format') === null || ['markdown', 'json'].includes(url.searchParams.get('format')));
+    }
     if (url.pathname === '/api/instructions') return keys.length === 0;
     if (url.pathname === '/api/request-snapshots')
       return keys.length <= 1 && keys.every(key => key === 'limit') &&
@@ -524,6 +548,7 @@ function allowedChatRequest(pathname, method) {
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
+    '/api/brain/health/scan', '/api/brain/health/settings',
     '/api/voice-style', '/api/peter-page', '/api/pending-approvals', '/api/instructions'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
@@ -532,11 +557,13 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'activity' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/pending-approvals')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/pending-approvals'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
-    (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/'))) ||
+    (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/') || pathname === '/api/brain/overview')) ||
       (body && MEMORY_POSTS.includes(pathname)))) ||
     (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
-    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || ['/api/config/overview', '/api/workbench', '/api/windows-apps'].includes(pathname))) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname)))) ||
-    (detachedView === 'peter' && pathname === '/api/peter-page');
+    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || ['/api/config/overview', '/api/config/inventory', '/api/budget/summary', '/api/workbench', '/api/windows-apps'].includes(pathname))) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname)))) ||
+    (detachedView === 'peter' && (pathname === '/api/peter-page' || pathname === '/api/peter-page/versions' || (!body && pathname?.startsWith('/api/events?')))) ||
+    (['brain-home', 'brain-health', 'brain-recall', 'brain-cognition', 'workspace-events'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/brain/') || pathname?.startsWith('/api/memory/') || pathname?.startsWith('/api/diagnostics/') || pathname?.startsWith('/api/request-snapshot') || pathname?.startsWith('/api/peter-page'))) || (body && (MEMORY_POSTS.includes(pathname) || pathname === '/api/peter-page' || pathname?.startsWith('/api/brain/health/'))))) ||
+    (['workspace-home', 'workspace-budget', 'workspace-access', 'workspace-inventory', 'workspace-work', 'diagnostics', 'instructions'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/config/') || pathname === '/api/budget/summary' || pathname === '/api/workbench' || pathname === '/api/windows-apps' || pathname === '/api/mcp' || pathname === '/api/pending-approvals' || pathname?.startsWith('/api/diagnostics/') || pathname === '/api/instructions' || pathname?.startsWith('/api/request-snapshot'))) || (body && ['/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps', '/api/mcp', '/api/pending-approvals', '/api/instructions'].includes(pathname))));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };
   if (body && (typeof body !== 'object' || Array.isArray(body)))
@@ -679,13 +706,153 @@ ipcMain.handle('chat:clear-background', async event => {
   }
   settings.backgroundExt = null; await save(); return true;
 });
-ipcMain.handle('chat:pet-size', event => fromChatPage(event) && pet && !pet.isDestroyed() ? pet.getBounds().width : settings.size);
-ipcMain.handle('chat:save-theme', (event, theme) => {
-  if (!fromChatPage(event) || !['light', 'dark'].includes(theme)) return false;
-  settings.theme = theme; saveSoon();
-  if (menu && !menu.isDestroyed() && !menu.webContents.isLoading()) menu.webContents.send('menu:theme', theme);
+function broadcastChannel(channel, payload) {
+  for (const win of [chat, ...detachedWindows.values()]) {
+    if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+      win.webContents.send(channel, payload);
+    }
+  }
+}
+
+const DEFAULT_CUSTOM_CSS = `/* ==========================================================================
+   VEIL 聊天界面用户自定义外观覆盖文件 (userData/chat-custom.css)
+   软件更新与升级时绝不会被覆盖。
+   出于安全策略，禁止加载外部资源或执行脚本。
+   ========================================================================== */
+
+:root {
+  /* 聊天区域背景色与气泡样式覆盖 */
+  /* --custom-chat-bg: transparent; */
+  /* --custom-assistant-bubble-bg: var(--glass-card-strong); */
+  /* --custom-assistant-bubble-text: var(--ink); */
+  /* --custom-user-bubble-bg: var(--accent-soft); */
+  /* --custom-user-bubble-text: var(--ink); */
+  /* --custom-chat-font-size: 14px; */
+  /* --custom-chat-line-height: 1.62; */
+  /* --custom-avatar-size: 34px; */
+  /* --custom-avatar-radius: 12px; */
+}
+`;
+
+function validateCustomCssText(value) {
+  const css = String(value ?? '');
+  if (css.length > 20000 || /@import\b|url\s*\(|expression\s*\(|-moz-binding|behavior\s*:/i.test(css)) {
+    throw new Error('CSS 不能加载外部资源或脚本');
+  }
+  return css;
+}
+
+const customCssPath = () => path.join(app.getPath('userData'), 'chat-custom.css');
+async function ensureCustomCssFile() {
+  await fs.mkdir(app.getPath('userData'), { recursive: true });
+  const target = customCssPath();
+  try {
+    await fs.access(target);
+  } catch {
+    await fs.writeFile(target, DEFAULT_CUSTOM_CSS, 'utf8');
+  }
+  return target;
+}
+
+const avatarMime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
+function avatarFile() {
+  const ext = typeof settings.avatarExt === 'string' ? settings.avatarExt.toLowerCase() : '';
+  return avatarMime[ext] ? { ext, mime: avatarMime[ext], path: path.join(app.getPath('userData'), `avatar${ext}`) } : null;
+}
+
+ipcMain.handle('chat:get-avatar', async event => {
+  if (!fromChatPage(event)) return null;
+  const stored = avatarFile();
+  if (!stored) return null;
+  try {
+    const buf = await fs.readFile(stored.path);
+    return `data:${stored.mime};base64,${buf.toString('base64')}`;
+  } catch { return null; }
+});
+ipcMain.handle('chat:save-avatar', async (event, dataUrl) => {
+  if (!fromChatPage(event) || typeof dataUrl !== 'string') throw new Error('请求未允许。');
+  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) throw new Error('仅支持 PNG/JPG/WebP/GIF 头像图片。');
+  const mime = match[1];
+  const buf = Buffer.from(match[2], 'base64');
+  if (!buf.length || buf.length > 8 * 1024 * 1024) throw new Error('头像超过 8MB');
+  const ext = mime === 'image/jpeg' ? '.jpg' : `.${mime.split('/')[1]}`;
+  await fs.mkdir(app.getPath('userData'), { recursive: true });
+  // Write and switch the reference before deleting the old format: a failed write must not
+  // leave settings.avatarExt pointing at a file that no longer exists.
+  const target = path.join(app.getPath('userData'), `avatar${ext}`);
+  const staging = `${target}.tmp`;
+  await fs.writeFile(staging, buf);
+  await fs.rename(staging, target);
+  settings.avatarExt = ext;
+  await save();
+  for (const oldExt of Object.keys(avatarMime)) {
+    if (oldExt !== ext) await fs.rm(path.join(app.getPath('userData'), `avatar${oldExt}`), { force: true });
+  }
+  const savedUrl = `data:${mime};base64,${buf.toString('base64')}`;
+  broadcastChannel('avatar:changed', savedUrl);
+  return savedUrl;
+});
+ipcMain.handle('chat:clear-avatar', async event => {
+  if (!fromChatPage(event)) return false;
+  for (const ext of Object.keys(avatarMime)) {
+    await fs.rm(path.join(app.getPath('userData'), `avatar${ext}`), { force: true });
+  }
+  settings.avatarExt = null;
+  await save();
+  broadcastChannel('avatar:changed', null);
   return true;
 });
+
+ipcMain.handle('chat:get-custom-css', async event => {
+  if (!fromChatPage(event)) return null;
+  const target = await ensureCustomCssFile();
+  const raw = await fs.readFile(target, 'utf8').catch(() => DEFAULT_CUSTOM_CSS);
+  try {
+    return { text: validateCustomCssText(raw), path: target };
+  } catch {
+    return { text: '', path: target, blocked: true };
+  }
+});
+ipcMain.handle('chat:save-custom-css', async (event, cssText) => {
+  if (!fromChatPage(event)) throw new Error('请求未允许。');
+  const validated = validateCustomCssText(cssText);
+  const target = await ensureCustomCssFile();
+  await fs.writeFile(target, validated, 'utf8');
+  broadcastChannel('custom-css:changed', validated);
+  return { text: validated, path: target };
+});
+ipcMain.handle('chat:reset-custom-css', async event => {
+  if (!fromChatPage(event)) return null;
+  const target = await ensureCustomCssFile();
+  await fs.writeFile(target, DEFAULT_CUSTOM_CSS, 'utf8');
+  broadcastChannel('custom-css:changed', DEFAULT_CUSTOM_CSS);
+  return { text: DEFAULT_CUSTOM_CSS, path: target };
+});
+ipcMain.handle('chat:open-custom-css', async event => {
+  if (!fromChatPage(event)) return false;
+  const target = await ensureCustomCssFile();
+  const err = await shell.openPath(target);
+  if (err) throw new Error(err);
+  return target;
+});
+
+ipcMain.handle('chat:pet-size', event => fromChatPage(event) && pet && !pet.isDestroyed() ? pet.getBounds().width : settings.size);
+ipcMain.handle('chat:save-theme', (event, theme) => {
+  if (!fromChatPage(event) || !['light', 'dark', 'rose', 'gold', 'blue', 'night'].includes(theme)) return false;
+  if (['rose', 'gold', 'blue', 'night'].includes(theme)) {
+    settings.visualTheme = theme;
+    settings.theme = theme === 'night' ? 'dark' : 'light';
+  } else {
+    settings.theme = theme;
+    settings.visualTheme = theme === 'dark' ? 'night' : (settings.visualTheme === 'night' ? 'rose' : (settings.visualTheme || 'rose'));
+  }
+  saveSoon();
+  if (menu && !menu.isDestroyed() && !menu.webContents.isLoading()) menu.webContents.send('menu:theme', settings.theme);
+  broadcastChannel('theme:changed', { theme: settings.theme, visualTheme: settings.visualTheme });
+  return true;
+});
+ipcMain.handle('chat:get-visual-theme', event => fromChatPage(event) ? { theme: settings.theme || 'light', visualTheme: settings.visualTheme || 'rose' } : null);
 ipcMain.handle('chat:set-pet-size', (event, value) => {
   if (!(fromChat(event) || detachedViewFromEvent(event) === 'more') || !Number.isFinite(value)) return false;
   createPet(Math.max(160, Math.min(720, Math.round(value))));
@@ -721,14 +888,29 @@ ipcMain.handle('chat:open-maintenance', async (event, id) => {
   return true;
 });
 ipcMain.handle('view:detach', async (event, view, point) => {
-  if (!fromChat(event) || !VIEW_NAMES.has(view) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+  if (!fromChatPage(event) || !VIEW_NAMES.has(view) || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
   return createDetachedWindow(view, point);
 });
 ipcMain.handle('view:merge', (event, view) => detachedViewFromEvent(event) === view ? mergeDetachedWindow(view) : false);
 ipcMain.handle('view:focus', (event, view) => {
   const win = detachedWindows.get(view);
-  if (!fromChat(event) || !VIEW_NAMES.has(view) || !win || win.isDestroyed()) return false;
+  if (!fromChatPage(event) || !VIEW_NAMES.has(view) || !win || win.isDestroyed()) return false;
   win.show(); win.focus(); return true;
+});
+ipcMain.handle('view:get-pinned', (event, view) => {
+  if (!fromChatPage(event) || !VIEW_NAMES.has(view)) return true;
+  return settings.detachedPinned?.[view] !== false;
+});
+ipcMain.handle('view:set-pinned', (event, view, pinned) => {
+  const win = detachedWindows.get(view);
+  if (!fromChatPage(event) || !VIEW_NAMES.has(view) || !win || win.isDestroyed()) return false;
+  const val = Boolean(pinned);
+  settings.detachedPinned ||= {};
+  settings.detachedPinned[view] = val;
+  win.setAlwaysOnTop(val);
+  saveSoon();
+  win.webContents.send('view:pinned-state', val);
+  return val;
 });
 // Ticket 385: a notice about a calendar record opens it in whichever window shows the life page.
 ipcMain.handle('life:open-record', (event, id) => {

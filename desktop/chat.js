@@ -45,7 +45,7 @@ function notify(text,kind='notice'){
   setTimeout(()=>node.remove(),Math.min(15000,Math.max(2000,text.length*80)));
 }
 function setPage(name){
-  if(!['chat','activity','context','instructions','memory','mcp','more','life','peter','diagnostics'].includes(name))return;
+  if(!['chat','activity','context','instructions','memory','mcp','more','life','peter','diagnostics'].includes(name)&&!window.veilWorkspace?.isCustom(name))return;
   if(detachedView&&name!==detachedView)return;
   document.body.dataset.currentPage=name;
   document.querySelectorAll('[data-page]').forEach(button=>{
@@ -53,6 +53,7 @@ function setPage(name){
     if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');
   });
   document.querySelectorAll('[data-page-view]').forEach(page=>{page.hidden=page.dataset.pageView!==name});
+  window.veilWorkspace?.onPage?.(name);
 }
 function saveSpeechDraft(value){try{sessionStorage.setItem(speechDraftKey,value)}catch(e){}}
 function resizeBox(){box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px'}
@@ -469,6 +470,20 @@ function add(kind,text,id,time,media,messageId,requestId,favorite=false,attachme
       const b=document.createElement('button');b.type='button';b.dataset.answer=ans;b.innerHTML=window.veilIcon(iconName,14)+' '+label;b.className=cls;d.appendChild(b);
     }
   } else {d.className=kind==='error'?'error':'notice';d.textContent=text}
+  if(kind==='assistant'&&!d.previousElementSibling){
+    const grouped=previousMessage?.kind==='assistant'&&d.classList.contains('grouped');
+    if(!grouped){
+      const head=document.createElement('div');head.className='msg-assistant-head';
+      const avatarBtn=document.createElement('button');avatarBtn.type='button';avatarBtn.className='msg-avatar-trigger';avatarBtn.title='点击自定义 Peter 头像';
+      const avatarImg=document.createElement('img');avatarImg.className='peter-avatar';
+      avatarImg.src=document.querySelector('img.peter-avatar')?.getAttribute('src')||'assets/pep.png';
+      avatarImg.alt='Peter';
+      avatarBtn.appendChild(avatarImg);
+      const nameTag=document.createElement('span');nameTag.className='msg-assistant-name';nameTag.textContent=characterName();
+      head.append(avatarBtn,nameTag);
+      if(typing)col.insertBefore(head,typing);else col.appendChild(head);
+    }
+  }
   if(typing)col.insertBefore(d,typing);else col.appendChild(d);
   if(kind==='error')recentErrors.set(text,{at:Date.now(),count:1,node:d});
   return d;
@@ -1025,7 +1040,9 @@ function readMemory(item){
   reset.onclick=()=>{for(const [key,input] of Object.entries(inputs))input.value=original[key];status.textContent='';sync()};
   save.onclick=async()=>{
     save.disabled=true;status.textContent='正在保存…';
-    try{const r=await api('/api/memory/edit',{id:item.memory_id,changes:changes()});const data=await r.json();
+    // Ticket 456 review: send the hash captured when the editor opened so a background update
+    // turns into a 409 instead of being silently overwritten by this older draft.
+    try{const r=await api('/api/memory/edit',{id:item.memory_id,changes:changes(),expected_sha256:item.sha256||''});const data=await r.json();
       if(!r.ok)throw new Error(data.error||'没能保存。');
       await loadMemoryCatalog(false);const after=$('memory-detail').querySelector('.memory-status');if(after)after.textContent=data.message||'已保存。';
     }catch(error){status.textContent=error.message||'没能保存。';sync()}
@@ -2503,8 +2520,32 @@ function applyCustomCSS(value){
   $('custom-style').textContent=css;
 }
 try{$('custom-css').value=localStorage.getItem(`${APPEARANCE_KEY}-css`)||'';applyCustomCSS($('custom-css').value)}catch{$('custom-css').value=''}
-$('apply-css').onclick=()=>{try{applyCustomCSS($('custom-css').value);localStorage.setItem(`${APPEARANCE_KEY}-css`,$('custom-css').value);notify('CSS 已保存')}catch(error){notify(error.message,'error')}};
-$('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOpacity:{...appearanceDefaults.pageOpacity}};applyAppearance();storeAppearance();window.veilDesktop.setPetSize(appearance.petSize);$('custom-css').value='';$('custom-style').textContent='';localStorage.removeItem(`${APPEARANCE_KEY}-css`);await window.veilDesktop.clearBackground();setBackground(null,'');notify('已恢复默认')};
+window.veilDesktop?.getCustomCss?.().then(css=>{
+  if(typeof css==='string'){
+    const value=css||$('custom-css').value||'';
+    try{applyCustomCSS(value);$('custom-css').value=value}catch{}
+  }
+}).catch(()=>{});
+window.veilDesktop?.onCustomCssChanged?.(css=>{
+  if(typeof css!=='string')return;
+  try{applyCustomCSS(css);if($('custom-css'))$('custom-css').value=css}catch{}
+});
+$('apply-css').onclick=async()=>{
+  try{
+    applyCustomCSS($('custom-css').value);
+    localStorage.setItem(`${APPEARANCE_KEY}-css`,$('custom-css').value);
+    if(window.veilDesktop?.saveCustomCss)await window.veilDesktop.saveCustomCss($('custom-css').value);
+    notify('CSS 已保存');
+  }catch(error){notify(error.message,'error')}
+};
+$('open-custom-css-file')?.addEventListener('click',()=>{window.veilDesktop?.openCustomCss?.().catch(()=>notify('打开 CSS 文件失败','error'))});
+$('reload-custom-css')?.addEventListener('click',async()=>{
+  try{
+    const css=await window.veilDesktop?.getCustomCss?.();
+    if(typeof css==='string'){applyCustomCSS(css);$('custom-css').value=css;notify('已从文件重载 CSS')}
+  }catch(error){notify(error.message,'error')}
+});
+$('reset-appearance').onclick=async()=>{appearance={...appearanceDefaults,pageOpacity:{...appearanceDefaults.pageOpacity}};applyAppearance();storeAppearance();window.veilDesktop.setPetSize(appearance.petSize);$('custom-css').value='';$('custom-style').textContent='';localStorage.removeItem(`${APPEARANCE_KEY}-css`);await window.veilDesktop?.resetCustomCss?.().catch(()=>{});await window.veilDesktop.clearBackground();setBackground(null,'');notify('已恢复默认')};
 $('memory-search').addEventListener('input',()=>{memoryShown=50;renderMemoryList()});
 document.querySelectorAll('[data-memory-group]').forEach(button=>button.onclick=()=>{
   memoryGroup=button.dataset.memoryGroup;memoryShown=50;
@@ -2520,7 +2561,10 @@ document.querySelectorAll('[data-page]').forEach(button=>button.onclick=async()=
     if(choice==='cancel')return;
   }
   setPage(button.dataset.page);
-  if(button.dataset.page==='memory'&&memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
+  if(button.dataset.page==='memory'){
+    if(memoryAvailable&&!memoryLoaded&&!memoryLoading)loadMemoryCatalog(true);
+    window.veilBrain?.mountMemoryLibraryAddon?.(workspaceRequest);
+  }
   if(button.dataset.page==='mcp')loadMCP();
   if(button.dataset.page==='life')loadLife();
   if(button.dataset.page==='peter'&&window.peterLoadPage)window.peterLoadPage();
@@ -2560,7 +2604,7 @@ railToggle.onclick=()=>{
   try{localStorage.setItem('veil-rail-visible',visible?'1':'0')}catch{}
 };
 function syncDesktopRail(){
-  const syncText=(id,value)=>{if($(id).textContent!==value)$(id).textContent=value};
+  const syncText=(id,value)=>{const el=$(id);if(el&&el.textContent!==value)el.textContent=value};
   syncText('sidebar-next-wake',$('header-next-wake').textContent);
   syncText('rail-next-wake',$('header-next-wake').textContent);
   syncText('rail-activity-status',$('activity-work-status').textContent);
@@ -2726,28 +2770,51 @@ function renderMCP(){
   $('mcp-add').disabled=!mcpReady;$('mcp-enabled').disabled=!mcpReady;
   $('mcp-enabled').checked=mcpView.enabled;
   $('mcp-status').textContent=mcpActionError||mcpView.error||`${mcpView.services.length} 个服务`;
-  const list=$('mcp-list');list.replaceChildren();
+  const list=$('mcp-list');
+  const openIds=new Set([...list.querySelectorAll('details[open]')].map(node=>node.dataset.service));
+  const focusKey=list.contains(document.activeElement)?document.activeElement.dataset.mcpFocus:null;
+  let restoreFocus;
+  list.replaceChildren();
   if(!mcpView.services.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有 MCP 服务';list.append(p)}
   for(const service of mcpView.services){
     const card=document.createElement('article');card.className='surface mcp-card';
-    const heading=document.createElement('div');heading.className='section-heading';
+    const heading=document.createElement('div');heading.className='mcp-service-row';
     const title=document.createElement('h3');title.textContent=service.id;
-    const status=document.createElement('span');status.className='state-pill';status.textContent=service.builtin?(service.status==='connected'?'已启用':'已停用'):service.status==='connected'?'已连接':service.status==='connecting'?'连接中':service.status==='error'?'连接失败':'已停用';
-    heading.append(title,status);card.append(heading);
-    const details=document.createElement('p');details.textContent=service.managed==='nowhere'?`${service.tools.length} 个工具 · Peter 的独立旅程存档 · ${service.direct_grant?'已授权直接调用':'直接调用授权已撤销，重新启用需确认'} · 旋复 / 乌有乡 · CC BY-NC 4.0（含 VEIL 兼容修正）`:service.builtin?`${service.tools.length} 个工具 · VEIL 内置集成`:`${service.tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;card.append(details);
-    if(service.managed==='nowhere'){
-      const project=document.createElement('p');project.className='mcp-tools';project.textContent='项目与许可：https://github.com/yuyixuanfu/nowhere · https://creativecommons.org/licenses/by-nc/4.0/';card.append(project);
-    }
+    const status=document.createElement('span');status.className='state-pill';status.dataset.status=service.status;
+    status.textContent=service.status==='error'?'连接失败':service.status==='connecting'?'连接中':service.status==='connected'?(service.builtin?'已启用':'已连接'):service.enabled&&!mcpView.enabled?'总开关关闭':'已停用';
+    const travel=service.managed==='nowhere';
+    const tools=Array.isArray(service.tools)?service.tools:[];
+    const switchLabel=document.createElement('label');switchLabel.className='mcp-switch';
+    const toggle=document.createElement('input');toggle.type='checkbox';toggle.setAttribute('role','switch');toggle.checked=service.enabled;
+    toggle.setAttribute('aria-label',travel?`${service.id}（启用需直接调用授权，停用即撤销）`:`${service.id} 服务`);
+    toggle.dataset.mcpFocus=`switch:${service.id}`;
+    if(focusKey===toggle.dataset.mcpFocus)restoreFocus=toggle;
+    const track=document.createElement('span');track.className='mcp-switch-track';track.setAttribute('aria-hidden','true');
+    switchLabel.append(toggle,track);heading.append(title,status,switchLabel);card.append(heading);
+    toggle.onchange=async()=>{
+      const enabled=toggle.checked;
+      if(travel&&enabled&&!confirm('让 Peter 直接调用乌有乡工具，改他自己的地点和旅程。继续？')){toggle.checked=service.enabled;return}
+      toggle.disabled=true;
+      try{
+        if(!await saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled,...(travel?{direct_grant:enabled}:{})}:item)})))toggle.checked=service.enabled;
+      }finally{toggle.disabled=false}
+    };
     if(service.error){const error=document.createElement('p');error.className='mcp-error';error.textContent=service.error;card.append(error)}
-    if(service.tools.length){const tools=document.createElement('p');tools.className='mcp-tools';tools.textContent=service.tools.join('、');card.append(tools)}
+    const details=document.createElement('details');details.className='mcp-service-details';details.dataset.service=service.id;details.open=openIds.has(service.id);
+    const summary=document.createElement('summary');summary.textContent='详情';summary.dataset.mcpFocus=`details:${service.id}`;
+    if(focusKey===summary.dataset.mcpFocus)restoreFocus=summary;
+    const info=document.createElement('p');info.textContent=travel?`${tools.length} 个工具 · ${service.direct_grant?'已授权直接调用（停用即撤销）':'直接调用授权已撤销'}`:service.builtin?`${tools.length} 个工具 · VEIL 内置集成`:`${tools.length} 个工具 · ${service.permission==='ask'?'每次询问':'直接调用'}`;
+    details.append(summary,info);
+    if(travel){const project=document.createElement('p');project.className='mcp-tools';project.textContent='旋复 / 乌有乡 · CC BY-NC 4.0（含 VEIL 兼容修正） · https://github.com/yuyixuanfu/nowhere · https://creativecommons.org/licenses/by-nc/4.0/';details.append(project)}
+    if(tools.length){const toolList=document.createElement('p');toolList.className='mcp-tools';toolList.textContent=tools.join('、');details.append(toolList)}
     const actions=document.createElement('div');actions.className='tool-row';
-    if(service.managed==='nowhere'&&service.observer_url){const observe=document.createElement('button');observe.type='button';observe.textContent='查看旅程地图';observe.onclick=()=>window.veilDesktop.openNowhere(service.observer_url);actions.append(observe)}
-    const toggle=document.createElement('button');toggle.type='button';toggle.textContent=service.enabled?(service.managed==='nowhere'?'停用并撤销授权':'停用'):'启用';toggle.onclick=()=>{const grantTravel=service.managed==='nowhere'&&!service.enabled;if(grantTravel&&!confirm('让 Peter 直接调用乌有乡工具，改他自己的地点和旅程。继续？'))return;saveMCP(current=>({...current,services:current.services.map(item=>item.id===service.id?{...item,enabled:!service.enabled,direct_grant:service.managed==='nowhere'?(service.enabled?false:grantTravel):item.direct_grant}:item)}))};
-    actions.append(toggle);
+    if(travel&&service.observer_url){const observe=document.createElement('button');observe.type='button';observe.textContent='查看旅程地图';observe.onclick=()=>window.veilDesktop.openNowhere(service.observer_url);actions.append(observe)}
     if(!service.builtin&&!service.managed){const edit=document.createElement('button');edit.type='button';edit.textContent='编辑';edit.onclick=()=>openMCPForm(service);
       const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>{if(confirm(`移除 MCP 服务 ${service.id}？`))saveMCP(current=>({...current,services:current.services.filter(item=>item.id!==service.id)}))};actions.append(edit,remove)}
-    card.append(actions);list.append(card);
+    if(actions.childElementCount)details.append(actions);
+    card.append(details);list.append(card);
   }
+  restoreFocus?.focus({preventScroll:true});
   if(mcpView.services.some(service=>service.status==='connecting'))setTimeout(()=>{if(document.body.dataset.currentPage==='mcp')loadMCP()},700);
 }
 function openMCPForm(service=null){
@@ -3074,24 +3141,142 @@ enhanceVeilSelects();new MutationObserver(records=>records.forEach(record=>recor
 document.addEventListener('click',event=>{if(!veilSelectCurrent)return;const state=veilSelectState.get(veilSelectCurrent);if(!state.menu.contains(event.target)&&!state.trigger.contains(event.target))closeVeilSelect()});
 window.addEventListener('resize',()=>closeVeilSelect());window.addEventListener('scroll',()=>closeVeilSelect(),true);
 
-(()=>{ // custom avatar: stored on this PC, shared by every VEIL window
-  const KEY='veil-avatar',apply=url=>document.querySelectorAll('img.peter-avatar').forEach(img=>{img.src=url||'assets/pep.png'});
-  try{const saved=localStorage.getItem(KEY);if(saved)apply(saved)}catch{}
-  const input=document.getElementById('avatar-file'),button=document.getElementById('avatar-change');
-  if(!input||!button)return;
-  button.onclick=()=>input.click();
-  input.onchange=()=>{
-    const file=input.files&&input.files[0];input.value='';if(!file)return;
-    if(file.size>8*1024*1024){notify('头像超过 8MB');return}
-    const image=new Image(),url=URL.createObjectURL(file);
-    image.onload=()=>{
-      if(image.width*image.height>40e6){URL.revokeObjectURL(url);notify('头像像素太多，换小一点的');return}
-      const size=256,side=Math.min(image.width,image.height),canvas=document.createElement('canvas');canvas.width=canvas.height=size;
-      canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);
-      URL.revokeObjectURL(url);const data=canvas.toDataURL('image/png');
-      try{localStorage.setItem(KEY,data)}catch{}apply(data);
+(()=>{ // P4/P5 custom avatar persistence, 3-tier CSS quick editor, detached pin & workspace boot
+  const KEY='veil-avatar';
+  const applyAvatar=url=>document.querySelectorAll('img.peter-avatar').forEach(img=>{img.src=url||'assets/pep.png'});
+  let currentAvatarUrl='';
+
+  async function initAvatar(){
+    let saved='';
+    try{saved=(await window.veilDesktop?.getAvatar?.())||''}catch{}
+    if(!saved){
+      try{
+        const legacy=localStorage.getItem(KEY)||'';
+        if(legacy){saved=legacy;await window.veilDesktop?.saveAvatar?.(legacy).catch(()=>{})}
+      }catch{}
+    }
+    currentAvatarUrl=saved;
+    applyAvatar(saved);
+  }
+  initAvatar();
+  window.veilDesktop?.onAvatarChanged?.(url=>{currentAvatarUrl=url||'';applyAvatar(currentAvatarUrl)});
+
+  function openModal(title,buildFn){
+    const backdrop=$('veil-modal-backdrop'),titleNode=$('veil-modal-title'),body=$('veil-modal-body');
+    if(!backdrop||!body)return;
+    titleNode.textContent=title;
+    body.replaceChildren();
+    buildFn(body,()=>backdrop.hidden=true);
+    backdrop.hidden=false;
+  }
+  $('veil-modal-close')?.addEventListener('click',()=>{$('veil-modal-backdrop').hidden=true});
+  $('veil-modal-backdrop')?.addEventListener('click',e=>{if(e.target===$('veil-modal-backdrop'))$('veil-modal-backdrop').hidden=true});
+
+  const input=document.getElementById('avatar-file');
+  function pickAvatarFile(){input?.click()}
+  function openAvatarModal(){
+    openModal('自定义 Peter 头像',(body,close)=>{
+      const frame=document.createElement('div');frame.className='avatar-preview-frame';
+      const img=document.createElement('img');img.src=currentAvatarUrl||'assets/pep.png';img.alt='Peter 头像预览';
+      frame.appendChild(img);
+      const hint=document.createElement('p');hint.textContent='支持 PNG/JPG/WebP（不超过 8MB），自动居中裁剪并同步到所有独立窗口。';
+      const actions=document.createElement('div');actions.className='workspace-links';
+      const uploadBtn=document.createElement('button');uploadBtn.type='button';uploadBtn.className='veil-btn primary';uploadBtn.textContent='选择本地图片上传';
+      uploadBtn.onclick=()=>{pickAvatarFile();close()};
+      const resetBtn=document.createElement('button');resetBtn.type='button';resetBtn.className='veil-btn';resetBtn.textContent='恢复默认头像';
+      resetBtn.onclick=async()=>{
+        currentAvatarUrl='';
+        try{localStorage.removeItem(KEY)}catch{}
+        await window.veilDesktop?.clearAvatar?.().catch(()=>{});
+        applyAvatar('');img.src='assets/pep.png';notify('已恢复默认头像');
+      };
+      actions.append(uploadBtn,resetBtn);
+      body.append(frame,hint,actions);
+    });
+  }
+  window.veilOpenAvatarModal=openAvatarModal;
+
+  function openCssQuickModal(){
+    openModal('聊天自定义 CSS（实时同步）',(body,close)=>{
+      const area=document.createElement('textarea');area.rows=10;area.style.width='100%';area.spellcheck=false;
+      area.value=$('custom-css')?.value||'';
+      const bar=document.createElement('div');bar.className='workspace-links';
+      const saveBtn=document.createElement('button');saveBtn.type='button';saveBtn.className='veil-btn primary';saveBtn.textContent='保存并应用';
+      saveBtn.onclick=async()=>{
+        try{
+          applyCustomCSS(area.value);
+          if($('custom-css'))$('custom-css').value=area.value;
+          localStorage.setItem(`${APPEARANCE_KEY}-css`,area.value);
+          await window.veilDesktop?.saveCustomCss?.(area.value);
+          notify('CSS 已保存并同步');close();
+        }catch(err){notify(err.message,'error')}
+      };
+      const fileBtn=document.createElement('button');fileBtn.type='button';fileBtn.className='veil-btn';fileBtn.textContent='打开 CSS 文件';
+      fileBtn.onclick=()=>window.veilDesktop?.openCustomCss?.().catch(()=>{});
+      bar.append(saveBtn,fileBtn);
+      body.append(area,bar);
+    });
+  }
+
+  document.getElementById('avatar-change')?.addEventListener('click',openAvatarModal);
+  document.getElementById('detached-avatar-trigger')?.addEventListener('click',openAvatarModal);
+  document.getElementById('detached-avatar')?.addEventListener('click',openAvatarModal);
+  document.getElementById('open-avatar-modal')?.addEventListener('click',openAvatarModal);
+  document.getElementById('detached-css')?.addEventListener('click',openCssQuickModal);
+  col.addEventListener('click',e=>{if(e.target.closest('.msg-avatar-trigger'))openAvatarModal()});
+
+  if(input){
+    input.onchange=()=>{
+      const file=input.files&&input.files[0];input.value='';if(!file)return;
+      if(file.size>8*1024*1024){notify('头像超过 8MB');return}
+      const image=new Image(),url=URL.createObjectURL(file);
+      image.onload=async()=>{
+        if(image.width*image.height>40e6){URL.revokeObjectURL(url);notify('头像像素太多，换小一点的');return}
+        const size=256,side=Math.min(image.width,image.height),canvas=document.createElement('canvas');canvas.width=canvas.height=size;
+        canvas.getContext('2d').drawImage(image,(image.width-side)/2,(image.height-side)/2,side,side,0,0,size,size);
+        URL.revokeObjectURL(url);const data=canvas.toDataURL('image/png');
+        currentAvatarUrl=data;
+        try{localStorage.setItem(KEY,data)}catch{}
+        await window.veilDesktop?.saveAvatar?.(data).catch(()=>{});
+        applyAvatar(data);notify('头像已更新');
+      };
+      image.onerror=()=>URL.revokeObjectURL(url);image.src=url;
     };
-    image.onerror=()=>URL.revokeObjectURL(url);image.src=url;
+  }
+  window.addEventListener('storage',event=>{if(event.key===KEY){currentAvatarUrl=event.newValue||'';applyAvatar(currentAvatarUrl)}});
+
+  // Detached window always-on-top pin control
+  const pinBtn=document.getElementById('detached-pin');
+  if(pinBtn&&detachedView){
+    const syncPin=pinned=>{
+      pinBtn.setAttribute('aria-pressed',String(Boolean(pinned)));
+      pinBtn.textContent=pinned?'已置顶':'置顶';
+    };
+    // The IPC bridge returns and broadcasts a plain boolean; keep read, click and broadcast in sync.
+    window.veilDesktop?.getPinned?.(detachedView).then(res=>syncPin(Boolean(res))).catch(()=>{});
+    window.veilDesktop?.onPinnedState?.(pinned=>syncPin(Boolean(pinned)));
+    pinBtn.onclick=async()=>{
+      pinBtn.disabled=true;
+      const next=pinBtn.getAttribute('aria-pressed')!=='true';
+      try{
+        const res=await window.veilDesktop?.setPinned?.(detachedView,next);
+        syncPin(typeof res==='boolean'?res:next);
+      }catch{syncPin(!next);}
+      finally{pinBtn.disabled=false;}
+    };
+  }
+
+  // Boot unified workspace shell & memory library add-on
+  window.veilSetPage=setPage;
+  window.workspaceRequest=async function workspaceRequest(url,opt){
+    if(opt&&String(opt.method||'GET').toUpperCase()==='POST'){
+      let payload={};
+      if(typeof opt.body==='string'){try{payload=JSON.parse(opt.body)}catch{payload={}}}
+      else if(opt.body&&typeof opt.body==='object')payload=opt.body;
+      return api(url,payload,opt.timeoutMs||30000);
+    }
+    return api(url,undefined,opt?.timeoutMs||30000);
   };
-  window.addEventListener('storage',event=>{if(event.key===KEY)apply(event.newValue)});
+  window.veilWorkspace?.init?.({request:window.workspaceRequest,setPage});
+  window.veilBrain?.mountMemoryLibraryAddon?.(window.workspaceRequest);
 })();
