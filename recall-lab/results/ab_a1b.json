@@ -1,0 +1,192 @@
+{
+  "arms": [
+    {
+      "arm": "association_off",
+      "config": {},
+      "metrics": {
+        "associations_proposed": 0,
+        "blind_eval": {
+          "emotional_fit": 3.83,
+          "experience_behavior_impact": 3.17,
+          "factual_accuracy": 4.5,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 3.5,
+          "relationship_continuity": 3.67,
+          "work_interference": 1
+        },
+        "idle_wakes": 4,
+        "task_wakes": 8,
+        "tokens": 0
+      }
+    },
+    {
+      "arm": "wake_association_on",
+      "config": {
+        "gate": "wake_idle_only",
+        "pool": "stratified_rotation24"
+      },
+      "metrics": {
+        "associations_proposed": 4,
+        "blind_eval": {
+          "emotional_fit": 3.5,
+          "experience_behavior_impact": 4.17,
+          "factual_accuracy": 4.83,
+          "forced_association": 1,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
+          "work_interference": 1
+        },
+        "idle_wakes": 4,
+        "task_wakes_disturbed": 0,
+        "task_wakes_untouched": 8,
+        "tokens_est": 240
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.784595,
+      "2": 0.849087
+    },
+    "calls": 856,
+    "total_cny": 2.633682
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 4,
+      "delta": 4,
+      "metric": "association_count"
+    },
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "task_wakes_disturbed"
+    },
+    {
+      "a": 3.5,
+      "b": 4.17,
+      "delta": 0.67,
+      "metric": "naturalness_delta"
+    }
+  ],
+  "evidence": {
+    "a1a_chat_blind_eval": {
+      "vs_none": {
+        "arms": {
+          "no_association": {
+            "emotional_fit": 4.12,
+            "experience_behavior_impact": 3.25,
+            "factual_accuracy": 4.75,
+            "forced_association": 0,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.5,
+            "relationship_continuity": 3.75,
+            "work_interference": 0
+          },
+          "stratified_rotation24": {
+            "emotional_fit": 3.75,
+            "experience_behavior_impact": 3.0,
+            "factual_accuracy": 4.75,
+            "forced_association": 1,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.25,
+            "relationship_continuity": 3.62,
+            "work_interference": 0
+          }
+        },
+        "n": 8,
+        "wins": {
+          "no_association": 2,
+          "stratified_rotation24": 3,
+          "tie": 3
+        }
+      },
+      "vs_prod": {
+        "arms": {
+          "prod_breath8": {
+            "emotional_fit": 3.88,
+            "experience_behavior_impact": 3.25,
+            "factual_accuracy": 4.62,
+            "forced_association": 0,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.5,
+            "relationship_continuity": 3.88,
+            "work_interference": 0
+          },
+          "stratified_rotation24": {
+            "emotional_fit": 3.88,
+            "experience_behavior_impact": 3.25,
+            "factual_accuracy": 4.75,
+            "forced_association": 1,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.5,
+            "relationship_continuity": 4.0,
+            "work_interference": 0
+          }
+        },
+        "n": 8,
+        "wins": {
+          "prod_breath8": 1,
+          "stratified_rotation24": 3,
+          "tie": 4
+        }
+      }
+    },
+    "autonomy_samples": 12,
+    "blind_eval_summary": {
+      "arms": {
+        "association_off": {
+          "emotional_fit": 3.83,
+          "experience_behavior_impact": 3.17,
+          "factual_accuracy": 4.5,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 3.5,
+          "relationship_continuity": 3.67,
+          "work_interference": 1
+        },
+        "wake_association_on": {
+          "emotional_fit": 3.5,
+          "experience_behavior_impact": 4.17,
+          "factual_accuracy": 4.83,
+          "forced_association": 1,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
+          "work_interference": 1
+        }
+      },
+      "n": 6,
+      "wins": {
+        "association_off": 1,
+        "tie": 1,
+        "wake_association_on": 4
+      }
+    },
+    "idle": 4,
+    "labeler": "ai-assisted (human_confirmed=false; local Lan blind-review pack generated)",
+    "task": 8
+  },
+  "evidence_gaps": [
+    "AI 辅助盲评（未经 Lan 人工验收）；闲暇样本 4 条规模较小，上线后需持续观察"
+  ],
+  "experiment_id": "AB-A1b",
+  "finished_at": "2026-11-26T20:14:51.014+08:00",
+  "fixed_baseline": "AB-A1a 分层轮换池 + 自主活动切片 + deepseek-flash 真实生成盲评",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T20:14:11.059+08:00",
+  "status": "completed",
+  "tier": 2,
+  "title": "autonomy 闲暇唤醒低打扰联想分支",
+  "variable": "无联想 vs 独立 wake 侧门控 + 全库分层轮换池(24)",
+  "verdict": {
+    "reason": "独立 wake 门控实测：4/4 条闲暇唤醒触发长尾联想，8/8 条任务唤醒零干扰（0 误触）；真实自主输出盲评自然度 +0.67、工作干扰 1、胜负 {\"association_off\": 1, \"wake_association_on\": 4, \"tie\": 1}；同步产出 AB-A1a 聊天盲评",
+    "recommended": false
+  }
+}

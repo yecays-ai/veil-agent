@@ -1,0 +1,202 @@
+{
+  "all_checks_pass": true,
+  "baseline": "P6-S1 Baseline-1",
+  "checks": [
+    {
+      "detail": "20/20",
+      "name": "card: every CRLF card carries opening and ending",
+      "ok": true
+    },
+    {
+      "detail": "6/20",
+      "name": "card: old split loses the body on every CRLF sample",
+      "ok": true
+    },
+    {
+      "detail": 1,
+      "name": "embedding: exactly one call per turn",
+      "ok": true
+    },
+    {
+      "detail": 2,
+      "name": "embedding: old path had two",
+      "ok": true
+    },
+    {
+      "detail": "[bucket_id:154282939910] 二十号\n十一月二十号的新事\n\n[bucket_id:141a78c164cd] 风筝\n蓝色风筝挂在墙上\n===",
+      "name": "active search: date range filters hits",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "active search: invalid date rejected",
+      "ok": true
+    },
+    {
+      "detail": {
+        "backend": "brain",
+        "weight_keyword": 0.35,
+        "weight_vector": 0.65
+      },
+      "name": "active search: configured weights are readable",
+      "ok": true
+    },
+    {
+      "detail": 4,
+      "name": "vector: mixed dimensions are skipped, not crashed",
+      "ok": true
+    },
+    {
+      "detail": "",
+      "name": "vector: a different embedding model degrades to keyword",
+      "ok": true
+    },
+    {
+      "detail": "embedding_model_mismatch",
+      "name": "vector: writer refuses another model vector",
+      "ok": true
+    },
+    {
+      "detail": {
+        "pending": 0,
+        "retried": 2,
+        "saved": 2
+      },
+      "name": "vector: pending vectors still recover",
+      "ok": true
+    },
+    {
+      "detail": "empty",
+      "name": "judge: normal empty is not marked degraded",
+      "ok": true
+    },
+    {
+      "detail": {
+        "candidates": 8,
+        "detail": "model",
+        "embedding_seconds": 0.0,
+        "embedding_wait_ms": 0.0,
+        "model_seconds": 0.61,
+        "picked": [],
+        "reason": "timeout",
+        "status": "failed",
+        "vector": [],
+        "vector_note": {
+          "skipped_dim": 1,
+          "skipped_model": false
+        }
+      },
+      "name": "judge: a slow model is timeout:model",
+      "ok": true
+    },
+    {
+      "detail": {
+        "candidates": 0,
+        "detail": "RuntimeError",
+        "embedding_seconds": 0.0,
+        "model_seconds": 0.0,
+        "picked": [],
+        "reason": "embedding_error",
+        "status": "failed",
+        "vector": []
+      },
+      "name": "judge: an embedding failure is its own degraded stage",
+      "ok": true
+    },
+    {
+      "detail": {
+        "detail": "model",
+        "fallback": "pool",
+        "reason": "timeout",
+        "stage": "judge"
+      },
+      "name": "judge: wake degrades explicitly to the pool",
+      "ok": true
+    },
+    {
+      "detail": [
+        "3f4f59c4578e",
+        "a04d2f7679a6",
+        "c9b6b49b9d72",
+        "ef32fd81223d"
+      ],
+      "name": "continuity: the follow-up carries the previous turn memory",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "id": "c9b6b49b9d72",
+          "reason": "cooldown"
+        },
+        {
+          "id": "141a78c164cd",
+          "reason": "cooldown"
+        },
+        {
+          "id": "2d1fce41f959",
+          "reason": "cooldown"
+        }
+      ],
+      "name": "continuity: a repeated turn keeps cooldown",
+      "ok": true
+    },
+    {
+      "detail": [
+        "3f4f59c4578e",
+        "a04d2f7679a6",
+        "9a1ea1fce647",
+        "c9b6b49b9d72",
+        "ef32fd81223d"
+      ],
+      "name": "continuity: removed dead branches leave continuity intact",
+      "ok": true
+    },
+    {
+      "detail": {
+        "blocked": "embedding_model_mismatch",
+        "current_model": "new-baseline-model",
+        "pending": 1,
+        "retried": 0,
+        "saved": 0,
+        "stored_model": "baseline-fake-embedding"
+      },
+      "name": "model switch: a paid retry is blocked before the explicit reindex",
+      "ok": true
+    },
+    {
+      "detail": {
+        "pending": 0,
+        "retried": 13,
+        "saved": 13
+      },
+      "name": "model switch: the explicit reindex restores pending recovery",
+      "ok": true
+    }
+  ],
+  "code_commit": "e5b3494944037cccb2521a8d49761ece833494a5",
+  "configuration": {
+    "embedding_model": "baseline-fake-embedding",
+    "judge": {
+      "defaults": {
+        "breaker_failures": 3,
+        "breaker_seconds": 300,
+        "enabled": true,
+        "ombre_candidates": 8,
+        "timeout_seconds": 4.0,
+        "vector_candidates": 8
+      },
+      "source": "recall_judge.DEFAULTS",
+      "timeout_seconds": 1.0
+    },
+    "retrieval": {
+      "backend": "brain",
+      "weight_keyword": 0.35,
+      "weight_vector": 0.65
+    }
+  },
+  "environment": "isolated tempdir, fictional data, fake embedder/judge model, no network",
+  "generated_at": "2026-11-26T09:49:42.682424+00:00",
+  "notes": "Baseline-1 gate re-run inside the isolated worktree after rebase onto the latest main; fictional data and fake models only; sanitized copy without temp paths. Original report: docs/reports/p6-s1-baseline-1-20261126.md",
+  "python": "3.12.10"
+}

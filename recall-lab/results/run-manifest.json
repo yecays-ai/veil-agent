@@ -1,0 +1,322 @@
+{
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.784595,
+      "2": 0.881451
+    },
+    "calls": 862,
+    "total_cny": 2.666046
+  },
+  "code_commit": "82e82b51e779cf13a12e3c97aff02f984abe4178",
+  "coverage": {
+    "count": 24,
+    "experiments": [
+      {
+        "experiment_id": "AB-R1a",
+        "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 20.2%->26.2%）；仅凭离线检索不推荐扩大候选池，下游实验维持生产默认 K=8（判官侧 K=8/12/20 净收益见 Tier 1）",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "混合候选池大小 K"
+      },
+      {
+        "experiment_id": "AB-R1b",
+        "reason": "停用词过滤在 K=8 提升 Recall +3.88pp / Precision@5 +3.55pp，门控误注入 +0.00pp；K=20 敏感性见 evidence",
+        "recommended": true,
+        "status": "completed",
+        "tier": 0,
+        "title": "中文停用词过滤"
+      },
+      {
+        "experiment_id": "AB-R1c",
+        "reason": "Min-Max 保持最优或差异不足 1pp",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "融合算法：Min-Max vs RRF(k=60) vs 纯向量"
+      },
+      {
+        "experiment_id": "AB-R4b",
+        "reason": "S3 跨事件覆盖 +1 条（需 ≥2 才达实收益门槛），平均候选池 +3.6 条",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "related_to 图谱一跳扩展"
+      },
+      {
+        "experiment_id": "AB-R4c",
+        "reason": "S1/S2 别名补召回 1 条，噪声误触 16/28",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "豆辞典/实体别名 Aho-Corasick 补召回"
+      },
+      {
+        "experiment_id": "AB-R5a",
+        "reason": "四档中 0.05 综合最优",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "长期重要度权重"
+      },
+      {
+        "experiment_id": "AB-R5b",
+        "reason": "H2：近 7 天续接增益 +1/53 条，冷门重要记忆保底 +0/0 条；证据不足（冷门重要记忆样本为 0 且增益过小），不足以支持上线",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "last_active 活跃度微调"
+      },
+      {
+        "experiment_id": "AB-R5c",
+        "reason": "假设 H1：情感加分对 S2 提升 -2.78pp，S4/S5 误召回 +0.00pp",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "valence/arousal 情感数值门控加分"
+      },
+      {
+        "experiment_id": "AB-A1a",
+        "reason": "离线长尾覆盖大幅提升（唯一记忆 2->37、imp=8 覆盖 0->35/44、工作态违和 0），但 Tier 2 真实回复盲评（8 场景）显示纯重要度+沉默轮换因缺少语义相关性，胜负不及对照（vs 无联想 1-4、vs 生产 breath8 0-4），不推荐直接上线聊天主链路；建议仅在引入话题相关性过滤或用于闲暇自主唤醒（AB-A1b）后再实施",
+        "recommended": false,
+        "status": "completed",
+        "tier": 0,
+        "title": "全库分层轮换自然联想池"
+      },
+      {
+        "experiment_id": "AB-A2",
+        "reason": "历史快照（S2 前）64 条 stage-evidence 全为 tool、0/76 事件可溯源；在隔离副本运行最新 S2 写入链路验证：10 条高频 tool 调用下仍保留 2 条 user chat 证据，严格 event+stage-evidence(chat)/quotes 规则有效晋升 2/2、自写猜测/无证据循环自证率 0.0%（朴素 event 指针自证率 100%）、Lan 纠正/删除主权全部生效；建议 S3 在 S2 新证据链之上谨慎实施严格溯源晋升",
+        "recommended": true,
+        "status": "completed",
+        "tier": 0,
+        "title": "关系认知证据链与 confirmed 晋升边界"
+      },
+      {
+        "experiment_id": "AB-A3",
+        "reason": "隔离副本真实 LearnedContext 写入/迁移验证：共享 4000B 上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒且旧内容 100% 保留；实际 HEAD 渲染增量 +127.2 tokens",
+        "recommended": true,
+        "status": "completed",
+        "tier": 0,
+        "title": "learned-context 四区独立存储预算"
+      },
+      {
+        "experiment_id": "AB-R4a",
+        "reason": "story 向量覆盖 76/76 事件；Recall@8 +0.00pp，S1 +0.00pp，跨事件 +0.00pp",
+        "recommended": false,
+        "status": "completed",
+        "tier": 1,
+        "title": "events.story 纳入向量索引"
+      },
+      {
+        "experiment_id": "AB-R2",
+        "reason": "SiliconFlow /v1/rerank 实测（73 条全集，Top-20 重排）：最优模型 Qwen/Qwen3-Reranker-0.6B Recall@8 +6.49pp / Precision@5 +3.56pp / NDCG@8 +6.58pp，p50/p95 2719/8249ms，估算千轮费用 ¥0.5023",
+        "recommended": true,
+        "status": "completed",
+        "tier": 1,
+        "title": "Reranker 候选排序"
+      },
+      {
+        "experiment_id": "AB-R3a",
+        "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，4.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
+        "recommended": false,
+        "status": "completed",
+        "tier": 1,
+        "title": "judge timeout 4.0s vs 6.0s"
+      },
+      {
+        "experiment_id": "AB-R3b",
+        "reason": "按 (judge_recall - 误报率) 排序，llm_judge 最优；去判官会明显抬高应空误报",
+        "recommended": true,
+        "status": "completed",
+        "tier": 1,
+        "title": "判官角色：LLM 判官 vs 无判官 vs 阈值门控"
+      },
+      {
+        "experiment_id": "AB-R3c",
+        "reason": "放宽 prompt：整体判官召回 +4.00pp，应空误报 +18.18pp",
+        "recommended": false,
+        "status": "completed",
+        "tier": 1,
+        "title": "判官提示词：现行保守版 vs 适度放宽关系/共情版"
+      },
+      {
+        "experiment_id": "AB-R3d",
+        "reason": "500 字卡片召回 +2.00pp（同 prompt 重跑噪声 ~6pp 以内视为噪声），输入 token +33944",
+        "recommended": false,
+        "status": "completed",
+        "tier": 1,
+        "title": "判官卡片内容：300 字头尾 vs 500 字（含 why/importance/story摘要）"
+      },
+      {
+        "experiment_id": "AB-C1",
+        "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 94.5%；capabilities 在 HEAD 内展开变更后骤降至 38.3%；移出 HEAD 到 runtime 后展开变更仍保持 93.7%（净保住 +55.4pp 前缀缓存）",
+        "recommended": true,
+        "status": "completed",
+        "tier": 2,
+        "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）"
+      },
+      {
+        "experiment_id": "AB-C2a",
+        "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 2, \"omit_empty_hint\": 3, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
+        "recommended": true,
+        "status": "completed",
+        "tier": 2,
+        "title": "非首轮省略 memory.recall.empty 等空提示"
+      },
+      {
+        "experiment_id": "AB-C2b",
+        "reason": "短闲聊 6 条真实生成盲评：Top-2+1 实省 4542 tokens（真实诊断 10/220 超 3 条），自然度 +0.34 / 情绪贴合 -0.34，胜负 {\"uncapped_6\": 3, \"cap_top2+1\": 2, \"tie\": 1}",
+        "recommended": false,
+        "status": "completed",
+        "tier": 2,
+        "title": "短闲聊记忆注入上限 Top-2+1 vs 不限"
+      },
+      {
+        "experiment_id": "AB-C3",
+        "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 5/6 次（83%），净 token 变化 -12031（省为正），事实准确度 +0.50，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
+        "recommended": false,
+        "status": "completed",
+        "tier": 2,
+        "title": "完整 story vs 标题+因果摘要+timeline 指针"
+      },
+      {
+        "experiment_id": "AB-A1b",
+        "reason": "独立 wake 门控实测：4/4 条闲暇唤醒触发长尾联想，8/8 条任务唤醒零干扰（0 误触）；真实自主输出盲评自然度 +0.67、工作干扰 1、胜负 {\"association_off\": 1, \"wake_association_on\": 4, \"tie\": 1}；同步产出 AB-A1a 聊天盲评",
+        "recommended": false,
+        "status": "completed",
+        "tier": 2,
+        "title": "autonomy 闲暇唤醒低打扰联想分支"
+      },
+      {
+        "experiment_id": "AB-E1",
+        "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 4, \"evidence_constrained_consolidation\": 2, \"tie\": 0}、经验行为影响 -0.33。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
+        "recommended": false,
+        "status": "completed",
+        "tier": 2,
+        "title": "认知巩固收益与跨时间认知修订"
+      },
+      {
+        "experiment_id": "AB-COMB",
+        "reason": "端到端组合验证（共 6 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
+        "recommended": true,
+        "status": "completed",
+        "tier": 2,
+        "title": "最终组合验证"
+      }
+    ],
+    "matrix_ids": [
+      "AB-R1a",
+      "AB-R1b",
+      "AB-R1c",
+      "AB-R4b",
+      "AB-R4c",
+      "AB-R5a",
+      "AB-R5b",
+      "AB-R5c",
+      "AB-A1a",
+      "AB-A2",
+      "AB-A3",
+      "AB-R4a",
+      "AB-R2",
+      "AB-R3a",
+      "AB-R3b",
+      "AB-R3c",
+      "AB-R3d",
+      "AB-C1",
+      "AB-C2a",
+      "AB-C2b",
+      "AB-C3",
+      "AB-A1b",
+      "AB-E1",
+      "AB-COMB"
+    ],
+    "note": "P6-4 正文写 21 项原子实验、工单描述写 22 项，实际矩阵表列出 24 个 ID（23 原子 + AB-COMB 组合）；本 harness 按实际表逐行覆盖 24 个。",
+    "status_counts": {
+      "completed": 24
+    }
+  },
+  "elapsed_seconds": 109.6,
+  "embedding": {
+    "blocked_calls": 0,
+    "cache_hits": 73,
+    "cost_cny": 0.0,
+    "input_cny_per_million": 0.0,
+    "model": "BAAI/bge-m3",
+    "note": "one-off query/story embedding preparation",
+    "provider_calls": 0,
+    "usage_tokens": 0
+  },
+  "embedding_mode": "provider",
+  "eval": {
+    "errors": [],
+    "path_name": "eval-v2.jsonl",
+    "samples": 73,
+    "sha256": "c11cff7967e801c5b9fc8ed99931e834deb4a2de62b7215ccb19159c54a25a0e",
+    "warning_count": 0,
+    "warnings": []
+  },
+  "experiments_run": [
+    "AB-C2a",
+    "AB-C2b",
+    "AB-C3",
+    "AB-A1b",
+    "AB-E1",
+    "AB-COMB"
+  ],
+  "experiments_skipped_paid": [],
+  "generated_at": "2026-11-26T20:15:10.204+08:00",
+  "harness_version": "recall-lab-0.1",
+  "platform": "win32",
+  "prices": {
+    "embedding": {
+      "input_cny_per_million": 0.0,
+      "model": "BAAI/bge-m3",
+      "price_source": "--embedding-rate-cny-per-million"
+    },
+    "judge": {
+      "cached_input_cny_per_million": 0.04,
+      "input_cny_per_million": 2.0,
+      "model": "deepseek-flash",
+      "output_cny_per_million": 8.0,
+      "price_source": "character.toml [providers.deepseek] peak rates"
+    },
+    "rerank_bge_m3": {
+      "input_cny_per_million": 0.0,
+      "model": "BAAI/bge-reranker-v2-m3",
+      "price_source": "SiliconFlow official pricing (free tier, verified 2026-11-26)"
+    },
+    "rerank_qwen3_06b": {
+      "input_cny_per_million": 0.07,
+      "model": "Qwen/Qwen3-Reranker-0.6B",
+      "price_source": "SiliconFlow official pricing (0.07 CNY / 1M input tokens, verified 2026-11-26)"
+    }
+  },
+  "python": "3.12.10",
+  "skip_paid": false,
+  "snapshot": {
+    "brain_db_sha256": "2e6dd769a7c3e1f5bb8ca9603ef0fb5b2b8a3c4cf42662d4dd3be659553b3492",
+    "chat_sha256": "a948c60acdece4cf0b5b3f88b65b512928e004e1fd7e8e6949a6010c8584bf76",
+    "context_log_sha256": "aba4151f5effd48b574e7a0d98a68d3e4778e5c41a16a501cd7b7cfde0dc9394",
+    "embedding_model": "",
+    "eval_errors": 0,
+    "eval_samples": 73,
+    "eval_sha256": "c11cff7967e801c5b9fc8ed99931e834deb4a2de62b7215ccb19159c54a25a0e",
+    "events": 76,
+    "learned_context_sha256": "a3825c0ead91599287cba3839b3342e174f6c70a9af1d77952be8f302f1143f0",
+    "memories": 241,
+    "quotes": 6,
+    "recall_diagnostics_sha256": "ef919f7b46aca6bb584d1b545cfc8f6525262a0a17a1bf30c4e405c584054be1",
+    "relations": 120,
+    "stage_evidence": 64,
+    "vectors": 241,
+    "versions_sha256": "9602a41c6cf458ac6e2fe53be2a86d1875fa236133da3826dc24651efa69ff1a",
+    "visible_memories": 225
+  },
+  "tier_caps_cny": {
+    "0": 0.0,
+    "1": 6.0,
+    "2": 10.0
+  },
+  "total_cap_cny": 20.0
+}

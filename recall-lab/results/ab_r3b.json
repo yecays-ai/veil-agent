@@ -1,0 +1,145 @@
+{
+  "arms": [
+    {
+      "arm": "llm_judge",
+      "config": {
+        "source": "AB-R3a reuse"
+      },
+      "metrics": {
+        "calls_cached": 36,
+        "calls_paid": 0,
+        "calls_total": 36,
+        "candidate_ceiling_recall": 0.7,
+        "cost_cny": 0.0,
+        "empty_correct": 5,
+        "empty_expected_n": 11,
+        "errors": {},
+        "false_positive_rate": 0.5455,
+        "judge_ndcg_at_8": 0.5603,
+        "judge_precision": 0.4109,
+        "judge_recall": 0.5967,
+        "latency": {
+          "mean_ms": 789.89,
+          "n": 36,
+          "p50_ms": 805.77,
+          "p95_ms": 1179.0
+        },
+        "picked_total": 98,
+        "samples": 36,
+        "source": "reused from AB-R3a arm 'timeout=6.0s' (already settled, no extra charge)",
+        "timeouts": 0,
+        "tokens": {
+          "input": 66892,
+          "output": 442
+        }
+      }
+    },
+    {
+      "arm": "no_judge_top3",
+      "config": {
+        "threshold": null
+      },
+      "metrics": {
+        "candidate_ceiling_recall": 0.7,
+        "cost_cny": 0.0,
+        "empty_correct": 0,
+        "empty_expected_n": 11,
+        "errors": {},
+        "false_positive_rate": 1.0,
+        "judge_ndcg_at_8": 0.5186,
+        "judge_precision": 0.32,
+        "judge_recall": 0.5433,
+        "latency": {
+          "mean_ms": 0.0,
+          "n": 36,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "picked_total": 108,
+        "samples": 36,
+        "timeouts": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    },
+    {
+      "arm": "threshold_gate_0.45",
+      "config": {
+        "threshold": 0.45
+      },
+      "metrics": {
+        "candidate_ceiling_recall": 0.7,
+        "cost_cny": 0.0,
+        "empty_correct": 2,
+        "empty_expected_n": 11,
+        "errors": {},
+        "false_positive_rate": 0.8182,
+        "judge_ndcg_at_8": 0.4456,
+        "judge_precision": 0.2667,
+        "judge_recall": 0.4367,
+        "latency": {
+          "mean_ms": 0.0,
+          "n": 36,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "picked_total": 102,
+        "samples": 36,
+        "timeouts": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0
+        }
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 380,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "arms": {
+        "llm_judge": 0.5967,
+        "no_judge_top3": 0.5433,
+        "threshold_gate_0.45": 0.4367
+      },
+      "metric": "judge_recall"
+    },
+    {
+      "arms": {
+        "llm_judge": 0.5455,
+        "no_judge_top3": 1.0,
+        "threshold_gate_0.45": 0.8182
+      },
+      "metric": "false_positive_rate"
+    }
+  ],
+  "evidence": {
+    "llm_arm_cost": 0.0,
+    "samples": 36
+  },
+  "evidence_gaps": [],
+  "experiment_id": "AB-R3b",
+  "finished_at": "2026-11-26T18:37:27.346+08:00",
+  "fixed_baseline": "最佳检索候选池（fused top-8 + vector top-8）",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T18:37:27.060+08:00",
+  "status": "completed",
+  "tier": 1,
+  "title": "判官角色：LLM 判官 vs 无判官 vs 阈值门控",
+  "variable": "judge role",
+  "verdict": {
+    "reason": "按 (judge_recall - 误报率) 排序，llm_judge 最优；去判官会明显抬高应空误报",
+    "recommended": true,
+    "role": "llm_judge"
+  }
+}
