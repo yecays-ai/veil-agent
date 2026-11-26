@@ -1,0 +1,178 @@
+{
+  "baseline": "P6-S1 Baseline-1",
+  "generated_at": "2026-11-26T09:29:58.736890+00:00",
+  "code_commit": "fd59f7a67471e9175953f88313cc46054a39fc5d",
+  "python": "3.12.10",
+  "environment": "isolated tempdir, fictional data, fake embedder/judge model, no network",
+  "configuration": {
+    "embedding_model": "baseline-fake-embedding",
+    "retrieval": {
+      "backend": "brain",
+      "weight_vector": 0.65,
+      "weight_keyword": 0.35
+    },
+    "judge": {
+      "timeout_seconds": 1,
+      "source": "recall_judge.DEFAULTS",
+      "defaults": {
+        "enabled": true,
+        "timeout_seconds": 4,
+        "ombre_candidates": 8,
+        "vector_candidates": 8,
+        "breaker_failures": 3,
+        "breaker_seconds": 300
+      }
+    }
+  },
+  "all_checks_pass": true,
+  "checks": [
+    {
+      "name": "card: every CRLF card carries opening and ending",
+      "ok": true,
+      "detail": "20/20"
+    },
+    {
+      "name": "card: old split loses the body on every CRLF sample",
+      "ok": true,
+      "detail": "6/20"
+    },
+    {
+      "name": "embedding: exactly one call per turn",
+      "ok": true,
+      "detail": 1
+    },
+    {
+      "name": "embedding: old path had two",
+      "ok": true,
+      "detail": 2
+    },
+    {
+      "name": "active search: date range filters hits",
+      "ok": true,
+      "detail": "[bucket_id:6e3de0b8c66b] 二十号\n十一月二十号的新事\n\n[bucket_id:b013f44d8251] 风筝\n蓝色风筝挂在墙上\n==="
+    },
+    {
+      "name": "active search: invalid date rejected",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "active search: configured weights are readable",
+      "ok": true,
+      "detail": {
+        "backend": "brain",
+        "weight_vector": 0.65,
+        "weight_keyword": 0.35
+      }
+    },
+    {
+      "name": "vector: mixed dimensions are skipped, not crashed",
+      "ok": true,
+      "detail": 4
+    },
+    {
+      "name": "vector: a different embedding model degrades to keyword",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "vector: writer refuses another model vector",
+      "ok": true,
+      "detail": "embedding_model_mismatch"
+    },
+    {
+      "name": "vector: pending vectors still recover",
+      "ok": true,
+      "detail": {
+        "retried": 2,
+        "saved": 2,
+        "pending": 0
+      }
+    },
+    {
+      "name": "judge: normal empty is not marked degraded",
+      "ok": true,
+      "detail": "empty"
+    },
+    {
+      "name": "judge: a slow model is timeout:model",
+      "ok": true,
+      "detail": {
+        "status": "failed",
+        "candidates": 0,
+        "picked": [],
+        "vector": [],
+        "embedding_seconds": 0,
+        "model_seconds": 0.609,
+        "vector_note": {
+          "skipped_dim": 1,
+          "skipped_model": false
+        },
+        "reason": "timeout",
+        "detail": "model"
+      }
+    },
+    {
+      "name": "judge: an embedding failure is its own degraded stage",
+      "ok": true,
+      "detail": {
+        "status": "failed",
+        "candidates": 0,
+        "picked": [],
+        "vector": [],
+        "embedding_seconds": 0,
+        "model_seconds": 0,
+        "reason": "embedding_error",
+        "detail": "RuntimeError"
+      }
+    },
+    {
+      "name": "judge: wake degrades explicitly to the pool",
+      "ok": true,
+      "detail": {
+        "stage": "judge",
+        "reason": "timeout",
+        "detail": "model",
+        "fallback": "pool"
+      }
+    },
+    {
+      "name": "continuity: the follow-up carries the previous turn memory",
+      "ok": true,
+      "detail": [
+        "b19de40feeed",
+        "d91323eb41ad",
+        "f242a29ba81e"
+      ]
+    },
+    {
+      "name": "continuity: a repeated turn keeps cooldown",
+      "ok": true,
+      "detail": [
+        {
+          "id": "463613007ef8",
+          "reason": "cooldown"
+        },
+        {
+          "id": "1578fe634c98",
+          "reason": "cooldown"
+        },
+        {
+          "id": "6cb1e0dbf15d",
+          "reason": "cooldown"
+        }
+      ]
+    },
+    {
+      "name": "continuity: removed dead branches leave continuity intact",
+      "ok": true,
+      "detail": [
+        "b19de40feeed",
+        "d91323eb41ad",
+        "463613007ef8",
+        "f242a29ba81e"
+      ]
+    }
+  ],
+  "notes": "Baseline-1 gate re-run inside the isolated worktree; fictional data and fake models only. Sanitized copy: no temp paths. Original report: docs/reports/p6-s1-baseline-1-20261126.md"
+}

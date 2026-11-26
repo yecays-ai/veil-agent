@@ -1,0 +1,92 @@
+{
+  "arms": [
+    {
+      "arm": "breath8",
+      "config": {
+        "pool": "breath8"
+      },
+      "metrics": {
+        "association_surfaced": 37,
+        "by_category": {
+          "cross_event": 6,
+          "empathy": 7,
+          "explicit_recall": 12,
+          "noise": 12
+        },
+        "importance8_coverage": 0.2111,
+        "topic_violation": 12,
+        "topic_violation_rate": 0.3243,
+        "unique_memories": 31
+      }
+    },
+    {
+      "arm": "stratified24",
+      "config": {
+        "pool": "stratified24"
+      },
+      "metrics": {
+        "association_surfaced": 39,
+        "by_category": {
+          "cross_event": 8,
+          "empathy": 7,
+          "explicit_recall": 12,
+          "noise": 12
+        },
+        "importance8_coverage": 0.1,
+        "topic_violation": 12,
+        "topic_violation_rate": 0.3077,
+        "unique_memories": 11
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.169352,
+      "2": 0.062778
+    },
+    "calls": 286,
+    "total_cny": 1.23213
+  },
+  "comparison": [
+    {
+      "a": 19,
+      "b": 9,
+      "delta": -10,
+      "metric": "importance8_coverage"
+    },
+    {
+      "a": 12,
+      "b": 12,
+      "delta": 0,
+      "metric": "topic_violation"
+    },
+    {
+      "a": 31,
+      "b": 11,
+      "delta": -20,
+      "metric": "unique_surfaced"
+    }
+  ],
+  "evidence": {
+    "blind_eval": "not_run: 离线只能验证池覆盖与违和门控，不能验证对话自然度",
+    "sample_size": 73
+  },
+  "evidence_gaps": [],
+  "experiment_id": "AB-A1a",
+  "finished_at": "2026-11-26T17:20:54.382+08:00",
+  "fixed_baseline": "普通聊天主链路；自然联想打分规则不变",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:20:53.695+08:00",
+  "status": "completed",
+  "tier": 0,
+  "title": "全库分层轮换自然联想池",
+  "variable": "联想候选池 breath(8) vs 全库 pinned+imp>=7 分层轮换(24)",
+  "verdict": {
+    "imp7_total": 112,
+    "imp8_total": 90,
+    "reason": "长尾 imp=8 覆盖 +-10，噪声/工作违和 +0；对话自然度盲评留给 AB-A1b/ Tier 2",
+    "recommended": false
+  }
+}

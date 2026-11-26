@@ -1,0 +1,36 @@
+{
+  "arms": [],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 377,
+    "total_cny": 1.624804
+  },
+  "comparison": {},
+  "evidence": {
+    "configured_rerank_model": null,
+    "price_upper_bound_confirmed": false,
+    "probe_paid_call": false,
+    "repo_rerank_implementations": []
+  },
+  "evidence_gaps": [
+    "需要先有 rerank 服务端点、模型标识与价格表，才能跑 Precision@5/p95/单轮成本对照"
+  ],
+  "experiment_id": "AB-R2",
+  "finished_at": "2026-11-26T17:26:56.231+08:00",
+  "fixed_baseline": "最佳候选池（R1+R4 胜出项）",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:56.226+08:00",
+  "status": "blocked",
+  "tier": 1,
+  "title": "Reranker 候选排序",
+  "variable": "无 vs Qwen3-Reranker-0.6B vs BGE-Reranker-v2-m3",
+  "verdict": {
+    "reason": "没有可用的 rerank provider、模型或价格上界；按工单规则不在无法确认价格时发起付费调用",
+    "recommended": null
+  }
+}

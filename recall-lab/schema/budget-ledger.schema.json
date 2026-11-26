@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "recall-lab budget ledger row",
+  "description": "Append-only local budget ledger (JSONL). Reserve before dispatch, settle after the provider reports usage; failed paid calls settle conservatively at the reserved upper bound.",
+  "type": "object",
+  "required": [
+    "type",
+    "ticket",
+    "run_id"
+  ],
+  "properties": {
+    "type": {
+      "enum": [
+        "reserve",
+        "settle",
+        "blocked"
+      ]
+    },
+    "ticket": {
+      "type": "string"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "at": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "tier": {
+      "enum": [
+        0,
+        1,
+        2
+      ]
+    },
+    "experiment": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "chat",
+        "embedding",
+        "offline"
+      ]
+    },
+    "reserve_cny": {
+      "type": "number",
+      "minimum": 0
+    },
+    "amount_cny": {
+      "type": "number",
+      "minimum": 0
+    },
+    "accounting": {
+      "type": "string",
+      "enum": [
+        "usage",
+        "failed-conservative",
+        "embedding-configured-price",
+        "embedding-estimate",
+        "embedding-usage",
+        "embedding-usage-invalid"
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "properties": {
+        "prompt_tokens": {
+          "type": "integer"
+        },
+        "completion_tokens": {
+          "type": "integer"
+        },
+        "cached_tokens": {
+          "type": "integer"
+        },
+        "tokens": {
+          "type": "integer"
+        }
+      }
+    },
+    "reason": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

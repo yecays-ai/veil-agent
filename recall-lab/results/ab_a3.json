@@ -1,0 +1,156 @@
+{
+  "arms": [
+    {
+      "arm": "shared_4000B",
+      "config": {
+        "cap": "shared 4000"
+      },
+      "metrics": {
+        "current_total_bytes": 3440,
+        "headroom_bytes": 560,
+        "rejected_writes": 2,
+        "write_log": [
+          {
+            "rejected": false,
+            "total_bytes": 3560,
+            "write": "facts+120B"
+          },
+          {
+            "rejected": false,
+            "total_bytes": 3860,
+            "write": "growth+300B"
+          },
+          {
+            "rejected": true,
+            "total_bytes": 4768,
+            "write": "relationship 回填至 1200B"
+          },
+          {
+            "rejected": true,
+            "total_bytes": 4160,
+            "write": "ongoing+300B"
+          }
+        ],
+        "write_rejection_rate": 0.5,
+        "writes": 4
+      }
+    },
+    {
+      "arm": "four_zone_independent",
+      "config": {
+        "facts": 1800,
+        "growth": 2000,
+        "ongoing": 900,
+        "relationship": 1500
+      },
+      "metrics": {
+        "head_token_delta_est": 126.0,
+        "rejected_writes": 0,
+        "write_log": [
+          {
+            "rejected": false,
+            "write": "facts+120B",
+            "zone": "facts",
+            "zone_bytes": 1705,
+            "zone_cap": 1800
+          },
+          {
+            "rejected": false,
+            "write": "growth+300B",
+            "zone": "growth",
+            "zone_bytes": 1863,
+            "zone_cap": 2000
+          },
+          {
+            "rejected": false,
+            "write": "relationship 回填至 1200B",
+            "zone": "relationship",
+            "zone_bytes": 1200,
+            "zone_cap": 1500
+          },
+          {
+            "rejected": false,
+            "write": "ongoing+300B",
+            "zone": "ongoing",
+            "zone_bytes": 300,
+            "zone_cap": 900
+          }
+        ],
+        "write_rejection_rate": 0.0,
+        "writes": 4
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.169352,
+      "2": 0.062778
+    },
+    "calls": 286,
+    "total_cny": 1.23213
+  },
+  "comparison": [
+    {
+      "a": 0.5,
+      "b": 0.0,
+      "delta": -0.5,
+      "metric": "write_rejection_rate"
+    },
+    {
+      "a": 0,
+      "b": 126.0,
+      "delta": 126.0,
+      "metric": "head_token_delta_est"
+    }
+  ],
+  "evidence": {
+    "current_sizes_bytes": {
+      "facts": 1585,
+      "growth": 1563,
+      "ongoing": 0,
+      "relationship": 292,
+      "total": 3440
+    },
+    "historical_max_sizes": {
+      "facts": 3300,
+      "growth": 2263,
+      "ongoing": 107,
+      "relationship": 292,
+      "total": 3440
+    },
+    "note": "写入拒绝是前向模拟（基于真实占用与 P6-2 目标），未跑真实写入路径",
+    "shared_cap": 4000,
+    "token_calibration": "0.30 tokens/byte (real context-log calibration ratio median)",
+    "version_history_entries": 51,
+    "zone_caps_bytes": {
+      "facts": 1800,
+      "growth": 2000,
+      "ongoing": 900,
+      "relationship": 1500
+    }
+  },
+  "evidence_gaps": [
+    "写入拒绝率来自前向模拟，未跑真实写入路径；HEAD 增量只估算 facts+growth 渲染"
+  ],
+  "experiment_id": "AB-A3",
+  "finished_at": "2026-11-26T17:20:54.416+08:00",
+  "fixed_baseline": "隔离回放 learned-context 历史 + P6-2/P6-3 实测占用",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:20:54.410+08:00",
+  "status": "completed",
+  "tier": 0,
+  "title": "learned-context 四区独立存储预算",
+  "variable": "4000B 共享 vs 四区独立上限 {\"facts\": 1800, \"growth\": 2000, \"relationship\": 1500, \"ongoing\": 900}",
+  "verdict": {
+    "reason": "共享上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒；HEAD 估算增量 +126.0 tokens",
+    "recommended": true,
+    "zone_caps": {
+      "facts": 1800,
+      "growth": 2000,
+      "ongoing": 900,
+      "relationship": 1500
+    }
+  }
+}

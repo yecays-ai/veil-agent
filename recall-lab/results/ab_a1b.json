@@ -1,0 +1,66 @@
+{
+  "arms": [
+    {
+      "arm": "association_off",
+      "config": {},
+      "metrics": {
+        "associations_proposed": 0,
+        "idle_wakes": 4,
+        "task_wakes": 8,
+        "tokens": 0
+      }
+    },
+    {
+      "arm": "association_on",
+      "config": {
+        "pool": "A1a stratified 24"
+      },
+      "metrics": {
+        "associations_proposed": 0,
+        "idle_wakes": 4,
+        "task_wakes_untouched": 8,
+        "tokens_est": 0
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 378,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "association_count"
+    }
+  ],
+  "evidence": {
+    "autonomy_samples": 12,
+    "idle": 4,
+    "task": 8,
+    "tokens_per_association_est": 60
+  },
+  "evidence_gaps": [
+    "自主独处消息/日记自然度与不跑题率需要真实生成盲评，本次未执行；仅验证检索侧候选与预算"
+  ],
+  "experiment_id": "AB-A1b",
+  "finished_at": "2026-11-26T17:26:59.764+08:00",
+  "fixed_baseline": "AB-A1a 长尾池 + 自主活动切片",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:59.744+08:00",
+  "status": "partial",
+  "tier": 2,
+  "title": "autonomy 闲暇唤醒低打扰联想分支",
+  "variable": "闲暇唤醒加联想 关 vs 开（A1a 胜出池）",
+  "verdict": {
+    "reason": "12 条自主唤醒切片里 0 条闲暇唤醒有可用联想候选；只加在闲暇态，任务态 8 条不受影响。自然度盲评未执行",
+    "recommended": false
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "recall-lab experiment result",
+  "description": "Aggregated result per experiment ID. Contains no raw memory text, no queries, no keys and no absolute paths.",
+  "type": "object",
+  "required": [
+    "experiment_id",
+    "tier",
+    "status",
+    "title",
+    "arms",
+    "verdict",
+    "budget",
+    "harness_version"
+  ],
+  "properties": {
+    "experiment_id": {
+      "type": "string",
+      "pattern": "^AB-[A-Z0-9]+[a-z]?$"
+    },
+    "tier": {
+      "enum": [
+        0,
+        1,
+        2
+      ]
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "blocked",
+        "not_run"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "fixed_baseline": {
+      "type": "string"
+    },
+    "variable": {
+      "type": "string"
+    },
+    "harness_version": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "arms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "arm",
+          "metrics"
+        ]
+      }
+    },
+    "comparison": {
+      "type": "array"
+    },
+    "verdict": {
+      "type": "object",
+      "properties": {
+        "recommended": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "evidence_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "array"
+    },
+    "budget": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

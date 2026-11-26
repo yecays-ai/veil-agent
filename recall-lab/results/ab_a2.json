@@ -1,0 +1,123 @@
+{
+  "arms": [
+    {
+      "arm": "chat_only (current)",
+      "config": {
+        "allowed_sources": [
+          "chat"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 0.0,
+        "confirmed_promotions": 0,
+        "note": "event:/memory: 指针不能单独晋升；与当前实现一致"
+      }
+    },
+    {
+      "arm": "event_pointer_naive",
+      "config": {
+        "allowed_sources": [
+          "event",
+          "memory"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 1.0,
+        "confirmed_promotions": 76,
+        "note": "只要存在 event:/memory: 指针即晋升 -> 模型自己的故事可以自我确认"
+      }
+    },
+    {
+      "arm": "event_stage_evidence_chat (candidate, strict)",
+      "config": {
+        "allowed_sources": [
+          "chat",
+          "stage-evidence:chat",
+          "quotes"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 0.0,
+        "confirmed_promotions": 0,
+        "quote_verified": 3,
+        "unverified_events": 76,
+        "verified_events": 0
+      }
+    },
+    {
+      "arm": "event_request_lineage (weaker proxy)",
+      "config": {
+        "allowed_sources": [
+          "chat",
+          "request-lineage"
+        ]
+      },
+      "metrics": {
+        "circular_self_promotion_rate": 1.0,
+        "confirmed_promotions": 5,
+        "note": "stage-evidence 全部是 tool 证据，只能证明来自某次真实请求，不能证明 Lan 原话支持该认知"
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.169352,
+      "2": 0.062778
+    },
+    "calls": 286,
+    "total_cny": 1.23213
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "confirmed_growth"
+    },
+    {
+      "a": 0.0,
+      "b": 0.0,
+      "delta": 0.0,
+      "metric": "circular_self_promotion_rate"
+    }
+  ],
+  "evidence": {
+    "events": 76,
+    "events_with_request_lineage": 5,
+    "learned_context_history": {
+      "confirmed_observations": 0,
+      "relationship_observations": 3,
+      "versions": 51
+    },
+    "quote_verified": 3,
+    "quotes": 6,
+    "sample_limit": "关系认知历史没有任何 confirmed 晋升记录（0/3 观测），功效不足，需 S3 实测",
+    "stage_evidence_kinds": {
+      "tool": 64
+    },
+    "stage_evidence_rows": 64
+  },
+  "evidence_gaps": [
+    "learned-context 关系区历史 0 条 confirmed 晋升，回放无法验证真实晋升收益",
+    "event_ledger 的 64 条 stage-evidence 全部是 tool 类型，没有 chat 类型用户原话证据",
+    "quotes 表 6 条中仅 3 条文本能在真实用户消息里逐字命中"
+  ],
+  "experiment_id": "AB-A2",
+  "finished_at": "2026-11-26T17:20:54.402+08:00",
+  "fixed_baseline": "隔离回放 learned-context 历史 + event_ledger 证据链",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:20:54.388+08:00",
+  "status": "completed",
+  "tier": 0,
+  "title": "关系认知证据链与 confirmed 晋升边界",
+  "variable": "仅 chat: 证据 vs 允许经 stage-evidence(chat)/quotes 溯源的 event:",
+  "verdict": {
+    "reason": "当前数据没有任何 event 能凭 Lan 原话/chat 证据晋升（5/76 事件只有 tool 级请求血缘）；扩展规则不产生有效晋升，建议维持 chat-only，并让 S3 先补 chat 证据链",
+    "recommended": false,
+    "self_proof_rate": 0.0,
+    "verified_events_request_lineage": 5,
+    "verified_events_strict": 0
+  }
+}

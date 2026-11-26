@@ -1,0 +1,229 @@
+{
+  "count": 24,
+  "experiments": [
+    {
+      "experiment_id": "AB-R1a",
+      "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 22.2%->26.2%）；离线无法确认判官 token/延迟代价，不推荐仅凭检索侧扩大候选池，下游实验用 K=20 折中",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "混合候选池大小 K"
+    },
+    {
+      "experiment_id": "AB-R1b",
+      "reason": "停用词过滤在 K=8 提升 Recall +3.88pp / Precision@5 +3.55pp，门控误注入 +0.00pp；K=20 敏感性见 evidence",
+      "recommended": true,
+      "status": "completed",
+      "tier": 0,
+      "title": "中文停用词过滤"
+    },
+    {
+      "experiment_id": "AB-R1c",
+      "reason": "Min-Max 保持最优或差异不足 1pp",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "融合算法：Min-Max vs RRF(k=60) vs 纯向量"
+    },
+    {
+      "experiment_id": "AB-R4b",
+      "reason": "S3 跨事件覆盖 +1 条（需 ≥2 才达实收益门槛），平均候选池 +3.6 条",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "related_to 图谱一跳扩展"
+    },
+    {
+      "experiment_id": "AB-R4c",
+      "reason": "S1/S2 别名补召回 1 条，噪声误触 16/28",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "豆辞典/实体别名 Aho-Corasick 补召回"
+    },
+    {
+      "experiment_id": "AB-R5a",
+      "reason": "四档中 0.05 综合最优",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "长期重要度权重"
+    },
+    {
+      "experiment_id": "AB-R5b",
+      "reason": "H2：近 7 天续接增益 +1/53 条，冷门重要记忆保底 +0/0 条；证据不足（冷门重要记忆样本为 0 且增益过小），不足以支持上线",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "last_active 活跃度微调"
+    },
+    {
+      "experiment_id": "AB-R5c",
+      "reason": "假设 H1：情感加分对 S2 提升 -2.78pp，S4/S5 误召回 +0.00pp",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "valence/arousal 情感数值门控加分"
+    },
+    {
+      "experiment_id": "AB-A1a",
+      "reason": "长尾 imp=8 覆盖 +-10，噪声/工作违和 +0；对话自然度盲评留给 AB-A1b/ Tier 2",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "全库分层轮换自然联想池"
+    },
+    {
+      "experiment_id": "AB-A2",
+      "reason": "当前数据没有任何 event 能凭 Lan 原话/chat 证据晋升（5/76 事件只有 tool 级请求血缘）；扩展规则不产生有效晋升，建议维持 chat-only，并让 S3 先补 chat 证据链",
+      "recommended": false,
+      "status": "completed",
+      "tier": 0,
+      "title": "关系认知证据链与 confirmed 晋升边界"
+    },
+    {
+      "experiment_id": "AB-A3",
+      "reason": "共享上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒；HEAD 估算增量 +126.0 tokens",
+      "recommended": true,
+      "status": "completed",
+      "tier": 0,
+      "title": "learned-context 四区独立存储预算"
+    },
+    {
+      "experiment_id": "AB-R4a",
+      "reason": "story 向量覆盖 76/76 事件；Recall@8 +0.00pp，S1 +0.00pp，跨事件 +0.00pp",
+      "recommended": false,
+      "status": "completed",
+      "tier": 1,
+      "title": "events.story 纳入向量索引"
+    },
+    {
+      "experiment_id": "AB-R2",
+      "reason": "没有可用的 rerank provider、模型或价格上界；按工单规则不在无法确认价格时发起付费调用",
+      "recommended": null,
+      "status": "blocked",
+      "tier": 1,
+      "title": "Reranker 候选排序"
+    },
+    {
+      "experiment_id": "AB-R3a",
+      "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，6.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
+      "recommended": false,
+      "status": "completed",
+      "tier": 1,
+      "title": "judge timeout 4.0s vs 6.0s"
+    },
+    {
+      "experiment_id": "AB-R3b",
+      "reason": "按 (judge_recall - 误报率) 排序，llm_judge 最优；去判官会明显抬高应空误报",
+      "recommended": true,
+      "status": "completed",
+      "tier": 1,
+      "title": "判官角色：LLM 判官 vs 无判官 vs 阈值门控"
+    },
+    {
+      "experiment_id": "AB-R3c",
+      "reason": "放宽 prompt：整体判官召回 +4.00pp，应空误报 +18.18pp",
+      "recommended": false,
+      "status": "completed",
+      "tier": 1,
+      "title": "判官提示词：现行保守版 vs 适度放宽关系/共情版"
+    },
+    {
+      "experiment_id": "AB-R3d",
+      "reason": "500 字卡片召回 +2.00pp（同 prompt 重跑噪声 ~6pp 以内视为噪声），输入 token +33944",
+      "recommended": false,
+      "status": "completed",
+      "tier": 1,
+      "title": "判官卡片内容：300 字头尾 vs 500 字（含 why/importance/story摘要）"
+    },
+    {
+      "experiment_id": "AB-C1",
+      "reason": "能力描述在 HEAD 内变化时缓存命中率 5.9%，移出 HEAD 后 88.4%（HEAD 稳定时 89.5%），方向与 AB-C1 假设一致",
+      "recommended": true,
+      "status": "partial",
+      "tier": 2,
+      "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）"
+    },
+    {
+      "experiment_id": "AB-C2a",
+      "reason": "真实 555 次请求中非首轮 332 次；按空召回率 50.4% 估算每窗口节省 6563 tokens",
+      "recommended": true,
+      "status": "partial",
+      "tier": 2,
+      "title": "非首轮省略 memory.recall.empty 等空提示"
+    },
+    {
+      "experiment_id": "AB-C2b",
+      "reason": "真实诊断里 10/220 次请求注入超过 3 条；按平均记忆长度估算每窗口节省 4606 tokens",
+      "recommended": true,
+      "status": "partial",
+      "tier": 2,
+      "title": "短闲聊记忆注入上限 Top-2+1 vs 不限"
+    },
+    {
+      "experiment_id": "AB-C3",
+      "reason": "75/76 个事件 story 长于摘要+指针，平均每条注入可省 216 tokens；模型主动读全文频次与回复完整度未测",
+      "recommended": true,
+      "status": "partial",
+      "tier": 2,
+      "title": "完整 story vs 标题+因果摘要+timeline 指针"
+    },
+    {
+      "experiment_id": "AB-A1b",
+      "reason": "12 条自主唤醒切片里 0 条闲暇唤醒有可用联想候选；只加在闲暇态，任务态 8 条不受影响。自然度盲评未执行",
+      "recommended": false,
+      "status": "partial",
+      "tier": 2,
+      "title": "autonomy 闲暇唤醒低打扰联想分支"
+    },
+    {
+      "experiment_id": "AB-E1",
+      "reason": "历史数据无法验证巩固收益：证据链/有效认知样本不足，且真实巩固需要多日前瞻生成与人工验收，超出本次预算与隔离条件",
+      "recommended": null,
+      "status": "blocked",
+      "tier": 2,
+      "title": "认知巩固收益与跨时间认知修订"
+    },
+    {
+      "experiment_id": "AB-COMB",
+      "reason": "组合离线 Recall@K +3.88pp（单变量加总 +4.26pp），负交互=no；判官臂费用 ¥0.0000",
+      "recommended": true,
+      "status": "completed",
+      "tier": 2,
+      "title": "最终组合验证"
+    }
+  ],
+  "matrix_ids": [
+    "AB-R1a",
+    "AB-R1b",
+    "AB-R1c",
+    "AB-R4b",
+    "AB-R4c",
+    "AB-R5a",
+    "AB-R5b",
+    "AB-R5c",
+    "AB-A1a",
+    "AB-A2",
+    "AB-A3",
+    "AB-R4a",
+    "AB-R2",
+    "AB-R3a",
+    "AB-R3b",
+    "AB-R3c",
+    "AB-R3d",
+    "AB-C1",
+    "AB-C2a",
+    "AB-C2b",
+    "AB-C3",
+    "AB-A1b",
+    "AB-E1",
+    "AB-COMB"
+  ],
+  "note": "P6-4 正文写 21 项原子实验、工单描述写 22 项，实际矩阵表列出 24 个 ID（23 原子 + AB-COMB 组合）；本 harness 按实际表逐行覆盖 24 个。",
+  "status_counts": {
+    "blocked": 2,
+    "completed": 17,
+    "partial": 5
+  }
+}

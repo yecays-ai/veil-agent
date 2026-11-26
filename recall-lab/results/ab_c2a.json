@@ -1,0 +1,79 @@
+{
+  "arms": [
+    {
+      "arm": "omit_empty_hint",
+      "config": {},
+      "metrics": {
+        "cost_saved_cny_per_request": 0.0131262,
+        "empty_hint_bytes": 131,
+        "estimated_empty_occurrences": 167,
+        "non_first_steps": 332,
+        "saved_bytes": 21877,
+        "saved_tokens_est": 6563.1
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 378,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 6563.1,
+      "delta": 6563.1,
+      "metric": "saved_tokens_est"
+    }
+  ],
+  "evidence": {
+    "context_log_requests": 555,
+    "empty_recall_rate": 0.5045,
+    "hallucination_check": "NOT measurable offline; 必须=0 的幻觉回忆率只能由 Tier 2 真实生成证明",
+    "non_first_step_distribution": {
+      "1": 81,
+      "2": 48,
+      "3": 37,
+      "4": 32,
+      "5": 28,
+      "6": 22,
+      "7": 20,
+      "8": 15,
+      "9": 11,
+      "10": 9,
+      "11": 7,
+      "12": 4,
+      "13": 3,
+      "14": 3,
+      "15": 3,
+      "16": 2,
+      "17": 2,
+      "18": 1,
+      "19": 1,
+      "20": 1,
+      "21": 1,
+      "22": 1
+    }
+  },
+  "evidence_gaps": [
+    "仅 token/结构侧证据，无真实生成；幻觉回忆率需真实请求与盲评，本次未执行"
+  ],
+  "experiment_id": "AB-C2a",
+  "finished_at": "2026-11-26T17:26:59.695+08:00",
+  "fixed_baseline": "完整多步工具循环切片",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:59.681+08:00",
+  "status": "partial",
+  "tier": 2,
+  "title": "非首轮省略 memory.recall.empty 等空提示",
+  "variable": "tool_step>0 省略空提示 关 vs 开",
+  "verdict": {
+    "reason": "真实 555 次请求中非首轮 332 次；按空召回率 50.4% 估算每窗口节省 6563 tokens",
+    "recommended": true
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "arms": [
+    {
+      "arm": "full_story",
+      "config": {},
+      "metrics": {
+        "avg_story_chars": 961.2,
+        "events": 76,
+        "max_story_chars": 2788
+      }
+    },
+    {
+      "arm": "summary_pointer",
+      "config": {},
+      "metrics": {
+        "avg_saved_chars_per_long_event": 721.2,
+        "avg_saved_tokens_per_long_event": 216.4,
+        "summary_pointer_chars": 240
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 378,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 216.4,
+      "delta": 216.4,
+      "metric": "tokens_saved_per_injection_est"
+    }
+  ],
+  "evidence": {
+    "story_chars_distribution": {
+      "avg": 961.2,
+      "max": 2788,
+      "min": 197
+    },
+    "story_source_mix": {
+      "composed": 5,
+      "final-import": 69,
+      "model+merge": 1,
+      "tidy": 1
+    }
+  },
+  "evidence_gaps": [
+    "仅费用/结构侧证据，无真实生成；回复完整度与模型主动读全文频次需真实请求验证，本次未执行"
+  ],
+  "experiment_id": "AB-C3",
+  "finished_at": "2026-11-26T17:26:59.738+08:00",
+  "fixed_baseline": "完整长事件召回切片",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:59.732+08:00",
+  "status": "partial",
+  "tier": 2,
+  "title": "完整 story vs 标题+因果摘要+timeline 指针",
+  "variable": "注入完整 events.story vs 摘要+指针",
+  "verdict": {
+    "affected_eval_samples": 15,
+    "long_events": 75,
+    "reason": "75/76 个事件 story 长于摘要+指针，平均每条注入可省 216 tokens；模型主动读全文频次与回复完整度未测",
+    "recommended": true
+  }
+}

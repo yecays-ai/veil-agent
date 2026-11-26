@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "recall-lab eval-v2 sample",
+  "description": "One line of eval-v2.jsonl: an independently annotated real historical slice. Raw queries stay local; only the aggregate results are committed.",
+  "type": "object",
+  "required": [
+    "sample_id",
+    "category",
+    "query",
+    "expected_relevant_ids",
+    "allow_empty",
+    "labeler",
+    "human_confirmed"
+  ],
+  "properties": {
+    "sample_id": {
+      "type": "string",
+      "pattern": "^S[1-6]-[0-9]{3}$"
+    },
+    "category": {
+      "enum": [
+        "explicit_recall",
+        "empathy",
+        "cross_event",
+        "noise",
+        "trap",
+        "autonomy"
+      ]
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_relevant_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "allow_empty": {
+      "type": "boolean"
+    },
+    "key_facts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "ambiguity": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "labeler": {
+      "const": "ai-assisted"
+    },
+    "human_confirmed": {
+      "const": false
+    },
+    "context": {
+      "type": "object"
+    },
+    "source": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "noise",
+              "trap"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allow_empty": {
+            "const": true
+          },
+          "expected_relevant_ids": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "allow_empty": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "expected_relevant_ids": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "arms": [
+    {
+      "arm": "card=300",
+      "config": {
+        "card": "300",
+        "prompt": "conservative",
+        "timeout": 4.0
+      },
+      "metrics": {
+        "calls_cached": 36,
+        "calls_paid": 0,
+        "calls_total": 36,
+        "candidate_ceiling_recall": 0.7,
+        "cost_cny": 0.0,
+        "empty_correct": 5,
+        "empty_expected_n": 11,
+        "errors": {},
+        "false_positive_rate": 0.5455,
+        "judge_ndcg_at_8": 0.5518,
+        "judge_precision": 0.3808,
+        "judge_recall": 0.5533,
+        "latency": {
+          "mean_ms": 834.82,
+          "n": 36,
+          "p50_ms": 748.83,
+          "p95_ms": 1855.01
+        },
+        "picked_total": 86,
+        "samples": 36,
+        "timeouts": 0,
+        "tokens": {
+          "input": 66892,
+          "output": 404
+        }
+      }
+    },
+    {
+      "arm": "card=500",
+      "config": {
+        "card": "500",
+        "prompt": "conservative",
+        "timeout": 4.0
+      },
+      "metrics": {
+        "calls_cached": 36,
+        "calls_paid": 0,
+        "calls_total": 36,
+        "candidate_ceiling_recall": 0.7,
+        "cost_cny": 0.0,
+        "empty_correct": 5,
+        "empty_expected_n": 11,
+        "errors": {},
+        "false_positive_rate": 0.5455,
+        "judge_ndcg_at_8": 0.5514,
+        "judge_precision": 0.3707,
+        "judge_recall": 0.5733,
+        "latency": {
+          "mean_ms": 801.08,
+          "n": 36,
+          "p50_ms": 774.01,
+          "p95_ms": 1284.01
+        },
+        "picked_total": 93,
+        "samples": 36,
+        "timeouts": 0,
+        "tokens": {
+          "input": 100836,
+          "output": 431
+        }
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 377,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0.5533,
+      "b": 0.5733,
+      "delta": 0.02,
+      "direction": "better",
+      "metric": "judge_recall"
+    },
+    {
+      "a": 66892,
+      "b": 100836,
+      "delta": 33944,
+      "metric": "input_token_delta"
+    }
+  ],
+  "detail": {
+    "samples": [
+      "S1-001",
+      "S1-002",
+      "S1-003",
+      "S1-004",
+      "S1-005",
+      "S1-006",
+      "S1-007",
+      "S1-008",
+      "S2-001",
+      "S2-002",
+      "S2-003",
+      "S2-004",
+      "S2-005",
+      "S2-006",
+      "S3-001",
+      "S3-002",
+      "S3-003",
+      "S3-004",
+      "S3-005",
+      "S4-001",
+      "S4-002",
+      "S4-003",
+      "S4-004",
+      "S4-005",
+      "S5-001",
+      "S5-002",
+      "S5-003",
+      "S5-004",
+      "S5-005",
+      "S5-006",
+      "S6-001",
+      "S6-002",
+      "S6-003",
+      "S6-004",
+      "S6-005",
+      "S6-006"
+    ],
+    "subset": {
+      "autonomy": 6,
+      "cross_event": 5,
+      "empathy": 6,
+      "explicit_recall": 8,
+      "noise": 5,
+      "trap": 6
+    }
+  },
+  "evidence": {
+    "candidate_layout": "fused top-8 + vector top-8 (production recall_judge layout)",
+    "judge_model": "deepseek-flash",
+    "nondeterminism": "deepseek-flash has no fixed seed; repeated identical arms differ in picks, so small recall deltas are noise unless backed by timeout counts",
+    "sample_per_category": {
+      "autonomy": 6,
+      "cross_event": 5,
+      "empathy": 6,
+      "explicit_recall": 8,
+      "noise": 5,
+      "trap": 6
+    },
+    "samples": 36,
+    "timeout_arms": false
+  },
+  "evidence_gaps": [],
+  "experiment_id": "AB-R3d",
+  "finished_at": "2026-11-26T17:26:56.847+08:00",
+  "fixed_baseline": "保留 LLM 判官与最佳 prompt",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:56.696+08:00",
+  "status": "completed",
+  "tier": 1,
+  "title": "判官卡片内容：300 字头尾 vs 500 字（含 why/importance/story摘要）",
+  "variable": "card=300 / card=500",
+  "verdict": {
+    "card": "300",
+    "reason": "500 字卡片召回 +2.00pp（同 prompt 重跑噪声 ~6pp 以内视为噪声），输入 token +33944",
+    "recommended": false
+  }
+}

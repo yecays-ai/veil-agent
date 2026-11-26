@@ -1,0 +1,57 @@
+{
+  "arms": [
+    {
+      "arm": "cap_top2+1",
+      "config": {
+        "cap": 3
+      },
+      "metrics": {
+        "avg_memory_tokens": 255.9,
+        "excess_memories": 18,
+        "observed_requests_with_picks": 220,
+        "requests_over_cap": 10,
+        "saved_cny_per_1k_turns_est": 9.2124,
+        "saved_tokens_est": 4606.2
+      }
+    }
+  ],
+  "budget": {
+    "by_tier": {
+      "0": 0.0,
+      "1": 1.53994,
+      "2": 0.084864
+    },
+    "calls": 378,
+    "total_cny": 1.624804
+  },
+  "comparison": [
+    {
+      "a": 0,
+      "b": 4606.2,
+      "delta": 4606.2,
+      "metric": "saved_tokens_est"
+    }
+  ],
+  "evidence": {
+    "companionship_quality": "not measured offline; 陪伴自然度盲评未执行",
+    "light_chat_real_messages": 2245,
+    "recall_diagnostics_entries": 220
+  },
+  "evidence_gaps": [
+    "仅 token/结构侧证据；短闲聊注入上限会否降低陪伴自然度必须真实生成盲评，本次未执行"
+  ],
+  "experiment_id": "AB-C2b",
+  "finished_at": "2026-11-26T17:26:59.727+08:00",
+  "fixed_baseline": "完整单轮聊天切片",
+  "harness_version": "recall-lab-0.1",
+  "notes": [],
+  "started_at": "2026-11-26T17:26:59.710+08:00",
+  "status": "partial",
+  "tier": 2,
+  "title": "短闲聊记忆注入上限 Top-2+1 vs 不限",
+  "variable": "light_chat recalled 上限 3 条 vs 不限",
+  "verdict": {
+    "reason": "真实诊断里 10/220 次请求注入超过 3 条；按平均记忆长度估算每窗口节省 4606 tokens",
+    "recommended": true
+  }
+}
