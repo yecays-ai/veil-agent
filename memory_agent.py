@@ -14,6 +14,7 @@ import random
 import re
 import subprocess
 import threading
+import time
 import uuid
 
 import prompts
@@ -1095,11 +1096,13 @@ class Memory:
             try:
                 if prefetched is not None:
                     wait = prefetched_timeout if prefetched_timeout and prefetched_timeout > 0 else 30.0
+                    wait_started = time.monotonic()
                     try:
                         shared_vector = prefetched.result(timeout=wait)
                     except Exception as exc:
                         shared_error = type(exc).__name__
                         raise RuntimeError('prefetched_embedding_failed') from exc
+                    embedding_wait_ms = round((time.monotonic() - wait_started) * 1000, 1)
                     if shared_vector is not None:
                         # P6-S1 G-A05: this is the judge's embedding for the same query; the budget
                         # was already reserved and settled by the judge, so no second booking here.
@@ -1107,7 +1110,8 @@ class Memory:
                             brain_db, query, limit=asked, query_vector=shared_vector,
                             settings=settings, model=model)
                         self.last_recall_debug['retrieval'] = {
-                            'backend': 'brain', 'embedding': 'shared', **meta}
+                            'backend': 'brain', 'embedding': 'shared',
+                            'embedding_wait_ms': embedding_wait_ms, **meta}
                         return text
                 embedder = self.embedder()
                 tokens = max(512, len(query.encode('utf-8')))
@@ -1140,6 +1144,7 @@ class Memory:
                                                        'fallback': type(exc).__name__}
                 if shared_error:
                     self.last_recall_debug['retrieval']['embedding_failure'] = shared_error
+                    self.last_recall_debug['retrieval']['shared_embedding'] = 'failed'
                 try:
                     self.store.append(self.diagnostics, {
                         'time': self.budget.clock() if getattr(self, 'budget', None) else '',
@@ -1154,8 +1159,9 @@ class Memory:
             try:
                 text, meta = brain_retrieval_search(
                     brain_db, query, limit=asked, embedder=None, settings=settings, model=model)
+                previous = self.last_recall_debug.get('retrieval') or {}
                 self.last_recall_debug['retrieval'] = {
-                    'backend': 'brain', 'degraded': 'keyword_only', **meta}
+                    **previous, 'backend': 'brain', 'degraded': 'keyword_only', **meta}
                 return text
             except Exception as exc:
                 self.last_recall_debug['retrieval'] = {'backend': 'brain',
@@ -1170,6 +1176,23 @@ class Memory:
                 return ''
         return self.call('breath_search', {
             'query': query, 'mode': mode, 'with_ids': True, 'max_results': asked})
+
+    def _merge_embedding_wait(self, debug, judge):
+        """Record the shared embedding's real wait time in the turn diagnostics.
+
+        judge.last_choice starts its own clock after search_candidates already consumed the same
+        future, so its embedding_seconds is usually 0 on the shared path. The retrieval side measured
+        the actual wait; copy it over for P4/P5 and keep the source explicit.
+        """
+        retrieval = debug.get('retrieval') or {}
+        wait_ms = retrieval.get('embedding_wait_ms')
+        if wait_ms is None:
+            return
+        debug['judge']['embedding_wait_ms'] = wait_ms
+        try:
+            judge.last_choice['embedding_wait_ms'] = wait_ms
+        except Exception:
+            pass
 
     def assisted_recall(self, query, recent, settings, normal):
         """Search again with the last rounds, keep only candidates close to that text; may keep none."""
@@ -1575,16 +1598,20 @@ class Memory:
                                       candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
                 self.last_recall_debug['vector'] = list(self.last_recall_debug['judge'].get('vector') or [])
                 # Review fix: "nothing relevant to her sentence" is an answer about related recall only.
                 # It no longer vetoes a memory that surfaces on its own; the two paths are deduped below.
             except JudgeFailed as failure:
                 # P6-S1 G-A12: keep the failing stage and both timings in the turn diagnostics so P4/P5
                 # can tell normal-empty / embedding-timeout / model-timeout / degraded-recall apart.
+                # Keep the real candidate count from last_choice: 0 would hide how many cards the
+                # failed request actually carried.
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self.last_recall_debug['judge'].update({
                     'status': 'failed', 'reason': failure.reason, 'detail': failure.detail,
-                    'candidates': 0, 'picked': []})
+                    'picked': []})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
                 self.last_recall_debug['degraded'] = {
                     'stage': 'judge', 'reason': failure.reason, 'detail': failure.detail,
                     'fallback': 'pool' if wake else 'today_pool'}
@@ -1593,8 +1620,9 @@ class Memory:
             except Exception as exc:
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self.last_recall_debug['judge'].update({
-                    'status': 'failed', 'candidates': 0, 'picked': [],
+                    'status': 'failed', 'picked': [],
                     'reason': 'unexpected', 'detail': type(exc).__name__})
+                self._merge_embedding_wait(self.last_recall_debug, judge)
                 self.last_recall_debug['degraded'] = {
                     'stage': 'judge', 'reason': 'unexpected', 'detail': type(exc).__name__,
                     'fallback': 'pool' if wake else 'today_pool'}

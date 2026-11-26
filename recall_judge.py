@@ -336,7 +336,7 @@ class RecallJudge:
                 vectors = reader.all_vectors()
                 stored_model = reader.embedding_model()
             current_model = str((getattr(self.memory, 'cfg', None) and
-                                  getattr(self.memory.cfg, 'memory', {}) or {}).get('model') or '')
+                                  getattr(self.memory.cfg, 'memory', {}) or {}).get('model') or '').strip()
             # P6-S1 G-A14: never compare vectors produced by a different embedding model. If the
             # writer recorded a model and the configured one changed, the vector channel is stale;
             # the judge keeps its keyword-only candidate pool and the diagnostic says why.

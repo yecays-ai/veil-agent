@@ -97,6 +97,19 @@ class BrainAuthority:
         # would wrongly skip the first retry on the CI machine.
         if self._last_pending_retry and now - self._last_pending_retry < self._pending_retry_seconds:
             return
+        # P6-S1 post-merge review: after an embedding-model switch every stored vector belongs to
+        # the old model. Skip the retry before taking the write lock / opening a payment path; the
+        # explicit embedding_reindex script is the intended operator step, not repeated paid calls.
+        model = self.embedding_model()
+        stored_model = ''
+        try:
+            import brain_read
+            with brain_read.BrainRead(self.db_path) as reader:
+                stored_model = reader.embedding_model()
+        except Exception:
+            stored_model = ''
+        if stored_model and model and stored_model != model:
+            return
         self._last_pending_retry = now
         connection = None
         try:

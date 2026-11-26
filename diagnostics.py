@@ -924,7 +924,8 @@ def trace(root, role, request_id='', run_id='', call_id=''):
         if ids and _text(row.get('request_id')) in ids:
             chain['recall'] = {key: row.get(key) for key in
                                ('ombre', 'hidden', 'judge', 'dropped', 'injected',
-                                'budget_dropped', 'failure', 'query_chars')}
+                                'budget_dropped', 'failure', 'query_chars',
+                                'retrieval', 'degraded')}
             break
     for row in tools:
         if only_call:

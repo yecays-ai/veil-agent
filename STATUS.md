@@ -1,27 +1,30 @@
 # 当前状态
 
-> 更新时间：2026-11-26T08:20:00Z（P6-S2 合并后加固 PR #451 待合并；P6-S1 已合并）
+> 更新时间：2026-11-26T09:20:00Z（P6-S2 与 P6-S1 已合并；P6-S1 合并后加固进行中；P6-S4 进行中）
 
-## P6-S2 · 统一记忆写入事务、防丢稿、证据链与协同恢复（已合并 + 合并后加固 PR #451）
+## P6-S2 · 统一记忆写入事务、防丢稿、证据链与协同恢复（已合并 + 合并后加固）
 
-- **合并**：PR #450 已合并为 `774b4bd6`（squash），分支已删除；main 最新 CI 全绿（audit、offline-chat ubuntu/windows ×3.11/3.12、scanner-report-smoke）。
-- **交付核验**：独立只读核验 43 项 CodeRabbit 意见全部能在 HEAD 定位到修复与回归测试；P6-S2 专项、事件、经历、Brain 与 P3-4 相关 264/264 测试通过（隔离、无付费调用）。
-- **合并后加固（PR #451，分支 `ticket/453-p6-s2-lock-recovery-hardening`，待合并）**：独立审查发现 2 处低风险问题，已独立 hotfix 修复，不混入 P6-S1：
-  1. 锁状态事务内复核：`record()/revise()` 的 `locked` 检查在事务外，`commit_event_bundle()` 只在事务内复核 `seen_projection`；现在 bundle 在 `BEGIN IMMEDIATE` 后按目标 `memory_id` 复核 `sidecar_state.locked`，锁定时绝不覆盖正文/标题/向量/版本，新阶段照常提交并保留已审故事与 `pending_review`/`event-review` 证据；`revise()` 命中锁返回 `locked`；`retry_pending()` 锁内保持 pending、解锁可补提交；`retry_dirty()` 锁内不重建/不保存并保留待处理标志。事务原子性、单版本与 digest 逻辑未变。
-  2. 恢复时间戳严格化：`scripts/p6_s2_recover_history.py` 对缺失/无法解析的消息时间戳直接拒绝整批，不再静默丢弃后提交 `source_key`；修好数据后重跑可补回。
-- **验证**：新增 `tests/test_p6_s2_hotfix_453.py` 6 项回归（修复前 5/5 与 1/1 红，修复后全绿）；P6-S2 专项、事件/经历、Brain 与 P3-1/P3-2/P3-3 等 338/338 通过；全量 `unittest discover` 2305 项中 22 项失败/错误与基线 `774b4bd` 干净 worktree 完全一致（本机缺 python-docx、无 opencode 服务、maintenance/delivery 环境限制），非本单引入。PR #451 最终提交 `666277b` CI 全绿（offline-chat ubuntu/windows × py3.11/3.12、audit、scanner-report-smoke），CodeRabbit 1 条 Major 已在本 PR 修复，Cubic 额度不可用；等待合并。
-- **正式数据红线**：未对正式 `data/peter` 执行恢复；维护窗口仍需先 bundle + dry-run 并由 Lan 确认。
+- **合并**：PR #450 squash 合并为 `774b4bd`；合并后加固 PR #451 squash 合并为 `beb5fa3`（锁状态事务内复核、恢复时间戳严格化、retry_dirty 锁定路径），CI 全绿；加固后 P6-S2 定向套件 338/338 通过。
+- **核验**：独立只读核验确认 #450 的 43 项审查意见全部能在对应代码/回归中定位；#451 的 1 条 CodeRabbit 实质意见（retry_dirty 锁定路径）已在 PR 内修复并重新通过 CI。
+- **正式数据红线**：未对正式 `data/peter` 执行恢复；维护窗口仍需先 bundle + dry-run，经 Lan 确认后再 apply。
 
-## P6-S1 · 检索、卡片与元数据确定性修复（已合并）
+## P6-S1 · 检索、卡片与元数据确定性修复（#452 已合并；合并后加固进行中）
 
-- **合并**：PR #452 已合并为 `fd59f7a6`；交付 6 项代码修复、17 项新增回归测试与隔离 Baseline-1（18/18 检查通过，报告 `docs/reports/p6-s1-baseline-1-20261126.md`），相关历史套件失败集与 main 基线一致（22 个既有环境/历史失败，无本单引入回归）。
-- **验收步骤**：问一件 10 月底至 11 月中旧事的结尾细节，确认能接上完整经过；让他按日期范围主动检索；P4 召回诊断中每轮仅一次 Embedding、判官失败能区分 embedding/model 原因。
+- **合并**：PR #452 squash 合并为 `fd59f7a`，CI 全绿；交付 6 项修复、17 项新增回归、Baseline-1（20/20）、定向回归 450/450；全量套件失败集与 `main` 基线逐条一致（无本单引入回归）。
+- **合并后独立审查**：发现 2 个阻断项与若干诊断缺口——① 换 Embedding 模型后 `retry_pending_vectors` 先付费 embed 再拒绝，pending 永久不可恢复并重复扣费；② 新结构化诊断未透出到 P4/P5 读取的 API 白名单。另有判官失败候选数被覆盖为 0、共享 Embedding 等待时间未记录、关键词降级原因丢失等。
+- **加固单**：分支 `ticket/455-p6-s1-postmerge-hardening` 已修复上述问题：重试前置模型一致性校验（0 付费/0 写入）、`scripts/embedding_reindex.py` 显式重建流程、API 透传 retrieval/degraded、诊断修正与日期反转校验；新增 7 项回归、Baseline-1 扩为 20 项全通过。桌面 UI 展示按 P6-4 职责边界归 P6-S7。
+- **验收步骤**：见 `docs/tickets/455-p6-s1-postmerge-hardening.md` 与 `docs/tickets/452-p6-s1-retrieval-determinism.md`。
+
+## P6-S4 · 统一消融实验（进行中）
+
+- 分支 `ticket/454-p6-s4-ablations`，隔离 `recall-lab` harness + eval-v2（73 条，AI 辅助标注、未经 Lan 人工确认）+ 预算台账（¥20 硬上限）。
+- 当前进度与最终报告以该 PR 的 `docs/reports/p6-s4-*` 为准；S4 达到可合并状态后停止，不自行合并、不启动 S3/S5/S6/S7。
 
 ## P6 路线
 
-`P6-S0` (#449)、`P6-S2` (#450)、`P6-S1` (#452) 已合并；P6-S2 合并后加固由 #451 收尾。之后进入 `P6-S4`（¥20 硬上限消融实验）。P6 不改 M2 的 `input_token_ratio/tool_groups`、不改 M3 的缓存协议，也不削减瞄一眼/弹幕连续性。
+`P6-S0`（#449）→ `P6-S2`（#450 +#451）→ `P6-S1`（#452 + 本加固）→ `P6-S4` 进行中；之后按 S4 结论实施 S3/S5/S6/S7。P6 不改 M2 的 `input_token_ratio/tool_groups`、不改 M3 的缓存协议，也不削减瞄一眼/弹幕连续性。
 
 ## 正式底座
 
-- P3-0 至 P3-4 已合并并完成正式维护部署；全局管理中心首批 `#448` 已合并。
-- 正式运行目录固定跟随 `main`。P6-S2/P6-S1 均未向正式 Peter 发消息、未启停正式进程、未修改正式源码或真实记忆；所有写入与恢复演练均在独立 worktree 隔离副本完成。
+- P3-0 至 P3-4 已合并并完成正式维护部署；#446/#448 已合并。
+- 正式运行目录固定跟随 `main`。P6 各单未向正式 Peter 发消息、未启停正式进程、未修改正式源码或真实记忆；所有写入与恢复演练均在独立 worktree 隔离副本完成。
