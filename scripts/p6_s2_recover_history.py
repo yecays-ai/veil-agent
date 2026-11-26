@@ -188,7 +188,8 @@ def _load_chat_slice(chat_path: Path, from_time: str, to_time: str) -> list[dict
     """Messages inside the inclusive window, compared as instants rather than as strings.
 
     ``04:00:00+00:00`` and ``12:00:00+08:00`` are the same moment; a string comparison would keep one
-    out of a ``11:00+08:00``..``13:00+08:00`` window (P6-S2 review).
+    out of a ``11:00+08:00``..``13:00+08:00`` window (P6-S2 review). A timestamp that cannot be parsed
+    (or is missing) refuses the batch instead of silently shrinking it (ticket 453).
     """
     start = _parse_time(from_time, '--from-time')
     end = _parse_time(to_time, '--to-time')
@@ -198,11 +199,15 @@ def _load_chat_slice(chat_path: Path, from_time: str, to_time: str) -> list[dict
     for item in _read_jsonl(chat_path, strict=True):
         raw = item.get('ts') or item.get('time') or item.get('created_at')
         if not raw:
-            continue
+            # Ticket 453: a message that cannot be placed in the window must refuse the batch. Dropping
+            # it while still committing the source_key made the loss permanent (a rerun said
+            # already_recovered), so a recovery can only commit a slice it can prove complete.
+            raise ValueError('a chat message has no timestamp; refusing a partial recovery')
         try:
             stamp = _parse_time(raw, 'message time')
-        except ValueError:
-            continue
+        except ValueError as exc:
+            raise ValueError(
+                f'message time {raw!r} is not an ISO timestamp; refusing a partial recovery') from exc
         if start <= stamp <= end:
             rows.append(item)
     return rows
