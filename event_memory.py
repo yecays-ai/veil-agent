@@ -893,6 +893,7 @@ class EventMemory:
     @_serialized
     def retry_pending(self, limit=10):
         fixed = 0
+        attempted = 0
         made = {}
         try:
             for row in self.store.read(self.projections_path):
@@ -914,7 +915,9 @@ class EventMemory:
             # Keep the newest wording and retire the old row instead of committing both.
             clean = {key: value for key, value in stage.items() if key != 'event_row'}
             self.store.append(self.stages_path, {**clean, 'state': 'superseded'})
-        for stage in list(chosen.values())[:limit]:
+        for stage in chosen.values():
+            if attempted >= limit:
+                break
             snapshot = stage.get('event_row')
             if not isinstance(snapshot, dict):
                 continue
@@ -938,6 +941,15 @@ class EventMemory:
                 event = {**snapshot, 'story': self._story(event_id, extra=clean), 'dirty': True}
                 if not event.get('memory_id') and projected:
                     event['memory_id'] = projected
+            if event.get('memory_id') and callable(self.locked):
+                try:
+                    if self.locked(event['memory_id']):
+                        # Ticket 456: keep the stage pending for the unlock, but skip it
+                        # without spending a batch slot so later unlocked stages are not starved.
+                        continue
+                except Exception:
+                    continue
+            attempted += 1
             # P6-S2 review: a stage whose bundle failed had its evidence and quotes rolled back with
             # that transaction. Recovering it must go through the same bundle path and commit the
             # stage together with its evidence; marking it committed alone would lose the chain.

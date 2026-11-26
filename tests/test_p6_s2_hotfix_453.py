@@ -236,6 +236,38 @@ class TestLockedRetryDirty(LockRecheckFixture):
         self.assertIn('ferry timetable', self.memory.content_for(self.memory_id, refresh=True))
 
 
+class TestLockedRetryPendingBatch(LockRecheckFixture):
+    def _journal_pending(self, event_id, event_row, stage_id, at, text):
+        stage = {
+            'stage_id': stage_id, 'event_id': event_id, 'at': at, 'saved_at': at,
+            'at_known': True, 'text': text, 'entities': [],
+            'facts': {'dates': [], 'numbers': [], 'files': []}, 'why': '',
+        }
+        self.memory.store.append(self.events.stages_path,
+                                 {**stage, 'state': 'pending', 'event_row': event_row})
+
+    def test_locked_pending_stages_do_not_starve_an_unlocked_one(self):
+        other = self.events.record('the locked experience', 'Locked', at='2026-11-25T08:30:00+08:00')
+        self.sidecar.set_locked(other['memory_id'], True)
+        locked_row = self.events.events()[other['event_id']]
+        for index in range(10):
+            self._journal_pending(other['event_id'], locked_row, f'st-locked-{index}',
+                                  f'2026-11-25T08:{index:02d}:00+08:00',
+                                  f'locked pending stage {index}')
+        unlocked_row = self.events.events()[self.event_id]
+        self._journal_pending(self.event_id, unlocked_row, 'st-unlocked-1',
+                              '2026-11-25T11:30:00+08:00', 'unlocked pending stage')
+        # 10 older pending stages all point at a locked memory; they must not consume the batch
+        # slots, or the 11th (unlocked) stage can never be recovered.
+        self.assertEqual(self.events.retry_pending(), 1)
+        pending_ids = {row.get('stage_id') for row in self.events.pending_stages()}
+        self.assertIn('st-locked-0', pending_ids, 'a locked stage stays retryable')
+        self.assertEqual(len(pending_ids), 10)
+        committed = {stage.get('stage_id') for stage in self.events.stages(self.event_id)}
+        self.assertIn('st-unlocked-1', committed,
+                      'an unlocked pending stage behind locked ones must still recover')
+
+
 class RecoveryTimestampFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
