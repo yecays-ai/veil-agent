@@ -4449,9 +4449,6 @@ class Chat:
                 + '、'.join(usage) + '。已裁剪全部历史与记忆，仍无法容纳；请更换更大输入上限的模型或减少启用的工具。'
             )
 
-        if defer_recall and self.memory:
-            recalled_memories = self.memory.reuse_recall(history, recalled_memories, calibration)
-
         kept = sum(m['role'] == 'user' for m in history)
         self.trim_note = None
         if (len(history) < len(self.history) or len(recalled_memories) < len(recalled)) and not self.trim_noted:

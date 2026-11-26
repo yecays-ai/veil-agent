@@ -376,7 +376,11 @@ max_steps = 2
         joined = '\n'.join(content for _, content in said)
         self.assertNotIn('noise noise noise noise noise noise', joined)
 
-    def test_full_memory_in_retained_history_is_not_sent_twice(self):
+    def test_removed_history_reuse_never_hides_the_current_recall_block(self):
+        # P6-S1: reuse_recall() looked for memory text in chat history messages while the blocks are
+        # injected in a system message, so it matched nothing (audit: 0/220). It was removed on
+        # purpose; this test locks in that removing it never drops the block the current turn decided
+        # to inject, even when an older history copy happens to contain the same text.
         self.rows = {'video': {'content': 'A brass lamp film. The ending is a fictional blue key.',
                                'title': 'Video night'}}
         block = '[bucket_id:video]\n' + self.rows['video']['content']
@@ -387,11 +391,11 @@ max_steps = 2
         chat, model, memory = self.build(9000)
         chat.send('还记得 brass lamp video night 吗', message_id='reuse-q')
         sent = model.call_args.args[0]
-        self.assertTrue(any(row['role'] == 'assistant' and row.get('content') == block for row in sent))
         recall_head = prompts.text('memory.recall.head')
-        self.assertFalse(any(str(row.get('content')).startswith(recall_head)
-                             and block in str(row.get('content')) for row in sent))
-        self.assertEqual(['video'], memory.last_recall_debug['reused'])
+        self.assertTrue(any(str(row.get('content')).startswith(recall_head)
+                            and block in str(row.get('content')) for row in sent))
+        self.assertEqual([], memory.last_recall_debug['reused'])
+        self.assertFalse(hasattr(memory, 'reuse_recall'))
 
     def test_empty_memory_headers_cannot_displace_recent_history(self):
         self.seed_history()
@@ -605,24 +609,20 @@ class FinalStateTests(MemoryLevelBudgetTests):
                                 if item['reason'] == 'budget'))
 
 
-class EffectiveHistoryReuseTests(MemoryLevelBudgetTests):
-    def test_only_a_full_current_block_in_retained_history_is_reused(self):
+class EffectiveHistoryReuseRemovedTests(MemoryLevelBudgetTests):
+    def test_history_copy_never_suppresses_the_recall_block(self):
+        # P6-S1: the old reuse_recall() searched chat history for memory text that is injected in a
+        # system message, so it never matched (0/220 in the audit). It was removed; a history copy
+        # must not make the current turn skip a memory it decided to inject.
         story = 'The first brass lamp.\n\n' + 'A long middle. ' * 20 + 'UNIQUE_END.'
         memory = self.memory({'long': {'content': story, 'title': 'The brass lamp'}})
         memory.context('brass lamp', include_opening=False, defer=True)
         messages = memory.finish_recall(space=3000)
         block = memory._pending_recall['blocks'][0]['text']
-        for history in ([], [{'role': 'assistant', 'content': block[:120]}],
-                        [{'role': 'assistant', 'content': block.replace('UNIQUE_END.', 'OLD_END.')}]):
-            out = memory.reuse_recall(history, messages, 0.4)
-            self.assertIn(block, out[-1]['content'])
-            self.assertEqual([], memory.last_recall_debug['reused'])
-        out = memory.reuse_recall([{'role': 'assistant', 'content': block}], messages, 0.4)
-        self.assertNotIn(block, out[-1]['content'])
-        self.assertEqual(['long'], memory.last_recall_debug['reused'])
-        self.assertEqual([], memory.last_recall_debug['injected'])
-        self.assertEqual(['long'], memory.last_injected_refs)
-        self.assertEqual(estimate_message_tokens(out, 0.4), memory.last_memory_budget['memory_used'])
+        self.assertFalse(hasattr(memory, 'reuse_recall'))
+        self.assertIn(block, messages[-1]['content'])
+        self.assertEqual([], memory.last_recall_debug['reused'])
+        self.assertIn('long', memory.last_injected_refs)
 
 
 class BoundaryTests(unittest.TestCase):

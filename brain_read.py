@@ -111,6 +111,18 @@ class BrainRead:
             vectors[memory_id] = values.tolist()
         return vectors
 
+    def embedding_model(self):
+        """The embedding model that produced the stored vectors, when the writer recorded it.
+
+        P6-S1 G-A14: vectors from two embedding models must never be mixed; readers use this to
+        degrade to the keyword channel with a diagnostic instead of comparing incompatible vectors."""
+        try:
+            row = self.connection.execute(
+                "SELECT value FROM meta WHERE key='embedding_model'").fetchone()
+        except sqlite3.OperationalError:
+            return ''
+        return str((row[0] if row else '') or '').strip()
+
     def events(self, limit=100):
         return [{'event_id': row['event_id'], 'title': row['title'], 'status': row['status'],
                  'first_at': row['first_at'], 'last_at': row['last_at'],

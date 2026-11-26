@@ -1,26 +1,24 @@
 # HANDOFF
 
-> 更新时间：2026-11-26T03:58:00Z
+> 更新时间：2026-11-26T07:10:00Z
 
-## P6-S2 · `ticket/450-p6-s2-write-contract-and-recovery`
+## P6-S2 · 统一记忆写入事务（已合并，独立加固进行中）
 
-- **停点**：已完成 CodeRabbit 二轮全部 14 项（11 条行内 + 3 条 diff 外）定点修复及新增回归测试，已推送至 PR #450 并关闭本轮已解决讨论串，等待 CI 与审查。正式目录和真实记忆未写入。
-- **核心交付**：
-  - `BrainAuthority.commit_event_bundle()` 已接入 `EventMemory.record()`、`revise()` 与 `retry_pending()`；`record()` 在生成故事前取基线并保留 `locked` 分支的 `last_story_at`；`revise()` 未提供新标题时不覆盖面板标题；`retry_pending()` 缺 `memory_id` 时同步创建投影与 `quotes`。
-  - `brain_writer` 将 `ensure_schema()` DDL 与 `retry_pending_vectors()` 状态变更均与 `apply_digest()` 纳入同一 SQLite 事务；`apply_update_memory(..., archive_raw=True)` 在 Brain `hold` 重写时由单条版本保存完整旧 Markdown（`restore_version` 安全剥离 front matter）。
-  - `event_memory` 统一 `facts()` 与 `_date_parts()` 对含年份中文日期的提取，阶段已知年份时严格要求匹配日期同年份（不再被编号等独立数字拼凑），`timeline()` 对模型可见证据边界统一脱敏 API Key（`chat.jsonl` 原文不变）。
-  - `ExperienceMemory.__init__` 为常驻 `self.events` 绑定 `self.sidecar.locked`；`_save_update` 区分目标缺失与 `'locked'`。
-  - `brain_backup._merge_new_rows` 对缺失 `sidecar_events` 跳过合并；`scripts/p6_s2_recover_history.py` 追加恢复 marker 前检查末尾行完整性，缺少换行时自动补换行、末行损坏则拒绝写入。
-- **验证证据**：`test_p6_s2_review_fixes`、`test_p6_s2_write_and_recovery`、`test_event_memory`、`test_experience_memory`、全部 `brain_*` 与 `memory_*`、`test_p3_4_cleanup` 共 15 个套件 **291/291 通过**。
+- **停点**：PR #450 已合并为 `774b4bd6`；独立核验 43 项审查意见全部修复，264/264 相关测试通过，CI 全绿。
+- **合并后加固**：另发现 2 处低风险问题——`EventMemory.record()/revise()` 的锁状态在事务外检查（面板加锁与 bundle 提交之间的毫秒窗口可能让自动故事覆盖锁定正文一次）；恢复脚本对无法解析时间戳静默跳过却仍提交 source_key。二者由独立 hotfix 分支/PR 处理（不与 P6-S1 混提），完成后更新本文件。
+- **正式数据红线未变**：不得对正式 `data/peter` 执行历史恢复；维护窗口必须先 bundle + dry-run，经 Lan 确认后再 apply；代码回退不得用旧 DB 覆盖新增记忆。
 
-## 下一个窗口第一步
+## P6-S1 · 检索、卡片与元数据确定性修复（施工中）
 
-1. 读取 PR 最新 CI 与审查结论，只处理功能、数据完整性、隐私或安全方面的实质问题。
-2. 本单只要求提交 PR 后停止，不得合并；也不得对正式 `data/peter` 执行历史恢复。
-3. 合并后再从最新 `main` 开 P6-S1 独立 worktree。
-
-## 维护窗口红线
-
-- 正式恢复必须先创建协同 bundle，再 dry-run 给 Lan 看 58 条消息的目标与追加预览；只有 Lan 明确确认后才执行 apply。
-- 代码回退不得用旧 DB 覆盖新增记忆。恢复必须走 `restore_bundle`，并检查 0 重复、0 悬空引用。
-- `.local-tmp/p6-s2-history-preview/` 是 worktree 内忽略的隔离副本，不提交；其中含真实数据副本，worktree 清理时一并删除，不得发布到 PR。
+- **工作树/分支**：`E:\Peter-Agent\VEIL\worktrees\452-p6-s1`，`ticket/452-p6-s1-retrieval-determinism`。
+- **已完成**：
+  - `recall_judge.split_card()/card_text()` 兼容 LF/CRLF/BOM；`brain_writer._with_metadata()` 原位更新 CRLF front matter，不批量改写历史记忆（G-A04）。
+  - `Memory.context()` 将 `judge.prefetch()` 的 query_vector 共享给 `search_candidates()`，同轮一次 Embedding、一次预留/结算；判官未启用时检索自己 Embedding（G-A05）。
+  - `memory_native` → `BrainAuthority.breath_search` → `brain_retrieval.search_text` 全链路传 date_from/date_to，按创建日含边界过滤；权重读 `[memory.retrieval]`（G-A09）。
+  - 解除 `dim==1024` 硬编码；meta.embedding_model 记录/校验模型身份，维度或模型不兼容时跳过/降级并留诊断，写入侧拒绝混写向量、pending 恢复保留（G-A14）。
+  - 判官 embedding 与模型调用分离计时，诊断区分正常空召回/embedding 失败/模型超时/降级回退（G-A12）。
+  - 移除 `reuse_recall()` 与随机 drift 死分支及相关诊断；保留 followup carry、cooldown、is_followup、last_injected_refs、轮内去重与 relationship_base 去重（G-B01/G-A08）。
+  - 新增 `tests/test_p6_s1_deterministic_fixes.py`（17 项）与 `scripts/p6_s1_baseline.py`（Baseline-1，18/18 项检查通过），报告见 `docs/reports/p6-s1-baseline-1-20261126.md`。
+- **验证**：相关历史套件失败集与 `main` 基线完全一致（无本单引入回归）；新增测试全绿；Baseline-1 隔离、零付费、可复跑。
+- **下一个窗口第一步**：提交 PR → 请求 CodeRabbit 审查并修实质问题 → CI 全绿后合并 → 同步 main，从最新 main 开 P6-S4。
+- **S4 前置**：P6-S4 的 eval-v2 候选材料已离线准备（隔离副本、AI 辅助标注、未经 Lan 人工确认），位于 `.local-tmp/s4-prep`，未进 git；S4 开工时按工单重新核对标注独立性，再提交脱敏材料。

@@ -62,7 +62,9 @@ class BrainAuthority:
             return ''
         if name == 'breath_search':
             return self.breath_search(args.get('query') or '',
-                                      args.get('max_results') or 8, embedder)
+                                      args.get('max_results') or 8, embedder,
+                                      date_from=str(args.get('date_from') or ''),
+                                      date_to=str(args.get('date_to') or ''))
         raise ValueError('unsupported authority tool: %s' % name)
 
     def _write(self, name, args, embedder):
@@ -213,11 +215,22 @@ class BrainAuthority:
         return '\n\n'.join('[bucket_id:%s] %s\n%s' % (row['id'], row['title'] or row['name'] or row['id'],
                                                        row['body']) for row in rows)
 
-    def breath_search(self, query, limit, embedder):
+    def retrieval_settings(self):
+        """The operator's [memory.retrieval] weights, not a second hard-coded default (P6-S1 G-A09)."""
+        import brain_retrieval
+        return brain_retrieval.load_settings((getattr(self.cfg, 'memory', {}) or {}).get('retrieval'))
+
+    def embedding_model(self):
+        return str(((getattr(self.cfg, 'memory', {}) or {}).get('model')) or '').strip()
+
+    def breath_search(self, query, limit, embedder, *, date_from='', date_to=''):
+        """Active search: the same BrainRetrieval path automatic recall uses, including the
+        configured weights and the date_from/date_to filter (P6-S1 G-A09)."""
         import brain_retrieval
         text, _meta = brain_retrieval.search_text(
             self.db_path, query, limit=limit, embedder=embedder,
-            settings={'backend': 'brain', 'weight_vector': 0.65, 'weight_keyword': 0.35})
+            settings=self.retrieval_settings(), model=self.embedding_model(),
+            date_from=date_from, date_to=date_to)
         return text
 
     def commit_event_bundle(self, *, event, stage=None, projection=None, title='',
@@ -237,6 +250,7 @@ class BrainAuthority:
                     memory_id = event.get('memory_id')
                     result = None
                     vector, state = (None, None)
+                    embed_model = brain_writer.embedding_model_of(embed)
                     if projection is not None and str(projection).strip():
                         vector, state = brain_writer._prepare_memory_vector(projection, None, embed)
                     connection.execute('BEGIN IMMEDIATE')
@@ -253,7 +267,7 @@ class BrainAuthority:
                                 changes['title'] = title[:100]
                             result = brain_writer.apply_update_memory(
                                 connection, memory_id, changes, vector=vector, state=state,
-                                operation_reason=operation_reason)
+                                operation_reason=operation_reason, embedder_model=embed_model)
                         else:
                             record = {
                                 'body': projection,
@@ -264,7 +278,8 @@ class BrainAuthority:
                                 'domain': [], 'tags': [],
                             }
                             result = brain_writer.apply_create_memory(
-                                connection, record, vector=vector, state=state)
+                                connection, record, vector=vector, state=state,
+                                embedder_model=embed_model)
                             memory_id = result['memory_id']
                             event = {**event, 'memory_id': memory_id}
                     brain_events.upsert_event(connection, dict(event), commit=False, ensure=False)

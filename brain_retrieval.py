@@ -6,7 +6,6 @@ authoritative read/write path are unchanged.
 from __future__ import annotations
 
 import json
-import random
 import re
 import sqlite3
 import threading
@@ -21,8 +20,22 @@ DEFAULTS = {
 VISIBLE_BUCKETS = ('dynamic', 'permanent')
 HIDDEN_TYPES = ('archived', 'letter', 'plan', 'i', 'feel')
 ID_BLOCK = '=== ombre:result-ids ==='
-DRIFT_MARK = '=== 忽然想起来（非检索命中） ==='
 WORD = re.compile(r'[\u4e00-\u9fffA-Za-z0-9_]')
+DATE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+
+
+def created_date(value):
+    """YYYY-MM-DD of a stored created timestamp, or '' when it cannot be read as a valid date."""
+    match = DATE.search(str(value or ''))
+    if not match:
+        return ''
+    text = '%s-%s-%s' % match.groups()
+    try:
+        from datetime import date
+        date.fromisoformat(text)
+    except ValueError:
+        return ''
+    return text
 
 
 def load_settings(raw):
@@ -68,6 +81,7 @@ class BrainIndex:
         self.rows = []
         self.vectors = {}
         self.bm25 = None
+        self.embedding_model = ''
 
     def _signature(self):
         try:
@@ -98,13 +112,21 @@ class BrainIndex:
                 rows = connection.execute(query, VISIBLE_BUCKETS).fetchall()
             visible = [row for row in rows if (row[6] or '') not in HIDDEN_TYPES]
             vectors = {}
+            # P6-S1 G-A14: no hard-coded dimension. The stored length is the vector's real size;
+            # compatibility with the current query vector is checked per row in _vector_scores/filter.
             for memory_id, dim, blob in connection.execute(
                     'SELECT memory_id, dim, vector FROM vectors'):
-                if dim == 1024 and blob:
+                if blob:
                     import array
                     values = array.array('f')
                     values.frombytes(blob)
                     vectors[memory_id] = values.tolist()
+            try:
+                row = connection.execute(
+                    "SELECT value FROM meta WHERE key='embedding_model'").fetchone()
+                embedding_model = str((row[0] if row else '') or '').strip()
+            except sqlite3.OperationalError:
+                embedding_model = ''
             from rank_bm25 import BM25Okapi
             tokenized = [tokenize((row[1] or '') + '\n' + (row[2] or '')) for row in visible]
             bm25 = BM25Okapi(tokenized) if tokenized else None
@@ -112,6 +134,7 @@ class BrainIndex:
             connection.close()
         # All fields are replaced together so a concurrent reader sees one consistent version.
         self.rows, self.vectors, self.bm25 = visible, vectors, bm25
+        self.embedding_model = embedding_model
 
     def refresh(self, force=False):
         signature = self._signature()
@@ -147,27 +170,77 @@ class BrainIndex:
         raw = bm25.get_scores(tokens)
         return {rows[index][0]: float(score) for index, score in enumerate(raw)}
 
-    def search(self, query, limit=8, embedder=None):
-        """Rank visible memories: vector cosine plus BM25, normalized and fused."""
+    def search(self, query, limit=8, embedder=None, *, query_vector=None,
+               model='', date_from='', date_to='', diagnostics=None):
+        """Rank visible memories: vector cosine plus BM25, normalized and fused.
+
+        P6-S1: (a) the caller may pass one shared query vector, so one turn pays for one embedding;
+        (b) only vectors written by the configured embedding model, with the same dimension as the
+        query vector, enter the vector channel — a mismatched model/size degrades to the keyword
+        channel with a diagnostic instead of mixing incompatible vectors; (c) date_from/date_to
+        filter by created day, inclusive, and report how many rows were filtered.
+        """
         self.refresh()
         with self.lock:
-            rows = list(self.rows)
-            if not rows:
+            all_rows = list(self.rows)
+            embedding_model = self.embedding_model
+            if not all_rows:
                 # An empty shadow must not silently turn automatic recall into "nothing found";
                 # the caller falls back to Ombre and the diagnostic records why.
                 raise RuntimeError('brain.db has no visible memories')
             bm25 = self.bm25
-            visible_ids = [row[0] for row in rows]
-        query_vector = None
-        if embedder is not None:
+        # BM25 scores are indexed by the full visible list; compute them before any date filter
+        # narrows the rows, then filter the row list without breaking that alignment.
+        keyword_scores = self._keyword_scores(bm25, all_rows, query)
+        rows = all_rows
+        diag = diagnostics if isinstance(diagnostics, dict) else {}
+        diag.update({'model_mismatch': False, 'skipped_dim': 0, 'skipped_created': 0,
+                     'date_filtered': 0, 'embedding_model': embedding_model,
+                     'keyword_only': False})
+        start_date = created_date(date_from) if date_from else ''
+        end_date = created_date(date_to) if date_to else ''
+        if date_from and not start_date:
+            raise ValueError('invalid date_from')
+        if date_to and not end_date:
+            raise ValueError('invalid date_to')
+        if start_date or end_date:
+            kept = []
+            for row in rows:
+                when = created_date(row[3])
+                if not when:
+                    diag['skipped_created'] += 1
+                    continue
+                if (start_date and when < start_date) or (end_date and when > end_date):
+                    diag['date_filtered'] += 1
+                    continue
+                kept.append(row)
+            rows = kept
+        if query_vector is None and embedder is not None:
             # Accept either the provider object or a plain embed function: the authority writer
             # needs a callable while this index needs .embed(). Let a provider failure reach
-            # Memory.search_candidates so it can fall back to Ombre and record the diagnostic
-            # instead of silently degrading to BM25.
+            # Memory.search_candidates so it can fall back and record the diagnostic instead of
+            # silently degrading to BM25.
             embed = getattr(embedder, 'embed', None)
             query_vector = (embed or embedder)(query)
-        vector_scores = self._vector_scores(query_vector, visible_ids)
-        keyword_scores = self._keyword_scores(bm25, rows, query)
+        if model and embedding_model and str(model).strip() != embedding_model:
+            # Vectors written by a different embedding model must never be compared with this
+            # query vector; the keyword channel stays usable and the diagnostic records the cause.
+            diag['model_mismatch'] = True
+            query_vector = None
+        vector_scores = {}
+        visible_ids = [row[0] for row in rows]
+        if query_vector:
+            expected = len(query_vector)
+            usable = {}
+            for memory_id in visible_ids:
+                vector = self.vectors.get(memory_id)
+                if not vector:
+                    continue
+                if len(vector) == expected:
+                    usable[memory_id] = vector
+                else:
+                    diag['skipped_dim'] += 1
+            vector_scores = self._vector_scores(query_vector, list(usable))
         vector_top = max((vector_scores.get(memory_id, 0.0) for memory_id in visible_ids), default=0.0)
         vector_top = vector_top or 1.0
         keyword_top = max(keyword_scores.values(), default=0.0) or 1.0
@@ -190,18 +263,11 @@ class BrainIndex:
             score += min(0.05, max(0.0, (importance - 5) * 0.01))
             scored.append((score, memory_id, row))
         scored.sort(key=lambda item: (-item[0], item[1]))
-        return [{'id': memory_id, 'title': row[1] or '', 'body': row[2] or '',
-                 'created': row[3] or '', 'importance': row[4], 'score': round(score, 6)}
-                for score, memory_id, row in scored[:limit]]
-
-    def drift(self, taken):
-        """One random visible memory for the '忽然想起来' section, or None."""
-        with self.lock:
-            rows = [row for row in self.rows if row[0] not in taken]
-        if not rows:
-            return None
-        row = random.choice(rows)
-        return {'id': row[0], 'title': row[1] or '', 'body': row[2] or ''}
+        result = [{'id': memory_id, 'title': row[1] or '', 'body': row[2] or '',
+                   'created': row[3] or '', 'importance': row[4], 'score': round(score, 6)}
+                  for score, memory_id, row in scored[:limit]]
+        diag.update({'count': len(result), 'keyword_only': bool(query_vector is None)})
+        return result
 
 
 _INDICES = {}
@@ -219,27 +285,27 @@ def get_index(db_path, settings):
     return index
 
 
-def render(results, drift=None):
+def render(results):
     """Same text contract as Ombre's breath_search output, so ordinary_hits() keeps working."""
     lines = []
     for item in results:
         lines.append('[bucket_id:%s] %s\n%s' % (item['id'], item['title'], item['body']))
-    if drift is not None:
-        lines.append('%s\n[bucket_id:%s] %s\n%s'
-                     % (DRIFT_MARK, drift['id'], drift['title'], drift['body']))
     block = {'bucket_ids': [item['id'] for item in results]}
     return ('\n\n'.join(lines) + '\n' + ID_BLOCK + '\n' + '```json\n'
             + json.dumps(block, ensure_ascii=False) + '\n```')
 
 
-def search_text(db_path, query, limit=8, embedder=None, settings=None, drift=True):
+def search_text(db_path, query, limit=8, embedder=None, settings=None, *, query_vector=None,
+                model='', date_from='', date_to=''):
     """One call used by Memory: Ombre-shaped text, or an exception for the caller to fall back."""
     settings = settings or DEFAULTS
     index = get_index(db_path, settings)
     started = time.monotonic()
-    results = index.search(query, limit=limit, embedder=embedder)
-    picked = index.drift({item['id'] for item in results}) if (drift and len(results) < 3) else None
+    diagnostics = {}
+    results = index.search(query, limit=limit, embedder=embedder, query_vector=query_vector,
+                           model=model, date_from=date_from, date_to=date_to,
+                           diagnostics=diagnostics)
     elapsed = (time.monotonic() - started) * 1000
-    return render(results, picked), {'elapsed_ms': round(elapsed, 1), 'count': len(results),
-                                     'ids': [item['id'] for item in results],
-                                     'drift': picked['id'] if picked else ''}
+    details = {'elapsed_ms': round(elapsed, 1), 'count': len(results),
+               'ids': [item['id'] for item in results], **diagnostics}
+    return render(results), details
