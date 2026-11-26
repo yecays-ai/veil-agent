@@ -52,18 +52,18 @@
     const dailyLbl = create('label', '', '每日消费上限 ¥');
     const dailyInput = document.createElement('input');
     dailyInput.type = 'number';
-    dailyInput.min = '1';
+    dailyInput.min = '0.01';
     dailyInput.max = '1000';
-    dailyInput.step = '1';
+    dailyInput.step = 'any';
     dailyInput.style.width = '96px';
     dailyLbl.append(dailyInput);
 
     const monthlyLbl = create('label', '', '每月消费上限 ¥');
     const monthlyInput = document.createElement('input');
     monthlyInput.type = 'number';
-    monthlyInput.min = '1';
+    monthlyInput.min = '0.01';
     monthlyInput.max = '30000';
-    monthlyInput.step = '1';
+    monthlyInput.step = 'any';
     monthlyInput.style.width = '110px';
     monthlyLbl.append(monthlyInput);
 

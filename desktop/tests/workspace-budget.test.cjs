@@ -57,6 +57,7 @@ test('budget form edits the base limit, not the effective limit with today\'s ra
   await view.render();
   const inputs = view.descendants('input');
   assert.deepEqual(inputs.map(input => input.value), ['10', '25']);
+  assert.deepEqual(inputs.map(input => [input.min, input.step]), [['0.01', 'any'], ['0.01', 'any']]);
   const kpiText = view.descendants('div').map(node => node.textContent).join(' ');
   assert.match(kpiText, /上限 ¥11/);
 });
@@ -65,11 +66,11 @@ test('saving limits posts only limits and keeps a working form', async () => {
   const view = setup(budgetPayload('10', '25', '11', '26'));
   await view.render();
   const inputs = view.descendants('input');
-  inputs[0].value = '12';
-  inputs[1].value = '28';
+  inputs[0].value = '1.5';
+  inputs[1].value = '26.5';
   const form = view.descendants('form')[0];
   await form.listeners.submit({ preventDefault() {} });
-  assert.deepEqual(view.bodies[0], { limits: { daily_cny: '12', monthly_cny: '28' } });
+  assert.deepEqual(view.bodies[0], { limits: { daily_cny: '1.5', monthly_cny: '26.5' } });
   assert.match(view.descendants('small').map(node => node.textContent).join(' '), /已保存/);
   assert.equal(view.descendants('button')[1].disabled, false);
 });

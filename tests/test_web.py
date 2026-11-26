@@ -444,7 +444,7 @@ output_cny_per_million = "8"
             def panel_entries(self):
                 return {'items': [{'memory_id': 'fixture-id', 'title': 'Fictional memory'}], 'recent_requests': 0}
 
-            def panel_edit(self, memory_id, changes):
+            def panel_edit(self, memory_id, changes, expected_sha256=''):
                 calls.append(('edit', memory_id, changes))
                 return True, 'saved'
 

@@ -70,3 +70,22 @@
 
 ### 未单开改动
 - 纯 JSON 缩进、命名与文案风格建议不单改；`request_snapshots` 等已符合现有契约。
+
+## 第二轮 CodeRabbit 复查修复（2026-11-27）
+
+复审新增 17 条（2 条 major、1 条 heavy lift、14 条 minor），逐条核对后全部修复或按确认机制落地：
+
+### 数据一致性
+- **编辑哈希与写入原子化**：`brain_writer.update_memory()` 新增 `expected_sha256`，在 `BEGIN IMMEDIATE` 内比较后才写入；`BrainAuthority._trace` 透传，`panel_edit` 与 `/api/memory/edit` 传入；冲突抛 `WriteConflict`，不写、不留旧版本，返回 409。新增 writer 与面板级单测。
+- **旧面板正文与哈希同源**：`panel_entries` 改用 `_panel_records()` 一次读取（Brain 的 `body`/`body_sha256`/`raw_markdown`），不再分别查询。
+- **按 ID 判断存在性**：新增 `_visible_id()`，归档/编辑/删除/锁定/版本不再依赖 `panel_entries(limit=10000)` 列表。
+- **巡检设置并发**：`save_health_settings()` 的读-合并-写放在同一把锁内。
+- **巡检覆盖度诚实**：缺库扫描的 H-0 报告也会持久化；事件超过 20000 条时 H-4/H-5 标为“已核验 N/M（未全量）”，`sampled_events` 写入报告；H-2 的碎片判断改用全量 `event_id` 集合。
+- **数据库异常**：总览、记忆库、手动巡检捕获 `sqlite3.Error` 返回 503；巡检设置写入 `OSError` 返回 500。
+
+### 桌面交互
+- 保存成功只清除“本次提交”的草稿，输入中的新草稿保留；归档/恢复不再清草稿；删除后仅当详情仍是被删记忆时清空详情。
+- 列表与按 ID 打开改用独立请求序号，详情不再取消列表加载；事件/召回整页渲染加序号，过期响应不覆盖新视图。
+- 巡检设置保存省略 `idle_only`；保存成功后同步当前开关/周期控件；`daily_night` 调度仅在 `idle_only=true` 且忙碌时跳过。
+- 预算输入允许后端支持的正小数（`min=0.01`、`step=any`）。
+

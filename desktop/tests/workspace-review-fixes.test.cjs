@@ -7,14 +7,16 @@ const brain = readFileSync(path.join(__dirname, '../workspace-brain.js'), 'utf8'
 const preload = readFileSync(path.join(__dirname, '../desktop-preload.cjs'), 'utf8');
 const chat = readFileSync(path.join(__dirname, '../chat.js'), 'utf8');
 const mainSrc = readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+const budget = readFileSync(path.join(__dirname, '../workspace-budget.js'), 'utf8');
 
 test('memory library sends panel_edit changes, keeps drafts and archives through a write route', () => {
-  assert.match(brain, /changes: \{ content: bodyEditor\.value \}/);
+  assert.match(brain, /changes: \{ content: submittedDraft \}/);
   assert.match(brain, /expected_sha256: item\.sha256/);
   assert.match(brain, /body_exact/);
   assert.match(brain, /drafts\.get\(item\.memory_id\)/);
   assert.match(brain, /\/api\/memory\/archive'/);
-  assert.match(brain, /seq !== state\.loadSeq/);
+  assert.match(brain, /seq !== state\.listSeq/);
+  assert.match(brain, /seq !== state\.byIdSeq/);
   assert.match(chat, /expected_sha256:item\.sha256/);
   assert.match(brain, /seq !== detailSeq/);
 });
@@ -49,4 +51,19 @@ test('a new avatar is written before the old format file is deleted', () => {
   assert.ok(writeAt > 0 && deleteAt > 0);
   assert.ok(writeAt < deleteAt);
   assert.match(mainSrc, /'\/api\/memory\/archive'/);
+});
+
+test('draft, request-sequence and form-state races stay fixed', () => {
+  assert.match(brain, /submittedDraft/);
+  assert.match(brain, /drafts\.get\(item\.memory_id\) === submittedDraft/);
+  assert.match(brain, /JSON\.stringify\(\{ enabled: enabledChk\.checked, schedule: schedSel\.value \}\)/);
+  assert.match(brain, /listSeq/);
+  assert.match(brain, /byIdSeq/);
+  assert.match(brain, /healthControls = \{ enabledChk, schedSel \}/);
+  assert.match(brain, /eventsRenderSeq/);
+  assert.match(brain, /recallRenderSeq/);
+  assert.match(brain, /renderSeq !== eventsRenderSeq/);
+  assert.match(brain, /renderSeq !== recallRenderSeq/);
+  assert.match(budget, /dailyInput\.step = 'any'/);
+  assert.match(budget, /dailyInput\.min = '0\.01'/);
 });

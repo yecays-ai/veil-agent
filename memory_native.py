@@ -13,6 +13,7 @@ import re
 import uuid
 
 from agent_types import UserError
+from brain_writer import WriteConflict
 from capability_state import capability_lock, save_capabilities
 from memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
 from memory_sidecar import Sidecar
@@ -432,6 +433,57 @@ class NativeMemoryTools:
                 records[key] = (meta.get('title') or meta.get('name') or key, raw)
         return records
 
+    def _panel_records(self):
+        """id -> (title, raw_markdown, body_sha256) from one consistent read.
+
+        Reading the body and the hash together means the memory page can never show one body
+        with another version's lock token. Brain is authoritative after the P3 switch.
+        """
+        auth = getattr(self.memory, 'brain_authority', None)
+        if auth is not None:
+            from brain_read import BrainRead
+            with BrainRead(auth.db_path) as reader:
+                pending = {row[0] for row in reader.connection.execute(
+                    "SELECT memory_id FROM delete_requests WHERE status='pending'")}
+                rows = reader.connection.execute(
+                    'SELECT id,title,name,bucket,raw_markdown,body,body_sha256 FROM memories '
+                    'WHERE is_tombstone=0 AND is_deleted=0').fetchall()
+            records = {}
+            for row in rows:
+                if row['bucket'] not in ('dynamic', 'permanent') or row['id'] in pending:
+                    continue
+                body = row['body'] or ''
+                sha = row['body_sha256'] or hashlib.sha256(body.encode('utf-8')).hexdigest()
+                records[row['id']] = (row['title'] or row['name'] or row['id'],
+                                      row['raw_markdown'] or '', sha)
+            return records
+        records = {}
+        for key, (title, raw) in self._visible_records().items():
+            _meta, body = parse_frontmatter(raw)
+            records[key] = (title, raw, hashlib.sha256(body.encode('utf-8')).hexdigest())
+        return records
+
+    def _visible_id(self, memory_id):
+        """Existence by ID, never by a bounded list; same bucket/delete rules as the page."""
+        if not isinstance(memory_id, str) or not memory_id:
+            return False
+        auth = getattr(self.memory, 'brain_authority', None)
+        if auth is not None:
+            try:
+                from brain_read import BrainRead
+                with BrainRead(auth.db_path) as reader:
+                    row = reader.connection.execute(
+                        'SELECT bucket FROM memories WHERE id=? AND is_tombstone=0 AND is_deleted=0',
+                        (memory_id,)).fetchone()
+                    if row is None or row['bucket'] not in ('dynamic', 'permanent'):
+                        return False
+                    return reader.connection.execute(
+                        "SELECT 1 FROM delete_requests WHERE memory_id=? AND status='pending'",
+                        (memory_id,)).fetchone() is None
+            except Exception:
+                return False
+        return memory_id in self._visible_records()
+
     def panel_entries(self, recent_requests=100):
         """Readable memory list for Lan's memory page; never sent to the model."""
         recalled = {}
@@ -442,21 +494,8 @@ class NativeMemoryTools:
         for row in rows:
             for memory_id in row.get('memory_ids') or []:
                 recalled[memory_id] = recalled.get(memory_id, 0) + 1
-        # The edit endpoint refuses a save without expected_sha256; the legacy page gets the exact
-        # hash the endpoint compares (Brain is authoritative here, the vault copy is only a view).
-        sha_map = {}
-        auth = getattr(self.memory, 'brain_authority', None)
-        if auth is not None:
-            try:
-                from brain_read import BrainRead
-                with BrainRead(auth.db_path) as reader:
-                    for row in reader.connection.execute('SELECT id, body, body_sha256 FROM memories'):
-                        sha_map[row['id']] = row['body_sha256'] or hashlib.sha256(
-                            (row['body'] or '').encode('utf-8')).hexdigest()
-            except Exception:
-                sha_map = {}
         entries = []
-        for key, (title, raw) in self._visible_records().items():
+        for key, (title, raw, sha) in self._panel_records().items():
             meta, body = parse_frontmatter(raw)
             tags = as_list(meta.get('tags'))
             # P3-3: old surprise tags are historical data, not a page visibility rule.
@@ -466,7 +505,7 @@ class NativeMemoryTools:
                 'tags': tags, 'importance': meta.get('importance', ''),
                 'why': meta.get('why_remembered', ''),
                 'body': body.strip(), 'surprise': False,
-                'sha256': sha_map.get(key) or hashlib.sha256(body.encode('utf-8')).hexdigest(),
+                'sha256': sha,
                 'source_record': title.strip() == '原文来源', 'recalled': recalled.get(key, 0)})
         try:
             notes = self.sidecar.all()
@@ -494,7 +533,7 @@ class NativeMemoryTools:
     # Ticket 363: what Lan can do on the memory page besides edit and delete.
     def panel_versions(self, memory_id):
         """Earlier versions of one memory, newest first, as plain text Lan can read and restore."""
-        if not isinstance(memory_id, str) or memory_id not in self._visible_records(include_hidden=True):
+        if not self._visible_id(memory_id):
             return None
         rows = [row for row in self.memory.store.read(f'{self.memory.cfg.id}/memory-versions.jsonl')
                 if row.get('memory_id') == memory_id and isinstance(row.get('old_content'), str)]
@@ -588,7 +627,7 @@ class NativeMemoryTools:
 
     def panel_archive(self, memory_id):
         """Move a memory into the archive through the same reversible trace path Lan uses."""
-        if not isinstance(memory_id, str) or memory_id not in self._visible_records():
+        if not self._visible_id(memory_id):
             return False, '这条记忆不存在或已经删除。'
         args = {'bucket_id': memory_id, 'archive': True,
                 'edit_reason': 'Lan archived this memory on the memory page.'}
@@ -596,7 +635,7 @@ class NativeMemoryTools:
         return (True, '已移入归档，可随时恢复。') if state == '成功' else (False, result)
 
     def panel_lock(self, memory_id, locked):
-        if not isinstance(memory_id, str) or memory_id not in self._visible_records(include_hidden=True):
+        if not self._visible_id(memory_id):
             return False, '这条记忆不存在或已经删除。'
         self.sidecar.set_locked(memory_id, bool(locked))
         return True, ('已锁定：他不能改、不能合并、不能归档这条。' if locked else '已解锁。')
@@ -606,8 +645,11 @@ class NativeMemoryTools:
             self.sidecar.seen(memory_id)
         return True, '好。'
 
-    def panel_edit(self, memory_id, changes):
-        """Lan's edit from the memory page; uses the same archived trace path as Peter's edits."""
+    def panel_edit(self, memory_id, changes, expected_sha256=''):
+        """Lan's edit from the memory page; uses the same archived trace path as Peter's edits.
+
+        ``expected_sha256`` is checked inside the Brain write transaction, not just before it.
+        """
         fields = {key: value for key, value in changes.items() if key in ('title', 'content', 'why_remembered')}
         if (not isinstance(memory_id, str) or not fields or len(fields) != len(changes)
                 or any(not isinstance(value, str) or not value.strip() for value in fields.values())):
@@ -617,15 +659,17 @@ class NativeMemoryTools:
         if too_long:
             names = {'title': '标题', 'content': '内容', 'why_remembered': '为什么记'}
             return False, '、'.join(names[key] for key in too_long) + '太长了，请删短一点再保存。'
-        if memory_id not in self._visible_records():
+        if not self._visible_id(memory_id):
             return False, '这条记忆不存在或已经删除。'
         args = {'bucket_id': memory_id, **fields, 'edit_reason': 'Lan edited this memory in the memory page.'}
+        if isinstance(expected_sha256, str) and expected_sha256:
+            args['expected_sha256'] = expected_sha256
         result, state, _ = self._trace(args, None, by_lan=True)
         return state == '成功', '已保存，旧版本已留档。' if state == '成功' else result
 
     def panel_delete(self, memory_id):
         """Lan's delete from the memory page; same erase as /delete 编号 确认."""
-        if not isinstance(memory_id, str) or memory_id not in self._visible_records():
+        if not self._visible_id(memory_id):
             return False, '这条记忆不存在或已经删除。'
         title = self.memory.title_for(memory_id) or memory_id
         failure = self._delete(memory_id, title)
@@ -899,23 +943,36 @@ class NativeMemoryTools:
             if self.memory.state['entries'].get(memory_id, {}).get('erased'):
                 return 'Lan approved; the memory and its saved old versions were erased.', '成功', f'{summary}（已彻底删除）'
             return 'Lan approved and the memory was deleted.', '成功', f'{summary}（已删除）'
+        expected_sha = args.get('expected_sha256') if isinstance(args.get('expected_sha256'), str) else ''
+        # BrainWriter can compare the hash inside the same write transaction; the Ombre path cannot.
+        brain_atomic = bool(expected_sha) and getattr(self.memory, 'brain_authority', None) is not None
+        operation_id = None
         try:
             safe_args = {key: value for key, value in args.items()
-                         if key not in (*banned, 'edit_reason', 'delete')}
+                         if key not in (*banned, 'edit_reason', 'delete', 'expected_sha256')}
             # The authorized edit path must remain an edit after MCP conversion.
             safe_args['delete'] = False
+            if brain_atomic:
+                safe_args['expected_sha256'] = expected_sha
             operation_id, duplicate_operation = self.memory.begin_write(safe_args)
             if duplicate_operation is not None:
                 return ('This memory update is still unconfirmed after its earlier connection failure. '
                         'It was not sent again; check the memory service before another edit.'), '出错', summary
-            if not self._save_version(memory_id, args, old):
+            if not brain_atomic and not self._save_version(memory_id, args, old):
                 self.memory.finish_write(operation_id, 'not_submitted')
                 return 'The previous version could not be archived safely, so this change was not made.', '出错', summary
             result = self.memory.call('trace', safe_args, write_operation=operation_id)
+        except WriteConflict:
+            if operation_id:
+                self.memory.finish_write(operation_id, 'not_submitted')
+            return ('这段记忆在你编辑期间已被更新，请刷新核对后再保存（你的草稿仍保留）。',
+                    '冲突', summary)
         except MemoryToolError as exc:
-            return f'{exc} The previous version was archived.', '出错', summary
+            suffix = 'Nothing was written.' if brain_atomic else 'The previous version was archived.'
+            return f'{exc} {suffix}', '出错', summary
         except Exception:
-            return 'The memory update failed; the previous version was archived.', '出错', summary
+            suffix = 'Nothing was written.' if brain_atomic else 'The previous version was archived.'
+            return f'The memory update failed; {suffix}', '出错', summary
         self.memory.bucket_details_cache.pop(memory_id, None)
         updated = self.memory.content_for(memory_id, refresh=True)
         if updated is not None:
@@ -935,7 +992,8 @@ class NativeMemoryTools:
 
     def _save_version(self, memory_id, args, old, *, operation_reason=None):
         try:
-            fields = sorted(key for key in args if key not in {'bucket_id', 'delete_reason', 'edit_reason'})
+            fields = sorted(key for key in args
+                            if key not in {'bucket_id', 'delete_reason', 'edit_reason', 'expected_sha256'})
             reason = operation_reason
             if reason is None:
                 reason = args.get('edit_reason') or args.get('delete_reason') or ''

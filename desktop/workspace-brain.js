@@ -20,6 +20,8 @@
   ]);
 
   let healthWarnFlag = false;
+  let eventsRenderSeq = 0;
+  let recallRenderSeq = 0;
   let memoryAddonMounted = false;
   let lastReq = (url, opt) => fetch(url, opt);
 
@@ -276,7 +278,7 @@
     addon.append(head, filterBar, split, pager);
     view.append(addon);
 
-    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0, loadSeq: 0 };
+    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0, listSeq: 0, byIdSeq: 0 };
     const drafts = new Map();
 
     function openDetail(item) {
@@ -341,6 +343,7 @@
 
       saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
+        const submittedDraft = bodyEditor.value;
         actionStatus.textContent = '正在校验 SHA-256 并保存…';
         try {
           const res = await reqJson(lastReq, '/api/memory/edit', {
@@ -349,7 +352,7 @@
             body: JSON.stringify({
               id: item.memory_id,
               // panel_edit only reads body['changes']; the top-level content used to be dropped.
-              changes: { content: bodyEditor.value },
+              changes: { content: submittedDraft },
               expected_sha256: item.sha256 || '',
             }),
           });
@@ -361,7 +364,8 @@
             actionStatus.textContent = res.data?.error || '保存失败。';
             return;
           }
-          drafts.delete(item.memory_id);
+          // If the user kept typing while the request was in flight, that newer draft is theirs.
+          if (drafts.get(item.memory_id) === submittedDraft) drafts.delete(item.memory_id);
           actionStatus.textContent = '保存成功！';
           await loadLibrary(item.memory_id);
         } catch (err) {
@@ -417,7 +421,6 @@
             actionStatus.textContent = res.data?.error || '归档状态切换失败。';
             return;
           }
-          drafts.delete(item.memory_id);
           actionStatus.textContent = res.data?.message || '';
           await loadLibrary(item.memory_id);
         } catch (err) {
@@ -435,7 +438,10 @@
           body: JSON.stringify({ id: item.memory_id }),
         });
         if (res.ok) {
-          state.selectedId = null;
+          if (state.selectedId === item.memory_id) {
+            state.selectedId = null;
+            readerPane.replaceChildren(renderEmptyState('在左侧选择一条记忆', '这条记忆已提交删除，详情不再可编辑。'));
+          }
           await loadLibrary();
         } else {
           actionStatus.textContent = res.data?.error || '删除失败或已被保护。';
@@ -457,7 +463,7 @@
       if (focusId) state.selectedId = focusId;
       // Snapshot the query and a sequence number: a slower response for an older query must not
       // overwrite a newer filter's list, page number or error state.
-      const seq = ++state.loadSeq;
+      const seq = ++state.listSeq;
       const qs = new URLSearchParams({
         q: qInput.value.trim(),
         status: statusSel.value,
@@ -467,7 +473,7 @@
         limit: String(state.limit),
       });
       const { ok, data } = await reqJson(lastReq, `/api/memory/library?${qs}`);
-      if (seq !== state.loadSeq) return;
+      if (seq !== state.listSeq) return;
       if (!ok || !data) {
         listPane.replaceChildren(el('p', '', '暂时无法加载全量记忆库。'));
         return;
@@ -504,11 +510,12 @@
 
     async function openMemoryById(memId) {
       if (!memId) return;
-      const seq = ++state.loadSeq;
+      // Opening one memory must not invalidate the list load that mounted this add-on.
+      const seq = ++state.byIdSeq;
       const qs = new URLSearchParams({ q: String(memId), status: 'all', kind: 'all',
                                        sort: 'updated', offset: '0', limit: '30' });
       const { ok, data } = await reqJson(lastReq, `/api/memory/library?${qs}`);
-      if (seq !== state.loadSeq || !ok || !data) return;
+      if (seq !== state.byIdSeq || !ok || !data) return;
       const item = (data.items || []).find(row => row.memory_id === memId);
       if (!item) return;
       state.selectedId = memId;
@@ -537,8 +544,10 @@
   // 3. P4 Event Stories (workspace-events)
   // =========================================================================
   async function renderEventsWorkspace(host, req, focusEventId = null) {
+    const renderSeq = ++eventsRenderSeq;
     host.replaceChildren(el('p', '', '正在加载共同经历与事件故事…'));
     const { ok, data } = await reqJson(req, '/api/memory/events');
+    if (renderSeq !== eventsRenderSeq) return;  // a newer navigation already owns the view
     const events = data?.events || data?.items || [];
     if (!ok || !Array.isArray(events) || !events.length) {
       host.replaceChildren(renderEmptyState('暂无事件故事', '共同经历会在自动梳理后按时间线沉淀在这里。'));
@@ -695,8 +704,10 @@
   // 5. Recall & Injection Diagnostics (brain-recall)
   // =========================================================================
   async function renderRecallWorkspace(host, req, focusTurnId = null) {
+    const renderSeq = ++recallRenderSeq;
     host.replaceChildren(el('p', '', '正在读取记忆召回链路与开销快照…'));
     const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
+    if (renderSeq !== recallRenderSeq) return;  // a newer navigation already owns the view
     const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
 
     if (!combined.length) {
@@ -831,6 +842,7 @@
   async function renderHealthWorkspace(host, req) {
     host.replaceChildren(el('p', '', '正在加载只读健康报告与巡检设置…'));
     let healthSettings = null;
+    let healthControls = null;
 
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
@@ -899,6 +911,7 @@
         schedSel.append(o);
       }
       schedSel.value = settings.schedule || 'daily_night';
+      healthControls = { enabledChk, schedSel };
       const saveSchedBtn = btn('保存巡检设置', 'sm');
       const schedMsg = el('small', '', '');
       saveSchedBtn.addEventListener('click', async () => {
@@ -907,10 +920,17 @@
           const res = await reqJson(req, '/api/brain/health/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabledChk.checked, schedule: schedSel.value, idle_only: true }),
+            // idle_only is not editable here; omitting it keeps whatever the backend has saved.
+            body: JSON.stringify({ enabled: enabledChk.checked, schedule: schedSel.value }),
           });
           if (res.ok && res.data?.settings) {
             healthSettings = res.data.settings;
+            // A concurrent manual scan may have rebuilt the form from the old cache; update the
+            // live controls too, otherwise the next save would write the old cycle back.
+            if (healthControls) {
+              healthControls.enabledChk.checked = Boolean(healthSettings.enabled);
+              healthControls.schedSel.value = healthSettings.schedule || 'daily_night';
+            }
             schedMsg.textContent = '已保存设置';
           } else {
             schedMsg.textContent = res.data?.error || '保存失败';

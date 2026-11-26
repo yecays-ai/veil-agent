@@ -24,6 +24,7 @@ DEFAULT_HEALTH_SETTINGS = {
 VALID_SCHEDULES = ('daily_night', 'every_6h', 'manual_only')
 _SCAN_LOCK = threading.Lock()
 _ACTIVE_SCAN = False
+_SETTINGS_LOCK = threading.Lock()
 ALL_CHECK_IDS = ('H-1', 'H-2', 'H-3', 'H-4', 'H-5', 'H-6', 'H-7', 'H-8', 'H-9')
 # Ticket 456 review: the daily-night slot follows the same 01:00-06:00 window the repository
 # already uses for autonomy quiet hours, unless the role configures its own.
@@ -168,26 +169,28 @@ def load_health_settings(root, role_id):
 def save_health_settings(root, role_id, payload):
     if not isinstance(payload, dict):
         raise ValueError('无效的健康检查配置。')
-    current = load_health_settings(root, role_id)
-    if 'enabled' in payload:
-        if type(payload['enabled']) is not bool:
-            raise ValueError('enabled 必须是布尔值。')
-        current['enabled'] = payload['enabled']
-    if 'schedule' in payload:
-        if payload['schedule'] not in VALID_SCHEDULES:
-            raise ValueError('无效的检查周期。')
-        current['schedule'] = payload['schedule']
-    if 'idle_only' in payload:
-        if type(payload['idle_only']) is not bool:
-            raise ValueError('idle_only 必须是布尔值。')
-        current['idle_only'] = payload['idle_only']
-    rdir = _role_dir(root, role_id)
-    rdir.mkdir(parents=True, exist_ok=True)
-    target = rdir / 'health-settings.json'
-    tmp = rdir / '.health-settings.tmp'
-    tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
-    tmp.replace(target)
-    return current
+    # Read, merge and write in one critical section: two saves must not restore each other's fields.
+    with _SETTINGS_LOCK:
+        current = load_health_settings(root, role_id)
+        if 'enabled' in payload:
+            if type(payload['enabled']) is not bool:
+                raise ValueError('enabled 必须是布尔值。')
+            current['enabled'] = payload['enabled']
+        if 'schedule' in payload:
+            if payload['schedule'] not in VALID_SCHEDULES:
+                raise ValueError('无效的检查周期。')
+            current['schedule'] = payload['schedule']
+        if 'idle_only' in payload:
+            if type(payload['idle_only']) is not bool:
+                raise ValueError('idle_only 必须是布尔值。')
+            current['idle_only'] = payload['idle_only']
+        rdir = _role_dir(root, role_id)
+        rdir.mkdir(parents=True, exist_ok=True)
+        target = rdir / 'health-settings.json'
+        tmp = rdir / '.health-settings.tmp'
+        tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
+        tmp.replace(target)
+        return current
 
 
 def load_latest_report(root, role_id, from_date='', to_date=''):
@@ -270,6 +273,10 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         db = Path(db_path)
         checks = []
         timed_out = False
+        # Defined before the guarded block so a timeout before loading can still build a report.
+        event_total = 0
+        event_rows = []
+        events_sampled = False
         stats = {
             'active_memories': 0,
             'pinned_memories': 0,
@@ -282,7 +289,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         }
 
         if not db.is_file():
-            return {
+            report = {
                 'schema_version': 1,
                 'scanned_at': _now_iso(),
                 'duration_ms': 0,
@@ -303,7 +310,11 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                     'confidence': '高可信（精确事实）',
                     'evidences': [],
                 }],
+                'incomplete': False,
             }
+            if persist:
+                _save_report(root, role_id, report)
+            return report
 
         conn = _ro_connect(db)
         conn.row_factory = sqlite3.Row
@@ -331,6 +342,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                     "SELECT COUNT(*), COALESCE(SUM(CASE WHEN TRIM(COALESCE(old_content, '')) = '' THEN 1 ELSE 0 END), 0) "
                     'FROM versions').fetchone()
             event_rows = conn.execute('SELECT * FROM events LIMIT ?', (EVENT_ROW_LIMIT,)).fetchall() if 'events' in tables else []
+            events_sampled = event_total > len(event_rows)
             _guard(deadline)
             vector_rows = conn.execute(
                 'SELECT memory_id, dim, content_hash, length(vector) AS bytes FROM vectors').fetchall() if 'vectors' in tables else []
@@ -382,7 +394,8 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             sha_groups = {}
             norm_groups = {}
             frag_evidences = []
-            evt_mem_ids = {e['memory_id'] for e in event_rows if e['memory_id']}
+            evt_mem_ids = {row[0] for row in conn.execute(
+                'SELECT memory_id FROM events WHERE memory_id IS NOT NULL')} if 'events' in tables else set()
             for r in active_mems:
                 body = r['body'] or ''
                 sha = r['body_sha256'] or hashlib.sha256(body.encode('utf-8')).hexdigest()
@@ -526,10 +539,12 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             checks.append({
                 'id': 'H-4',
                 'title': '事件来源与记忆链接完整性',
-                'severity': 'warn' if ev_link_issues else 'good',
-                'status_label': f"{len(ev_link_issues)} 条事件链接断开" if ev_link_issues else '事件关联完整',
+                'severity': 'warn' if (ev_link_issues or events_sampled) else 'good',
+                'status_label': (f"已核验 {len(event_rows)}/{event_total} 个事件（未全量）" if events_sampled
+                                 else (f"{len(ev_link_issues)} 条事件链接断开" if ev_link_issues else '事件关联完整')),
                 'impact': (f"发现 {len(ev_link_issues)} 个事件的 memory_id 指向已失效记忆；stage-evidence 共 {stage_ev_total} 条（其中 chat 原话证据 {chat_ev_count} 条）。"
-                           if ev_link_issues else f"全部 {event_total} 个事件链接正常；stage-evidence 共 {stage_ev_total} 条（chat 证据 {chat_ev_count} 条）。"),
+                           if ev_link_issues else (f"已核验 {len(event_rows)}/{event_total} 个事件的链接，剩余事件未在本轮时限内检查；stage-evidence 共 {stage_ev_total} 条（chat 证据 {chat_ev_count} 条）。"
+                                               if events_sampled else f"全部 {event_total} 个事件链接正常；stage-evidence 共 {stage_ev_total} 条（chat 证据 {chat_ev_count} 条）。")),
                 'object': 'events.memory_id / event_ledger(stage-evidence)',
                 'basis': '精确引用集合核对',
                 'source': 'brain.db (mode=ro)',
@@ -556,9 +571,12 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             checks.append({
                 'id': 'H-5',
                 'title': '事件时间线与待重整状态',
-                'severity': 'warn' if ev_time_issues else 'good',
-                'status_label': f"{len(ev_time_issues)} 项待重整或时间异常" if ev_time_issues else '时间线有序',
-                'impact': f"共有 {len(ev_time_issues)} 个事件存在待重整、待复核草稿或时间顺序提示。" if ev_time_issues else '所有事件时间线顺序与状态标记正常。',
+                'severity': 'warn' if (ev_time_issues or events_sampled) else 'good',
+                'status_label': (f"已核验 {len(event_rows)}/{event_total} 个事件（未全量）" if events_sampled
+                                 else (f"{len(ev_time_issues)} 项待重整或时间异常" if ev_time_issues else '时间线有序')),
+                'impact': (f"共有 {len(ev_time_issues)} 个事件存在待重整、待复核草稿或时间顺序提示。"
+                           if ev_time_issues else (f"已核验 {len(event_rows)}/{event_total} 个事件的时间线，剩余事件未在本轮时限内检查。"
+                                               if events_sampled else '所有事件时间线顺序与状态标记正常。')),
                 'object': 'events(first_at, last_at, payload_json) / event_stages',
                 'basis': '确定性时间边界与待处理标志位核对',
                 'source': 'brain.db (mode=ro)',
@@ -740,6 +758,8 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             'to_date': to_date,
             'stats': stats,
             'incomplete': timed_out,
+            'sampled_events': ({'checked': len(event_rows), 'total': event_total}
+                               if event_total and events_sampled else None),
             'timed_out': timed_out,
             'completed_checks': [c['id'] for c in checks if c['id'] != 'H-T'],
             'skipped_checks': skipped_checks,
@@ -814,7 +834,7 @@ def start_health_scheduler(hub, *, interval_seconds=600):
         last_run_at = 0.0
         while not getattr(hub, 'stopped', False):
             time.sleep(interval_seconds)
-            if getattr(hub, 'stopped', False) or getattr(hub, 'busy', False):
+            if getattr(hub, 'stopped', False):
                 continue
             chat = getattr(hub, 'chat', None)
             cfg = getattr(chat, 'cfg', None)
@@ -826,6 +846,8 @@ def start_health_scheduler(hub, *, interval_seconds=600):
                 settings = load_health_settings(data_root, cfg.id)
                 schedule = settings.get('schedule')
                 if not settings.get('enabled') or schedule == 'manual_only':
+                    continue
+                if settings.get('idle_only', True) and getattr(hub, 'busy', False):
                     continue
                 if schedule == 'daily_night' and not in_night_window(datetime.now(), night_window_for(cfg)):
                     # daily_night means the night slot, not "whatever time the app happened to start".

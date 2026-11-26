@@ -106,6 +106,23 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertTrue(ok, message)
         self.assertNotIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
 
+    def test_panel_edit_refuses_a_stale_hash_and_saves_with_the_current_one(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        entry = next(item for item in tools.panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body'},
+                                       expected_sha256='0' * 64)
+        self.assertFalse(ok)
+        self.assertIn('更新', message)
+        self.assertEqual('hash me', self.memory.content_for(memory_id))
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body'},
+                                       expected_sha256=entry['sha256'])
+        self.assertTrue(ok, message)
+        self.assertEqual('new body', self.memory.content_for(memory_id))
+
     def test_panel_entries_expose_the_same_sha_as_the_edit_lock(self):
         from brain_p4_api import memory_sha256
         from memory_native import NativeMemoryTools

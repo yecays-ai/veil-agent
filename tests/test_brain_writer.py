@@ -58,6 +58,30 @@ class WriterTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_update_rejects_a_stale_hash_inside_the_write_transaction(self):
+        connection = self.connect()
+        try:
+            created = brain_writer.create_memory(connection, {'body': 'one', 'title': 'One'},
+                                                 embedder=lambda _: vector())
+            memory_id = created['memory_id']
+            row = connection.execute('SELECT body, body_sha256 FROM memories WHERE id=?',
+                                     (memory_id,)).fetchone()
+            current = row[1] or brain_writer._sha(row[0] or '')
+            with self.assertRaises(brain_writer.WriteConflict):
+                brain_writer.update_memory(connection, memory_id, {'body': 'two'},
+                                           embedder=lambda _: vector(),
+                                           expected_sha256='0' * 64)
+            self.assertEqual('one', connection.execute(
+                'SELECT body FROM memories WHERE id=?', (memory_id,)).fetchone()[0])
+            result = brain_writer.update_memory(connection, memory_id, {'body': 'two'},
+                                                embedder=lambda _: vector(),
+                                                expected_sha256=current)
+            self.assertEqual('saved', result['status'])
+            self.assertEqual('two', connection.execute(
+                'SELECT body FROM memories WHERE id=?', (memory_id,)).fetchone()[0])
+        finally:
+            connection.close()
+
     def test_hard_delete_keeps_only_a_minimal_tombstone(self):
         connection = self.connect()
         try:

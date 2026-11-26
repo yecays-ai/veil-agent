@@ -6,7 +6,7 @@
 
 - **分支**：`ticket/451-p4-p5-brain-workspace`，已把 `main` `a1f2255`（含 P6-S2/S1/S4）合并进分支。
 - **本单交付**：P4 只读记忆库/事件/关系/召回追踪 API 与 P5 `H-1..H-9` 只读健康巡检；三组工作区导航、四套主题、独立伴随小窗置顶、头像持久化与三层 `chat-custom.css`；预算账本与 `#446` 只读配置清单。
-- **审查修复（CodeRabbit 6 major + 1 outside-diff major + 22 minor）**：
+- **审查修复（第一轮 CodeRabbit 6 major + 1 outside-diff major + 22 minor；第二轮 17 条，含编辑哈希原子化、旧面板同源读取、按 ID 可见性、巡检覆盖度与桌面草稿/序号竞态）**：
   - 记忆编辑：`/api/memory/edit` 改为提交 `changes` 正文并强制携带打开时 `expected_sha256`（缺失即 400、并发不一致 409 且不写入）；409 后保留用户草稿并与服务器版本分开核对，不自动用新哈希重试。
   - 归档：新增真实写入 `/api/memory/archive`（`panel_archive`，走既有可逆 `trace archive` 路径），不再把列表接口当写操作。
   - 预算：`/api/budget/summary` 同时返回 `base_limit_cny` 与有效 `limit_cny`，表单只改基础限额；`ModelSettings.save` 在缺少 `endpoints`/`models` 时保留现有接口、模型与选择，避免预算页保存清空模型配置。

@@ -159,6 +159,16 @@ class P4P5BrainRoutesTest(TestCase):
         self.assertFalse(set(report['completed_checks']) & set(report['skipped_checks']))
         self.assertNotIn('H-2', report['completed_checks'])
 
+    def test_missing_database_scan_replaces_a_stale_healthy_report(self):
+        reports = self.role_dir / 'health-reports'
+        reports.mkdir()
+        (reports / 'latest.json').write_text(json.dumps(
+            {'schema_version': 1, 'summary': {'status': 'good'}, 'checks': []}), encoding='utf-8')
+        brain_health.run_health_scan(self.data_root, 'peter', self.role_dir / 'missing.db')
+        latest = json.loads((reports / 'latest.json').read_text(encoding='utf-8'))
+        self.assertEqual('H-0', latest['checks'][0]['id'])
+        self.assertFalse(latest['incomplete'])
+
     def test_health_scan_reports_storage_failure_instead_of_success(self):
         reports = self.role_dir / 'health-reports'
         reports.mkdir()
@@ -178,7 +188,7 @@ class P4P5BrainRoutesTest(TestCase):
         calls = []
 
         class FixtureTools:
-            def panel_edit(self, memory_id, changes):
+            def panel_edit(self, memory_id, changes, expected_sha256=''):
                 calls.append(('edit', memory_id, changes))
                 return True, 'saved'
 

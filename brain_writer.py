@@ -25,6 +25,10 @@ TABLE_DDLS = (
 TABLES = ';\n'.join(TABLE_DDLS) + ';\n'
 
 
+class WriteConflict(Exception):
+    """The memory changed since the caller read it; nothing was written."""
+
+
 def _sha(value):
     data = value.encode('utf-8') if isinstance(value, str) else value
     return hashlib.sha256(data).hexdigest()
@@ -368,8 +372,13 @@ def _vector_blob(values):
 
 
 def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
-                  operation_reason='', why_remembered='', archive_raw=False):
-    """Rewrite a memory, archiving the old version first, in one transaction."""
+                  operation_reason='', why_remembered='', archive_raw=False,
+                  expected_sha256=''):
+    """Rewrite a memory, archiving the old version first, in one transaction.
+
+    When ``expected_sha256`` is given, it is compared inside the same BEGIN IMMEDIATE
+    transaction that writes, so a background update can never slip between check and write.
+    """
     ensure_schema(connection)
     body_changed = 'body' in changes
     body = changes.get('body') if body_changed else None
@@ -382,6 +391,12 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
     model = embedding_model_of(embedder)
     try:
         connection.execute('BEGIN IMMEDIATE')
+        if expected_sha256:
+            row = connection.execute('SELECT body, body_sha256 FROM memories WHERE id=?',
+                                     (memory_id,)).fetchone()
+            current = (row[1] or _sha(row[0] or '')) if row is not None else None
+            if current != expected_sha256:
+                raise WriteConflict(memory_id)
         result = apply_update_memory(
             connection, memory_id, changes, vector=vector, state=state,
             operation_reason=operation_reason, why_remembered=why_remembered,

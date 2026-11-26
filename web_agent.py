@@ -15,6 +15,7 @@ import os
 import queue
 import re
 import secrets
+import sqlite3
 import socket
 import ssl
 import stat
@@ -2547,6 +2548,9 @@ def make_handler(hub, token):
             except ValueError:
                 self._send(400, {'error': '日期参数无效，应为 YYYY-MM-DD。'})
                 return
+            except sqlite3.Error:
+                self._send(503, {'error': 'Brain 数据库暂时无法读取，健康巡检未完成。'})
+                return
             except OSError:
                 self._send(500, {'error': '巡检完成但报告未能完整保存，请检查磁盘权限后重试。'})
                 return
@@ -2562,6 +2566,9 @@ def make_handler(hub, token):
                 updated = save_health_settings(data_root, role_id, body)
             except ValueError as exc:
                 self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '巡检设置未能保存，请检查磁盘权限后重试。'})
                 return
             self._send(200, {'schema_version': 1, 'settings': updated})
 
@@ -2582,12 +2589,18 @@ def make_handler(hub, token):
                     self._send(400, {'error': 'Brain 总览不接受查询参数。'})
                     return
                 from brain_p4_api import overview as brain_overview
-                self._send(200, brain_overview(hub))
+                try:
+                    self._send(200, brain_overview(hub))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
             elif url.path == '/api/memory/library':
                 if not self._guard(self.headers.get('X-Token')):
                     return
                 from brain_p4_api import library as brain_library
-                self._send(200, brain_library(hub, query))
+                try:
+                    self._send(200, brain_library(hub, query))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
             elif url.path == '/api/brain/health':
                 self._get_brain_health(query)
             elif url.path == '/api/brain/health/export':
@@ -2800,7 +2813,8 @@ def make_handler(hub, token):
                         })
                         return
                     ok, message = tools.panel_edit(body['id'], body.get('changes') or {}
-                                                   if isinstance(body.get('changes'), dict) else {})
+                                                   if isinstance(body.get('changes'), dict) else {},
+                                                   expected_sha256=expected_sha)
                 elif url.path == '/api/memory/delete':
                     ok, message = tools.panel_delete(body['id'])
                 # Ticket 363: history, archive and lock on the memory page.
