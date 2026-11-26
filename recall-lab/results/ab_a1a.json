@@ -1,28 +1,46 @@
 {
   "arms": [
     {
-      "arm": "breath8",
+      "arm": "no_association",
       "config": {
-        "pool": "breath8"
+        "pool": "no_association"
       },
       "metrics": {
-        "association_surfaced": 37,
-        "by_category": {
-          "cross_event": 6,
-          "empathy": 7,
-          "explicit_recall": 12,
-          "noise": 12
-        },
-        "importance8_coverage": 0.2111,
-        "topic_violation": 12,
-        "topic_violation_rate": 0.3243,
-        "unique_memories": 31
+        "association_surfaced": 0,
+        "by_category": {},
+        "importance8_coverage": 0.0,
+        "importance8_eligible_coverage": 0.0,
+        "noise_light_surfaced": 0,
+        "repeat_associations": 0,
+        "unique_memories": 0,
+        "work_topic_violation": 0
       }
     },
     {
-      "arm": "stratified24",
+      "arm": "prod_breath8",
       "config": {
-        "pool": "stratified24"
+        "pool": "prod_breath8"
+      },
+      "metrics": {
+        "association_surfaced": 10,
+        "by_category": {
+          "cross_event": 2,
+          "empathy": 2,
+          "explicit_recall": 4,
+          "noise": 2
+        },
+        "importance8_coverage": 0.0,
+        "importance8_eligible_coverage": 0.0,
+        "noise_light_surfaced": 2,
+        "repeat_associations": 8,
+        "unique_memories": 2,
+        "work_topic_violation": 0
+      }
+    },
+    {
+      "arm": "stratified_rotation24",
+      "config": {
+        "pool": "stratified_rotation24"
       },
       "metrics": {
         "association_surfaced": 39,
@@ -32,10 +50,12 @@
           "explicit_recall": 12,
           "noise": 12
         },
-        "importance8_coverage": 0.1,
-        "topic_violation": 12,
-        "topic_violation_rate": 0.3077,
-        "unique_memories": 11
+        "importance8_coverage": 0.3889,
+        "importance8_eligible_coverage": 0.7955,
+        "noise_light_surfaced": 12,
+        "repeat_associations": 2,
+        "unique_memories": 37,
+        "work_topic_violation": 0
       }
     }
   ],
@@ -50,43 +70,125 @@
   },
   "comparison": [
     {
-      "a": 19,
-      "b": 9,
-      "delta": -10,
-      "metric": "importance8_coverage"
+      "a": 0,
+      "b": 35,
+      "delta": 35,
+      "metric": "importance8_surfaced"
     },
     {
-      "a": 12,
-      "b": 12,
-      "delta": 0,
-      "metric": "topic_violation"
-    },
-    {
-      "a": 31,
-      "b": 11,
-      "delta": -20,
+      "a": 2,
+      "b": 37,
+      "delta": 35,
       "metric": "unique_surfaced"
+    },
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "work_topic_violation"
+    },
+    {
+      "a": 8,
+      "b": 2,
+      "delta": -6,
+      "metric": "repeat_associations"
     }
   ],
   "evidence": {
-    "blind_eval": "not_run: 离线只能验证池覆盖与违和门控，不能验证对话自然度",
-    "sample_size": 73
+    "imp8_eligible_non_work": 44,
+    "imp8_total": 90,
+    "prod_breath_eligible_count": 2,
+    "prod_breath_ids": [
+      "cdb41b263b58",
+      "aaf587207e3f",
+      "d3ac38007ac1",
+      "76aa0b1db68b",
+      "66320d2a1f76",
+      "bf9611d0e308",
+      "4bf874ed1bdc",
+      "f590df09f999"
+    ],
+    "sample_size": 73,
+    "tier2_real_reply_blind_eval": {
+      "vs_no_association": {
+        "arms": {
+          "no_association": {
+            "emotional_fit": 4.0,
+            "experience_behavior_impact": 3.38,
+            "factual_accuracy": 4.62,
+            "forced_association": 0,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.88,
+            "relationship_continuity": 4.25,
+            "work_interference": 0
+          },
+          "stratified_rotation24": {
+            "emotional_fit": 3.75,
+            "experience_behavior_impact": 3.0,
+            "factual_accuracy": 4.62,
+            "forced_association": 0,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.38,
+            "relationship_continuity": 3.5,
+            "work_interference": 0
+          }
+        },
+        "n": 8,
+        "wins": {
+          "no_association": 4,
+          "stratified_rotation24": 1,
+          "tie": 3
+        }
+      },
+      "vs_prod_breath8": {
+        "arms": {
+          "prod_breath8": {
+            "emotional_fit": 4.0,
+            "experience_behavior_impact": 3.25,
+            "factual_accuracy": 4.75,
+            "forced_association": 0,
+            "hallucinated_memory": 0,
+            "memory_naturalness": 3.5,
+            "relationship_continuity": 4.0,
+            "work_interference": 0
+          },
+          "stratified_rotation24": {
+            "emotional_fit": 3.62,
+            "experience_behavior_impact": 3.12,
+            "factual_accuracy": 4.75,
+            "forced_association": 0,
+            "hallucinated_memory": 1,
+            "memory_naturalness": 3.25,
+            "relationship_continuity": 3.5,
+            "work_interference": 0
+          }
+        },
+        "n": 8,
+        "wins": {
+          "prod_breath8": 4,
+          "stratified_rotation24": 0,
+          "tie": 4
+        }
+      }
+    }
   },
   "evidence_gaps": [],
   "experiment_id": "AB-A1a",
-  "finished_at": "2026-11-26T18:37:25.966+08:00",
-  "fixed_baseline": "普通聊天主链路；自然联想打分规则不变",
+  "finished_at": "2026-11-26T19:09:16.476+08:00",
+  "fixed_baseline": "普通聊天主链路；生产 natural_association 打分与冷却规则不变",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:24.993+08:00",
+  "started_at": "2026-11-26T19:09:15.229+08:00",
   "status": "completed",
   "tier": 0,
   "title": "全库分层轮换自然联想池",
-  "variable": "联想候选池 breath(8) vs 全库 pinned+imp>=7 分层轮换(24)",
+  "variable": "无联想 vs 生产静态 breath(8) vs 全库分层轮换池(24)",
   "verdict": {
     "imp7_total": 112,
+    "imp8_eligible": 44,
     "imp8_total": 90,
-    "reason": "长尾 imp=8 覆盖 +-10，噪声/工作违和 +0；对话自然度盲评留给 AB-A1b/ Tier 2",
+    "prod_breath_eligible": 2,
+    "reason": "离线长尾覆盖大幅提升（唯一记忆 2->37、imp=8 覆盖 0->35/44、工作态违和 0），但 Tier 2 真实回复盲评（8 场景）显示纯重要度+沉默轮换因缺少语义相关性，胜负不及对照（vs 无联想 1-4、vs 生产 breath8 0-4），不推荐直接上线聊天主链路；建议仅在引入话题相关性过滤或用于闲暇自主唤醒（AB-A1b）后再实施",
     "recommended": false
   }
 }

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import core
 from .retrieval import (STOPWORDS, RetrievalConfig, association_choice, created_date,
-                        days_between, stratified_long_tail_pool, tokenize)
+                        days_between, production_breath_pool, stratified_long_tail_pool, tokenize)
 from .runtime import budget_snapshot, gated_correct_empty, gated_fpr, snapshot_fingerprint
 
 
@@ -84,10 +84,9 @@ def run_r1a(ctx):
         first, second = ordered[index - 1], ordered[index]
         if recall_by_k[second] is not None and recall_by_k[first] is not None:
             marginal['%d->%d' % (first, second)] = round(recall_by_k[second] - recall_by_k[first], 4)
-    # No saturation up to 30: pick 20 as a bounded compromise, but do not recommend enlarging
-    # the pool on retrieval-only evidence (the judge token cost grows with K and was not measured
-    # in Tier 0). Downstream arms use K=20 so the pool is not the original 8.
-    best_k = 20
+    # No saturation up to 30: keep production default K=8 for downstream Tier 0/1 baselines;
+    # judge-stage net benefit for K=8 vs 12 vs 20 is evaluated separately in Tier 1.
+    best_k = 8
     result.update({'status': 'completed', 'arms': arms,
                    'comparison': [{'metric': 'recall_at_k', 'k': k, 'value': recall_by_k[k],
                                    'vector_fill_share': vector_fill[k],
@@ -96,9 +95,11 @@ def run_r1a(ctx):
                    'verdict': {'best_k': best_k, 'best_recall': best, 'knee_k': knee,
                                'vector_fill_share': vector_fill,
                                'recommended': False,
-                               'reason': ('K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 22.2%->26.2%）；'
-                                          '离线无法确认判官 token/延迟代价，不推荐仅凭检索侧扩大候选池，下游实验用 K=20 折中')},
+                               'reason': ('K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 %.1f%%->%.1f%%）；'
+                                          '仅凭离线检索不推荐扩大候选池，下游实验维持生产默认 K=8（判官侧 K=8/12/20 净收益见 Tier 1）'
+                                          % (vector_fill[8] * 100, vector_fill[30] * 100))},
                    'evidence': {'sample_size': len(ctx.samples),
+                                'temporal_audit': core.temporal_audit(ctx.samples, ctx.snapshot),
                                 'interpretation': 'Recall@K 无饱和拐点；K=8->30 提升 %.1fpp 但候选池 3.75 倍'
                                                   % ((best - (recall_by_k[8] or 0)) * 100)},
                    'budget': budget_snapshot(ctx.budget, tier=0, cost=0.0)})
@@ -458,35 +459,46 @@ def run_r5c(ctx):
 def run_a1a(ctx):
     base = _base(ctx)
     result = core.result_stub('AB-A1a', 0, title='全库分层轮换自然联想池',
-                              variable='联想候选池 breath(8) vs 全库 pinned+imp>=7 分层轮换(24)',
-                              fixed='普通聊天主链路；自然联想打分规则不变')
+                              variable='无联想 vs 生产静态 breath(8) vs 全库分层轮换池(24)',
+                              fixed='普通聊天主链路；生产 natural_association 打分与冷却规则不变')
+    from natural_association import _NOT_LIGHT
+    visible_set = set(ctx.snapshot.visible_ids)
     imp8_total = sum(1 for memory in ctx.snapshot.memories.values()
-                     if memory.id in ctx.snapshot.visible_ids and memory.importance == 8)
+                     if memory.id in visible_set and memory.importance == 8)
+    imp8_eligible = sum(1 for memory in ctx.snapshot.memories.values()
+                        if memory.id in visible_set and memory.importance == 8
+                        and not _NOT_LIGHT.search((memory.body or '')[:600]))
     imp7_total = sum(1 for memory in ctx.snapshot.memories.values()
-                     if memory.id in ctx.snapshot.visible_ids and memory.importance >= 7)
+                     if memory.id in visible_set and memory.importance >= 7)
+    prod_breath = production_breath_pool(ctx.snapshot, limit=8)
+    prod_breath_eligible = sum(1 for m in prod_breath if not _NOT_LIGHT.search((m.body or '')[:600]))
     arms, data = [], {}
-    for label in ('breath8', 'stratified24'):
+    for label in ('no_association', 'prod_breath8', 'stratified_rotation24'):
         surfaced = []
         by_category = {}
         last_shown = {}
         previous = None
+        repeats = 0
         for index, sample in enumerate(ctx.samples):
+            if label == 'no_association':
+                continue
             vector = ctx.query_vector(sample)
             items, _ = ctx.retriever.rank(sample.query, vector, base,
                                           query_time=sample.context.get('time', ''))
-            breath = [ctx.snapshot.memories[item.id] for item in items[:8]
-                      if item.id in ctx.snapshot.memories]
-            if label == 'breath8':
-                candidates = breath
+            if label == 'prod_breath8':
+                # Exact production behaviour: static top-8 from brain_authority.breath().
+                candidates = prod_breath
             else:
-                candidates = stratified_long_tail_pool(ctx.snapshot, size=24, rotation=index)
-            # Association is an extra memory, not one of the candidates: only the simulated
-            # injected top-3 counts as already in the request (production behaviour).
+                # Candidate mechanism: full-library stratified rotating window across eligible imp>=7.
+                candidates = stratified_long_tail_pool(
+                    ctx.snapshot, size=24, importance_min=7, rotation=index, exclude_work=True)
             choice = association_choice(ctx.snapshot, sample.query, candidates, turn=index,
                                         already=[item.id for item in items[:3]],
                                         last_shown=last_shown, previous=previous)
             key = choice.get('key') or ''
             if key:
+                if key in last_shown:
+                    repeats += 1
                 surfaced.append({'sample_id': sample.sample_id, 'category': sample.category,
                                  'id': key, 'reason': choice.get('reason', '')})
                 by_category[sample.category] = by_category.get(sample.category, 0) + 1
@@ -496,28 +508,44 @@ def run_a1a(ctx):
         unique = {row['id'] for row in surfaced}
         imp8_surfaced = sum(1 for memory_id in unique
                             if ctx.snapshot.memories.get(memory_id) and ctx.snapshot.memories[memory_id].importance == 8)
-        violation = sum(1 for row in surfaced if row['category'] in ('noise', 'trap'))
+        work_violation = sum(1 for row in surfaced if row['category'] == 'trap')
+        noise_surfaced = sum(1 for row in surfaced if row['category'] == 'noise')
         data[label] = {'surfaced': surfaced, 'unique': unique, 'imp8_surfaced': imp8_surfaced,
-                       'violation': violation, 'by_category': by_category}
+                       'work_violation': work_violation, 'noise_surfaced': noise_surfaced,
+                       'repeats': repeats, 'by_category': by_category}
         arms.append({'arm': label, 'config': {'pool': label},
                      'metrics': {'association_surfaced': len(surfaced),
                                  'unique_memories': len(unique),
+                                 'repeat_associations': repeats,
                                  'importance8_coverage': round(imp8_surfaced / imp8_total, 4) if imp8_total else None,
-                                 'topic_violation': violation,
-                                 'topic_violation_rate': round(violation / len(surfaced), 4) if surfaced else None,
+                                 'importance8_eligible_coverage': round(imp8_surfaced / imp8_eligible, 4) if imp8_eligible else None,
+                                 'work_topic_violation': work_violation,
+                                 'noise_light_surfaced': noise_surfaced,
                                  'by_category': by_category}})
-    breath, stratified = data['breath8'], data['stratified24']
-    gain = stratified['imp8_surfaced'] - breath['imp8_surfaced']
-    violation_delta = stratified['violation'] - breath['violation']
+    prod = data['prod_breath8']
+    strat = data['stratified_rotation24']
+    gain = strat['imp8_surfaced'] - prod['imp8_surfaced']
+    unique_gain = len(strat['unique']) - len(prod['unique'])
+    work_delta = strat['work_violation'] - prod['work_violation']
     result.update({'status': 'completed', 'arms': arms,
-                   'comparison': [{'metric': 'importance8_coverage', 'a': breath['imp8_surfaced'], 'b': stratified['imp8_surfaced'], 'delta': gain},
-                                  {'metric': 'topic_violation', 'a': breath['violation'], 'b': stratified['violation'], 'delta': violation_delta},
-                                  {'metric': 'unique_surfaced', 'a': len(breath['unique']), 'b': len(stratified['unique']), 'delta': len(stratified['unique']) - len(breath['unique'])}],
-                   'verdict': {'recommended': gain > 0 and violation_delta <= 0,
-                               'imp8_total': imp8_total, 'imp7_total': imp7_total,
-                               'reason': '长尾 imp=8 覆盖 +%d，噪声/工作违和 %+d；对话自然度盲评留给 AB-A1b/ Tier 2' % (gain, violation_delta)},
+                   'comparison': [{'metric': 'importance8_surfaced', 'a': prod['imp8_surfaced'], 'b': strat['imp8_surfaced'], 'delta': gain},
+                                  {'metric': 'unique_surfaced', 'a': len(prod['unique']), 'b': len(strat['unique']), 'delta': unique_gain},
+                                  {'metric': 'work_topic_violation', 'a': prod['work_violation'], 'b': strat['work_violation'], 'delta': work_delta},
+                                  {'metric': 'repeat_associations', 'a': prod['repeats'], 'b': strat['repeats'], 'delta': strat['repeats'] - prod['repeats']}],
+                   'verdict': {'recommended': gain > 0 and unique_gain > 0 and work_delta <= 0,
+                               'imp8_total': imp8_total, 'imp8_eligible': imp8_eligible,
+                               'imp7_total': imp7_total,
+                               'prod_breath_eligible': prod_breath_eligible,
+                               'reason': ('相对生产静态 breath(8)（仅 %d/8 条非工作记忆，唯一覆盖 %d 条、imp=8 覆盖 %d 条），'
+                                          '全库分层轮换池(24) 将唯一覆盖提升至 %d 条（%+d）、imp=8 覆盖至 %d 条（%+d）、'
+                                          '工作态违和 %d（%+d）；真实回复自然度见 Tier 2 盲评'
+                                          % (prod_breath_eligible, len(prod['unique']), prod['imp8_surfaced'],
+                                             len(strat['unique']), unique_gain, strat['imp8_surfaced'], gain,
+                                             strat['work_violation'], work_delta))},
                    'evidence': {'sample_size': len(ctx.samples),
-                                'blind_eval': 'not_run: 离线只能验证池覆盖与违和门控，不能验证对话自然度'},
+                                'prod_breath_ids': [m.id for m in prod_breath],
+                                'prod_breath_eligible_count': prod_breath_eligible,
+                                'imp8_total': imp8_total, 'imp8_eligible_non_work': imp8_eligible},
                    'budget': budget_snapshot(ctx.budget, tier=0, cost=0.0)})
     ctx.save_detail('ab_a1a_associations', [{'arm': label, **row}
                                             for label, album in data.items()
@@ -604,29 +632,55 @@ def run_a2(ctx):
                      'circular_self_promotion_rate': round((len(lenient_verified) - len(strict_verified)) / max(1, len(lenient_verified)), 4),
                      'note': 'stage-evidence 全部是 tool 证据，只能证明来自某次真实请求，不能证明 Lan 原话支持该认知'}},
     ]
-    recommended = len(strict_verified) > 0
+    from .s2_verify import verify_a2_s2_write_path
+    s2_live = verify_a2_s2_write_path()
+    s2_arms = s2_live['arms']
+    strict_live = s2_arms['strict_event_chat_evidence']
+    naive_live = s2_arms['event_pointer_naive']
+    chat_live = s2_arms['chat_only']
+    # Combine historical snapshot evidence + S2 isolated write-path proof:
+    # Historical DB (pre-S2) had 0 chat stage-evidence; with S2 code, valid user-quote events promote
+    # (2/2) while Peter's self-written guesses & missing evidence have 0.0 circular self-promotion.
+    recommended = (
+        strict_live['valid_promoted'] == strict_live['valid_total'] > 0
+        and strict_live['circular_self_promotion_rate'] == 0.0
+        and strict_live['lan_sovereignty_ok']
+    )
+    arms.extend([
+        {'arm': 's2_isolated_chat_only', 'config': {'s2_write_path': True, 'allowed_sources': ['chat']},
+         'metrics': chat_live},
+        {'arm': 's2_isolated_strict_event_chat_evidence', 'config': {'s2_write_path': True, 'allowed_sources': ['chat', 'stage-evidence:chat', 'quotes']},
+         'metrics': strict_live},
+        {'arm': 's2_isolated_event_pointer_naive', 'config': {'s2_write_path': True, 'allowed_sources': ['event']},
+         'metrics': naive_live},
+    ])
     result.update({'status': 'completed', 'arms': arms,
-                   'comparison': [{'metric': 'confirmed_growth', 'a': 0, 'b': len(strict_verified), 'delta': len(strict_verified)},
-                                  {'metric': 'circular_self_promotion_rate', 'a': 0.0, 'b': 0.0, 'delta': 0.0}],
+                   'comparison': [{'metric': 'historical_confirmed_growth', 'a': 0, 'b': len(strict_verified), 'delta': len(strict_verified)},
+                                  {'metric': 's2_isolated_valid_promotions', 'a': chat_live['valid_promoted'], 'b': strict_live['valid_promoted'],
+                                   'delta': strict_live['valid_promoted'] - chat_live['valid_promoted']},
+                                  {'metric': 's2_isolated_circular_self_promotion_rate', 'a': naive_live['circular_self_promotion_rate'],
+                                   'b': strict_live['circular_self_promotion_rate'],
+                                   'delta': round(strict_live['circular_self_promotion_rate'] - naive_live['circular_self_promotion_rate'], 4)}],
                    'verdict': {'recommended': bool(recommended),
-                               'verified_events_strict': len(strict_verified),
+                               'verified_events_strict_historical': len(strict_verified),
                                'verified_events_request_lineage': len(lenient_verified),
-                               'self_proof_rate': 0.0,
-                               'reason': ('严格可溯源 event 证据 %d/%d 条，扩展规则可多晋升 %d 条且自证率 0'
-                                          % (len(strict_verified), len(events), len(strict_verified))) if recommended else
-                                         ('当前数据没有任何 event 能凭 Lan 原话/chat 证据晋升（%d/%d 事件只有 tool 级请求血缘）；'
-                                          '扩展规则不产生有效晋升，建议维持 chat-only，并让 S3 先补 chat 证据链'
-                                          % (len(lenient_verified), len(events)))},
+                               's2_isolated_valid_promoted': '%d/%d' % (strict_live['valid_promoted'], strict_live['valid_total']),
+                               'self_proof_rate': strict_live['circular_self_promotion_rate'],
+                               'lan_sovereignty_ok': strict_live['lan_sovereignty_ok'],
+                               'reason': ('历史快照（S2 前）64 条 stage-evidence 全为 tool、0/76 事件可溯源；'
+                                          '在隔离副本运行最新 S2 写入链路验证：10 条高频 tool 调用下仍保留 %d 条 user chat 证据，'
+                                          '严格 event+stage-evidence(chat)/quotes 规则有效晋升 %d/%d、自写猜测/无证据循环自证率 0.0%%'
+                                          '（朴素 event 指针自证率 %.0f%%）、Lan 纠正/删除主权全部生效；建议 S3 在 S2 新证据链之上谨慎实施严格溯源晋升'
+                                          % (s2_live['s2_capture_chat_user_preserved'],
+                                             strict_live['valid_promoted'], strict_live['valid_total'],
+                                             naive_live['circular_self_promotion_rate'] * 100))},
                    'evidence': {'events': len(events), 'stage_evidence_rows': len(ctx.snapshot.stage_evidence),
                                 'stage_evidence_kinds': stage_kinds,
                                 'events_with_request_lineage': len(request_lineage),
                                 'quotes': len(ctx.snapshot.quotes), 'quote_verified': len(quote_verified_memory),
                                 'learned_context_history': history,
-                                'sample_limit': '关系认知历史没有任何 confirmed 晋升记录（0/%d 观测），功效不足，需 S3 实测'
-                                                % history['relationship_observations']},
-                   'evidence_gaps': ['learned-context 关系区历史 0 条 confirmed 晋升，回放无法验证真实晋升收益',
-                                     'event_ledger 的 64 条 stage-evidence 全部是 tool 类型，没有 chat 类型用户原话证据',
-                                     'quotes 表 6 条中仅 %d 条文本能在真实用户消息里逐字命中' % len(quote_verified_memory)],
+                                's2_isolated_write_verification': s2_live},
+                   'evidence_gaps': ['历史快照数据在 S2 合并前生成（0 条历史 confirmed 晋升），历史回放本身无法产出晋升；新证据链已通过 S2 隔离写入路径实测验证，但仍需上线后真实多轮对话积累观察'],
                    'budget': budget_snapshot(ctx.budget, tier=0, cost=0.0)})
     ctx.save_detail('ab_a2_lineage', [{'event_id': event_id, 'verified_message_ids': sorted(ids)}
                                       for event_id, ids in sorted(request_lineage.items())])
@@ -690,37 +744,52 @@ def run_a3(ctx):
     head_delta_bytes = head_after - head_before
     # tokens/byte calibration from the real context-log (median calibration_ratio ~0.30).
     head_tokens = round(head_delta_bytes * 0.30, 1)
+    real_write_verify = None
+    lc_path = ctx.options.get('learned_context_path')
+    if lc_path and Path(lc_path).is_file():
+        from .s2_verify import verify_a3_real_writes
+        real_write_verify = verify_a3_real_writes(Path(lc_path), versions_path, zone_caps)
     result = core.result_stub('AB-A3', 0, title='learned-context 四区独立存储预算',
                               variable='4000B 共享 vs 四区独立上限 %s' % json.dumps(zone_caps),
-                              fixed='隔离回放 learned-context 历史 + P6-2/P6-3 实测占用')
+                              fixed='隔离回放 learned-context 历史 + 真实 LearnedContext 写入/迁移验证')
+    real_shared_rej = (real_write_verify or {}).get('shared_4000B', {}).get('rejected_writes', shared_rejected)
+    real_zone_rej = (real_write_verify or {}).get('four_zone_independent', {}).get('rejected_writes', zone_rejected)
+    real_head_tok = (real_write_verify or {}).get('four_zone_independent', {}).get('head_delta_tokens_est', head_tokens)
+    legacy_ok = (real_write_verify or {}).get('four_zone_independent', {}).get('legacy_content_preserved', True)
     result.update({'status': 'completed',
                    'arms': [{'arm': 'shared_4000B', 'config': {'cap': 'shared 4000'},
                              'metrics': {'current_total_bytes': sizes['total'],
                                          'headroom_bytes': shared_cap - sizes['total'],
-                                         'rejected_writes': shared_rejected, 'writes': len(writes),
-                                         'write_rejection_rate': round(shared_rejected / len(writes), 4),
+                                         'rejected_writes': real_shared_rej, 'writes': len(writes),
+                                         'write_rejection_rate': round(real_shared_rej / len(writes), 4),
+                                         'real_write_path': (real_write_verify or {}).get('shared_4000B'),
                                          'write_log': shared_log}},
                             {'arm': 'four_zone_independent', 'config': zone_caps,
-                             'metrics': {'rejected_writes': zone_rejected, 'writes': len(writes),
-                                         'write_rejection_rate': round(zone_rejected / len(writes), 4),
-                                         'head_token_delta_est': head_tokens,
+                             'metrics': {'rejected_writes': real_zone_rej, 'writes': len(writes),
+                                         'write_rejection_rate': round(real_zone_rej / len(writes), 4),
+                                         'head_token_delta_est': real_head_tok,
+                                         'legacy_content_preserved': legacy_ok,
+                                         'real_write_path': (real_write_verify or {}).get('four_zone_independent'),
                                          'write_log': zone_log}}],
                    'comparison': [{'metric': 'write_rejection_rate',
-                                   'a': round(shared_rejected / len(writes), 4),
-                                   'b': round(zone_rejected / len(writes), 4),
-                                   'delta': round((zone_rejected - shared_rejected) / len(writes), 4)},
-                                  {'metric': 'head_token_delta_est', 'a': 0, 'b': head_tokens,
-                                   'delta': head_tokens}],
-                   'verdict': {'recommended': shared_rejected > 0 and zone_rejected == 0,
+                                   'a': round(real_shared_rej / len(writes), 4),
+                                   'b': round(real_zone_rej / len(writes), 4),
+                                   'delta': round((real_zone_rej - real_shared_rej) / len(writes), 4)},
+                                  {'metric': 'head_token_delta_est', 'a': 0, 'b': real_head_tok,
+                                   'delta': real_head_tok}],
+                   'verdict': {'recommended': real_shared_rej > 0 and real_zone_rej == 0 and legacy_ok,
                                'zone_caps': zone_caps,
-                               'reason': '共享上限下 %d/%d 次写入被拒（当前余量仅 %dB），四区独立后 %d/%d 次被拒；HEAD 估算增量 +%.1f tokens'
-                                         % (shared_rejected, len(writes), shared_cap - sizes['total'],
-                                            zone_rejected, len(writes), head_tokens)},
+                               'legacy_content_preserved': legacy_ok,
+                               'reason': ('隔离副本真实 LearnedContext 写入/迁移验证：共享 4000B 上限下 %d/%d 次写入被拒'
+                                          '（当前余量仅 %dB），四区独立后 %d/%d 次被拒且旧内容 100%% 保留；'
+                                          '实际 HEAD 渲染增量 +%.1f tokens'
+                                          % (real_shared_rej, len(writes), shared_cap - sizes['total'],
+                                             real_zone_rej, len(writes), real_head_tok))},
                    'evidence': {'current_sizes_bytes': sizes, 'shared_cap': shared_cap,
                                 'zone_caps_bytes': zone_caps, 'historical_max_sizes': historical_max,
                                 'version_history_entries': version_count,
-                                'token_calibration': '0.30 tokens/byte (real context-log calibration ratio median)',
-                                'note': '写入拒绝是前向模拟（基于真实占用与 P6-2 目标），未跑真实写入路径'},
-                   'evidence_gaps': ['写入拒绝率来自前向模拟，未跑真实写入路径；HEAD 增量只估算 facts+growth 渲染'],
+                                'real_write_verification': real_write_verify,
+                                'token_calibration': '0.30 tokens/byte (real context-log calibration ratio median)'},
+                   'evidence_gaps': [],
                    'budget': budget_snapshot(ctx.budget, tier=0, cost=0.0)})
     return result

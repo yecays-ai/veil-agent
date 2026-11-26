@@ -1,36 +1,437 @@
 {
-  "arms": [],
+  "arms": [
+    {
+      "arm": "no_rerank (R1b top-20)",
+      "config": {
+        "model": null,
+        "pool_k": 20
+      },
+      "metrics": {
+        "by_category": {
+          "autonomy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 4,
+            "empty_injected_n": 4,
+            "false_positive_rate": 1.0,
+            "miss_rate": 0.4375,
+            "ndcg_at_8": 0.4548,
+            "precision_at_5": 0.225,
+            "recall_at_k": 0.5625,
+            "samples": 12
+          },
+          "cross_event": {
+            "cross_event_coverage": 0.1,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.7667,
+            "ndcg_at_8": 0.2052,
+            "precision_at_5": 0.14,
+            "recall_at_k": 0.2333,
+            "samples": 10
+          },
+          "empathy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.6111,
+            "ndcg_at_8": 0.2832,
+            "precision_at_5": 0.1167,
+            "recall_at_k": 0.3889,
+            "samples": 12
+          },
+          "explicit_recall": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.1333,
+            "ndcg_at_8": 0.8367,
+            "precision_at_5": 0.2133,
+            "recall_at_k": 0.8667,
+            "samples": 15
+          },
+          "noise": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          },
+          "trap": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          }
+        },
+        "cost_cny": 0.0,
+        "k": 8,
+        "latency": {
+          "mean_ms": 0.0,
+          "n": 73,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "overall": {
+          "cross_event_coverage": 0.1,
+          "empty_correct": 0,
+          "empty_expected_n": 28,
+          "empty_injected_n": 28,
+          "false_positive_rate": 1.0,
+          "miss_rate": 0.4556,
+          "ndcg_at_8": 0.4809,
+          "precision_at_5": 0.1733,
+          "recall_at_k": 0.5444,
+          "samples": 73
+        }
+      }
+    },
+    {
+      "arm": "BAAI/bge-reranker-v2-m3",
+      "config": {
+        "model": "BAAI/bge-reranker-v2-m3",
+        "pool_k": 20,
+        "rate_cny_per_million": 0.0
+      },
+      "metrics": {
+        "by_category": {
+          "autonomy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 4,
+            "empty_injected_n": 4,
+            "false_positive_rate": 1.0,
+            "miss_rate": 0.7917,
+            "ndcg_at_8": 0.144,
+            "precision_at_5": 0.075,
+            "recall_at_k": 0.2083,
+            "samples": 12
+          },
+          "cross_event": {
+            "cross_event_coverage": 0.4,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.6083,
+            "ndcg_at_8": 0.3548,
+            "precision_at_5": 0.2,
+            "recall_at_k": 0.3917,
+            "samples": 10
+          },
+          "empathy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.7222,
+            "ndcg_at_8": 0.246,
+            "precision_at_5": 0.1167,
+            "recall_at_k": 0.2778,
+            "samples": 12
+          },
+          "explicit_recall": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.0,
+            "ndcg_at_8": 0.9456,
+            "precision_at_5": 0.2667,
+            "recall_at_k": 1.0,
+            "samples": 15
+          },
+          "noise": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          },
+          "trap": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          }
+        },
+        "cost_cny": 0.0,
+        "errors": 0,
+        "est_cny_per_1k_turns": 0.0,
+        "gated_0.3": {
+          "cross_event_coverage": 0.0,
+          "empty_correct": 17,
+          "empty_expected_n": 28,
+          "empty_injected_n": 11,
+          "false_positive_rate": 0.3929,
+          "miss_rate": 0.6815,
+          "ndcg_at_8": 0.3335,
+          "precision_at_5": 0.3556,
+          "recall_at_k": 0.3185,
+          "samples": 73
+        },
+        "gated_0.5": {
+          "cross_event_coverage": 0.0,
+          "empty_correct": 21,
+          "empty_expected_n": 28,
+          "empty_injected_n": 7,
+          "false_positive_rate": 0.25,
+          "miss_rate": 0.7537,
+          "ndcg_at_8": 0.2632,
+          "precision_at_5": 0.3037,
+          "recall_at_k": 0.2463,
+          "samples": 73
+        },
+        "input_tokens": 444774,
+        "k": 8,
+        "latency": {
+          "mean_ms": 4106.02,
+          "n": 73,
+          "p50_ms": 3085.96,
+          "p95_ms": 8277.29
+        },
+        "overall": {
+          "cross_event_coverage": 0.4,
+          "empty_correct": 0,
+          "empty_expected_n": 28,
+          "empty_injected_n": 28,
+          "false_positive_rate": 1.0,
+          "miss_rate": 0.4685,
+          "ndcg_at_8": 0.4852,
+          "precision_at_5": 0.1778,
+          "recall_at_k": 0.5315,
+          "samples": 73
+        }
+      }
+    },
+    {
+      "arm": "Qwen/Qwen3-Reranker-0.6B",
+      "config": {
+        "model": "Qwen/Qwen3-Reranker-0.6B",
+        "pool_k": 20,
+        "rate_cny_per_million": 0.07
+      },
+      "metrics": {
+        "by_category": {
+          "autonomy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 4,
+            "empty_injected_n": 4,
+            "false_positive_rate": 1.0,
+            "miss_rate": 0.5,
+            "ndcg_at_8": 0.4187,
+            "precision_at_5": 0.2,
+            "recall_at_k": 0.5,
+            "samples": 12
+          },
+          "cross_event": {
+            "cross_event_coverage": 0.5,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.5583,
+            "ndcg_at_8": 0.3743,
+            "precision_at_5": 0.22,
+            "recall_at_k": 0.4417,
+            "samples": 10
+          },
+          "empathy": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.6667,
+            "ndcg_at_8": 0.2699,
+            "precision_at_5": 0.1333,
+            "recall_at_k": 0.3333,
+            "samples": 12
+          },
+          "explicit_recall": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 0,
+            "empty_injected_n": 0,
+            "false_positive_rate": null,
+            "miss_rate": 0.0,
+            "ndcg_at_8": 0.9513,
+            "precision_at_5": 0.2667,
+            "recall_at_k": 1.0,
+            "samples": 15
+          },
+          "noise": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          },
+          "trap": {
+            "cross_event_coverage": null,
+            "empty_correct": 0,
+            "empty_expected_n": 12,
+            "empty_injected_n": 12,
+            "false_positive_rate": 1.0,
+            "miss_rate": null,
+            "ndcg_at_8": null,
+            "precision_at_5": null,
+            "recall_at_k": null,
+            "samples": 12
+          }
+        },
+        "cost_cny": 0.035315,
+        "errors": 0,
+        "est_cny_per_1k_turns": 0.5023,
+        "gated_0.3": {
+          "cross_event_coverage": 0.1,
+          "empty_correct": 11,
+          "empty_expected_n": 28,
+          "empty_injected_n": 17,
+          "false_positive_rate": 0.6071,
+          "miss_rate": 0.5574,
+          "ndcg_at_8": 0.4529,
+          "precision_at_5": 0.3444,
+          "recall_at_k": 0.4426,
+          "samples": 73
+        },
+        "gated_0.5": {
+          "cross_event_coverage": 0.1,
+          "empty_correct": 11,
+          "empty_expected_n": 28,
+          "empty_injected_n": 17,
+          "false_positive_rate": 0.6071,
+          "miss_rate": 0.5648,
+          "ndcg_at_8": 0.4477,
+          "precision_at_5": 0.3407,
+          "recall_at_k": 0.4352,
+          "samples": 73
+        },
+        "input_tokens": 523864,
+        "k": 8,
+        "latency": {
+          "mean_ms": 3784.25,
+          "n": 73,
+          "p50_ms": 2718.94,
+          "p95_ms": 8249.27
+        },
+        "overall": {
+          "cross_event_coverage": 0.5,
+          "empty_correct": 0,
+          "empty_expected_n": 28,
+          "empty_injected_n": 28,
+          "false_positive_rate": 1.0,
+          "miss_rate": 0.3907,
+          "ndcg_at_8": 0.5467,
+          "precision_at_5": 0.2089,
+          "recall_at_k": 0.6093,
+          "samples": 73
+        }
+      }
+    }
+  ],
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
+      "1": 1.575255,
       "2": 0.084864
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 520,
+    "total_cny": 1.660119
   },
-  "comparison": {},
-  "evidence": {
-    "configured_rerank_model": null,
-    "price_upper_bound_confirmed": false,
-    "probe_paid_call": false,
-    "repo_rerank_implementations": []
-  },
-  "evidence_gaps": [
-    "需要先有 rerank 服务端点、模型标识与价格表，才能跑 Precision@5/p95/单轮成本对照"
+  "comparison": [
+    {
+      "BAAI/bge-reranker-v2-m3": 0.1778,
+      "Qwen/Qwen3-Reranker-0.6B": 0.2089,
+      "metric": "precision_at_5",
+      "no_rerank": 0.1733
+    },
+    {
+      "BAAI/bge-reranker-v2-m3": 0.5315,
+      "Qwen/Qwen3-Reranker-0.6B": 0.6093,
+      "metric": "recall_at_8",
+      "no_rerank": 0.5444
+    },
+    {
+      "BAAI/bge-reranker-v2-m3": 0.4852,
+      "Qwen/Qwen3-Reranker-0.6B": 0.5467,
+      "metric": "ndcg_at_8",
+      "no_rerank": 0.4809
+    },
+    {
+      "BAAI/bge-reranker-v2-m3": 8277.29,
+      "Qwen/Qwen3-Reranker-0.6B": 8249.27,
+      "metric": "p95_latency_ms"
+    }
   ],
+  "evidence": {
+    "candidate_pool_k": 20,
+    "endpoint": "https://api.siliconflow.cn/v1/rerank",
+    "prices": {
+      "BAAI/bge-reranker-v2-m3": {
+        "price_source": "SiliconFlow official pricing (free tier, verified 2026-11-26)",
+        "rate_cny_per_million": 0.0
+      },
+      "Qwen/Qwen3-Reranker-0.6B": {
+        "price_source": "SiliconFlow official pricing (0.07 CNY/1M input tokens, verified 2026-11-26)",
+        "rate_cny_per_million": 0.07
+      }
+    },
+    "samples": 73
+  },
+  "evidence_gaps": [],
   "experiment_id": "AB-R2",
-  "finished_at": "2026-11-26T18:37:26.790+08:00",
-  "fixed_baseline": "最佳候选池（R1+R4 胜出项）",
+  "finished_at": "2026-11-26T19:19:49.437+08:00",
+  "fixed_baseline": "AB-R1b 胜出检索（停用词开）Top-20 候选池，全量 73 条样本",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:26.783+08:00",
-  "status": "blocked",
+  "started_at": "2026-11-26T19:10:34.860+08:00",
+  "status": "completed",
   "tier": 1,
   "title": "Reranker 候选排序",
-  "variable": "无 vs Qwen3-Reranker-0.6B vs BGE-Reranker-v2-m3",
+  "variable": "无 vs BAAI/bge-reranker-v2-m3 vs Qwen/Qwen3-Reranker-0.6B",
   "verdict": {
-    "reason": "没有可用的 rerank provider、模型或价格上界；按工单规则不在无法确认价格时发起付费调用",
-    "recommended": null
+    "best_model": "Qwen/Qwen3-Reranker-0.6B",
+    "ndcg_at_8_delta": 0.0658,
+    "precision_at_5_delta": 0.0356,
+    "reason": "SiliconFlow /v1/rerank 实测（73 条全集，Top-20 重排）：最优模型 Qwen/Qwen3-Reranker-0.6B Recall@8 +6.49pp / Precision@5 +3.56pp / NDCG@8 +6.58pp，p50/p95 2719/8249ms，估算千轮费用 ¥0.5023",
+    "recall_at_8_delta": 0.0649,
+    "recommended": true
   }
 }

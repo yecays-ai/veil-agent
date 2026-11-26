@@ -41,17 +41,20 @@ P6-S4（统一消融实验执行与候选机制决策）的隔离实验环境。
 
 ## 目录
 
-    recall_lab/core.py       数据快照（只读 brain.db / eval-v2 / chat / learned-context）、预算台账、指标
+    recall_lab/core.py       数据快照（只读 brain.db / eval-v2 / chat / learned-context）、时序审计、预算台账、指标
     recall_lab/retrieval.py  检索基线复刻 + 单变量变体（K/停用词/融合/importance/last_active/情感/
-                             related_to/别名 Aho-Corasick/story 索引/分层联想池）
+                             related_to/别名 Aho-Corasick/story 索引/生产 breath/全库分层轮换池/wake 门控）
+    recall_lab/rerank.py     SiliconFlow /v1/rerank 客户端（BAAI/bge-reranker-v2-m3 免费、Qwen3-Reranker-0.6B）
+    recall_lab/s2_verify.py  AB-A2/A3 隔离临时副本运行最新 S2 EventMemory 与 LearnedContext 真实写入验证
     recall_lab/judge.py      判官卡片（300/500）、prompt（保守/放宽）、LLM 调用、阈值门控
     recall_lab/tier0.py      11 个 Tier 0 实验 runner
-    recall_lab/tier12.py     Tier 1/2 runner（预算台账、判官臂、缓存微探针、token 结构测量、组合）
+    recall_lab/tier12.py     Tier 1/2 runner（Reranker、判官臂、真实上下文与工具调用、认知巩固、组合验证）
+    recall_lab/tier2_real.py Tier 2 真实模型生成、工具调用、前瞻巩固与 8 维匿名 AI 辅助盲评（生成本机 Lan 对照包）
     recall_lab/runtime.py    Context（query 向量缓存、评估、结果 I/O）、快照指纹
     recall_lab/cli.py        命令行入口、依赖链、断点续跑、覆盖统计
-    tests/                   合成数据单测（无网络、无真实数据）
+    tests/                   合成数据单测（39 项，无网络、无真实数据）
     schema/                  eval-v2 / 预算台账 / 实验结果 JSON Schema
-    results/                 已提交的聚合结果（每个实验一个 JSON + coverage.json + run-manifest.json）
+    results/                 已提交的聚合结果（24/24 completed + coverage.json + run-manifest.json + budget-summary.json）
 
 ## 预算与台账
 
@@ -80,8 +83,8 @@ provider 回报 usage）；失败调用按预留上界保守结算。硬上限�
    `.local-tmp/s4/`（该目录被 `.gitignore` 忽略，不进 git）。
 2. 按「快速开始」命令运行；每个实验写 `results/<实验>.json`，每样本明细只写 `--detail-dir`
    （gitignored）。
-3. `python scripts/p6_s1_baseline.py --out .local-baseline-1.json` 复跑 Baseline-1 门禁，确认 18/18。
-4. 单测：`python -m unittest discover -s recall-lab/tests -v`（当前 33 项，含并发账本、cache-only、缺 usage 保守结算与门控口径回归）。
+3. `python scripts/p6_s1_baseline.py --out .local-baseline-1.json` 复跑 Baseline-1 门禁，确认 20/20。
+4. 单测：`python -m unittest discover -s recall-lab/tests -v`（当前 39 项，含并发账本、cache-only、缺 usage 保守结算、门控口径、生产 breath/分层轮换/wake 门控、时序审计、Reranker 价格拦截与 S2 隔离写入验证回归）。
 
 ## 已知边界
 

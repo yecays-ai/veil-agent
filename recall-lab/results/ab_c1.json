@@ -6,143 +6,122 @@
       "metrics": {
         "cached_ratio": 0.0,
         "cached_tokens": 0,
-        "cost_cny": 0.0,
+        "cost_cny": 0.006562,
         "error": "",
-        "latency_ms": 1187.25,
-        "prompt_tokens": 2146
+        "latency_ms": 3425.89,
+        "prompt_tokens": 3153
       }
     },
     {
       "arm": "stable_head_2",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.8947,
-        "cached_tokens": 1920,
-        "cost_cny": 0.0,
+        "cached_ratio": 0.9337,
+        "cached_tokens": 2944,
+        "cost_cny": 0.00055176,
         "error": "",
-        "latency_ms": 787.78,
-        "prompt_tokens": 2146
+        "latency_ms": 1449.83,
+        "prompt_tokens": 3153
       }
     },
     {
       "arm": "changed_in_head",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.0591,
-        "cached_tokens": 128,
-        "cost_cny": 0.0,
+        "cached_ratio": 0.2823,
+        "cached_tokens": 896,
+        "cost_cny": 0.00460784,
         "error": "",
-        "latency_ms": 399.72,
-        "prompt_tokens": 2167
+        "latency_ms": 1734.75,
+        "prompt_tokens": 3174
       }
     },
     {
       "arm": "moved_head_1",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.0,
-        "cached_tokens": 0,
-        "cost_cny": 0.0,
+        "cached_ratio": 0.2428,
+        "cached_tokens": 768,
+        "cost_cny": 0.00483672,
         "error": "",
-        "latency_ms": 773.79,
-        "prompt_tokens": 2172
+        "latency_ms": 1186.78,
+        "prompt_tokens": 3163
       }
     },
     {
       "arm": "moved_head_2",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.884,
-        "cached_tokens": 1920,
-        "cost_cny": 0.0,
+        "cached_ratio": 0.9308,
+        "cached_tokens": 2944,
+        "cost_cny": 0.00057176,
         "error": "",
-        "latency_ms": 463.82,
-        "prompt_tokens": 2172
+        "latency_ms": 1760.24,
+        "prompt_tokens": 3163
+      }
+    },
+    {
+      "arm": "moved_head_after_expand",
+      "config": {},
+      "metrics": {
+        "cached_ratio": 0.9243,
+        "cached_tokens": 2944,
+        "cost_cny": 0.00085576,
+        "error": "",
+        "latency_ms": 1330.56,
+        "prompt_tokens": 3185
       }
     }
   ],
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
-      "2": 0.084864
+      "1": 1.784595,
+      "2": 0.10285
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 568,
+    "total_cny": 1.887445
   },
   "comparison": [
     {
       "metric": "cache_hit_ratio_stable_head",
-      "value": 0.8947
+      "value": 0.9337
     },
     {
       "metric": "cache_hit_ratio_changed_in_head",
-      "value": 0.0591
+      "value": 0.2823
     },
     {
-      "metric": "cache_hit_ratio_moved_out_of_head",
-      "value": 0.884
+      "metric": "cache_hit_ratio_moved_head_after_expand",
+      "value": 0.9243
     }
   ],
   "evidence": {
+    "assembly": "production veil_agent.self_facts() + real learned_context + 12-turn history (neutral persona stub)",
     "capability_updates_chars": 4809,
     "context_log": {
-      "by_kind": {
-        "autonomy": {
-          "cache_ratio": null,
-          "cached": 0,
-          "input": 0,
-          "n": 8
-        },
-        "chat": {
-          "cache_ratio": null,
-          "cached": 0,
-          "input": 0,
-          "n": 93
-        },
-        "glance": {
-          "cache_ratio": null,
-          "cached": 0,
-          "input": 0,
-          "n": 14
-        },
-        "tool_step_context": {
-          "cache_ratio": 0.7036,
-          "cached": 8791801,
-          "input": 12494785,
-          "n": 440
-        }
-      },
       "cache_ratio": 0.7036,
       "cached_tokens": 8791801,
       "input_tokens": 12494785,
       "requests": 555,
       "tool_schema_bytes_avg": 38108
-    },
-    "probe": {
-      "capability_variable_chars": 994,
-      "layout": "static head + capability + long static suffix (mirrors system.facts position)",
-      "provider": "deepseek-flash automatic prefix cache",
-      "static_prefix_chars": 9785,
-      "suffix_chars": 8640
-    },
-    "probe_kind": "synthetic HEAD prefix modelled on system.facts, not the full production request"
+    }
   },
   "evidence_gaps": [
-    "未用完整生产请求组装验证（隔离环境不加载人设/工具 schema 全量），结果为 provider 级缓存行为证据，需 S7 实施后做真机复测"
+    "隔离环境使用中性占位人设而非真实私人人设正文；S7 上线后建议在生产 context-log 抽检一次缓存命中率"
   ],
   "experiment_id": "AB-C1",
-  "finished_at": "2026-11-26T18:37:29.734+08:00",
-  "fixed_baseline": "完整请求组装观测 + 真实 provider 前缀缓存微探针",
+  "finished_at": "2026-11-26T19:21:58.966+08:00",
+  "fixed_baseline": "复用生产 veil_agent.self_facts + learned_context + 真实多轮历史前缀组装（deepseek-flash 实测）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:27.711+08:00",
-  "status": "partial",
+  "started_at": "2026-11-26T19:21:42.815+08:00",
+  "status": "completed",
   "tier": 2,
   "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）",
   "variable": "capabilities.description 在 HEAD vs 移到 runtime_required",
   "verdict": {
-    "reason": "能力描述在 HEAD 内变化时缓存命中率 5.9%，移出 HEAD 后 88.4%（HEAD 稳定时 89.5%），方向与 AB-C1 假设一致",
+    "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 93.4%；capabilities 在 HEAD 内展开变更后骤降至 28.2%；移出 HEAD 到 runtime 后展开变更仍保持 92.4%（净保住 +64.2pp 前缀缓存）",
     "recommended": true
   }
 }

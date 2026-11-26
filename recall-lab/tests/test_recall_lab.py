@@ -485,5 +485,73 @@ class StoryGateTests(unittest.TestCase):
         self.assertIn('m2', gated)
 
 
+class ParityAndNewModuleTests(unittest.TestCase):
+    def test_production_breath_pool_orders_by_pinned_importance_created(self):
+        from recall_lab.retrieval import production_breath_pool
+        mems = [
+            memory(id='a', importance=8, created='2026-11-01', pinned=0),
+            memory(id='b', importance=9, created='2026-10-01', pinned=0),
+            memory(id='c', importance=7, created='2026-10-05', pinned=1),
+            memory(id='d', importance=8, created='2026-11-10', pinned=0),
+        ]
+        pool = production_breath_pool(snapshot(mems), limit=3)
+        self.assertEqual([m.id for m in pool], ['c', 'b', 'd'])
+
+    def test_stratified_pool_rotates_full_library_and_excludes_work(self):
+        mems = [
+            memory(id=f'm{i:02d}', body='一起散步看晚霞的回忆', importance=8,
+                   created=f'2026-10-{(i % 28) + 1:02d}', category='life')
+            for i in range(10)
+        ] + [memory(id='work1', body='线上部署报错崩溃日志', importance=9, created='2026-11-01')]
+        snap = snapshot(mems)
+        p0 = [m.id for m in stratified_long_tail_pool(snap, size=4, rotation=0, exclude_work=True)]
+        p1 = [m.id for m in stratified_long_tail_pool(snap, size=4, rotation=1, exclude_work=True)]
+        self.assertNotIn('work1', p0)
+        self.assertNotEqual(set(p0), set(p1))
+
+    def test_wake_association_blocks_task_and_allows_long_idle(self):
+        from recall_lab.retrieval import wake_association_choice
+        mems = [memory(id='m1', body='一起去海边看星星', importance=8)]
+        snap = snapshot(mems)
+        long_wake = 'Autonomous idle wake context: ' + 'quiet afternoon reflection ' * 5
+        task_ch = wake_association_choice(snap, long_wake, mems, turn=1, is_idle=False)
+        self.assertEqual(task_ch['key'], '')
+        self.assertEqual(task_ch['reason'], 'task_wake')
+        idle_ch = wake_association_choice(snap, long_wake, mems, turn=1, is_idle=True)
+        self.assertEqual(idle_ch['key'], 'm1')
+
+    def test_temporal_audit_flags_future_expected(self):
+        mems = [
+            memory(id='m_old', created='2026-10-20T00:00:00'),
+            memory(id='m_future', created='2026-11-25T00:00:00'),
+        ]
+        snap = snapshot(mems)
+        s1 = sample(sample_id='S1-1', expected=('m_old',))
+        s2 = sample(sample_id='S1-2', expected=('m_future',))
+        audit = core.temporal_audit([s1, s2], snap)
+        self.assertEqual(audit['future_samples_n'], 1)
+        self.assertEqual(audit['point_in_time_clean_samples'], 1)
+
+    def test_rerank_client_refuses_unpriced_and_cache_only_miss(self):
+        from recall_lab.rerank import RerankClient, RerankError
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        client = RerankClient(Path(tmp.name) / 'rerank.jsonl', api_key='', allow_provider=False)
+        with self.assertRaises(RerankError):
+            client.rerank('unknown/model', 'q', ['m1'], ['doc'])
+        with self.assertRaises(RerankError):
+            client.rerank('BAAI/bge-reranker-v2-m3', 'q', ['m1'], ['doc'])
+
+    def test_s2_a2_isolated_write_path_zero_circular_self_promotion(self):
+        from recall_lab.s2_verify import verify_a2_s2_write_path
+        res = verify_a2_s2_write_path()
+        strict = res['arms']['strict_event_chat_evidence']
+        naive = res['arms']['event_pointer_naive']
+        self.assertEqual(strict['valid_promoted'], strict['valid_total'])
+        self.assertEqual(strict['circular_self_promotion_rate'], 0.0)
+        self.assertTrue(strict['lan_sovereignty_ok'])
+        self.assertEqual(naive['circular_self_promotion_rate'], 1.0)
+
+
 if __name__ == '__main__':
     unittest.main()

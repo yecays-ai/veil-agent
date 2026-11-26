@@ -8,6 +8,40 @@
       "metrics": {
         "current_total_bytes": 3440,
         "headroom_bytes": 560,
+        "real_write_path": {
+          "head_bytes_after": 3771,
+          "head_bytes_before": 3347,
+          "head_delta_bytes": 424,
+          "head_delta_tokens_est": 127.2,
+          "legacy_content_preserved": true,
+          "ongoing_rendered_bytes_after": 139,
+          "rejected_writes": 2,
+          "relationship_active_bytes_after": 292,
+          "write_log": [
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "facts+120B"
+            },
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "growth+300B"
+            },
+            {
+              "rejected": true,
+              "status": "被拒绝",
+              "write": "relationship+900B"
+            },
+            {
+              "rejected": true,
+              "status": "被拒绝",
+              "write": "ongoing+300B"
+            }
+          ],
+          "write_rejection_rate": 0.5,
+          "writes": 4
+        },
         "rejected_writes": 2,
         "write_log": [
           {
@@ -44,7 +78,42 @@
         "relationship": 1500
       },
       "metrics": {
-        "head_token_delta_est": 126.0,
+        "head_token_delta_est": 127.2,
+        "legacy_content_preserved": true,
+        "real_write_path": {
+          "head_bytes_after": 3771,
+          "head_bytes_before": 3347,
+          "head_delta_bytes": 424,
+          "head_delta_tokens_est": 127.2,
+          "legacy_content_preserved": true,
+          "ongoing_rendered_bytes_after": 510,
+          "rejected_writes": 0,
+          "relationship_active_bytes_after": 1150,
+          "write_log": [
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "facts+120B"
+            },
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "growth+300B"
+            },
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "relationship+900B"
+            },
+            {
+              "rejected": false,
+              "status": "成功",
+              "write": "ongoing+300B"
+            }
+          ],
+          "write_rejection_rate": 0.0,
+          "writes": 4
+        },
         "rejected_writes": 0,
         "write_log": [
           {
@@ -99,8 +168,8 @@
     },
     {
       "a": 0,
-      "b": 126.0,
-      "delta": 126.0,
+      "b": 127.2,
+      "delta": 127.2,
       "metric": "head_token_delta_est"
     }
   ],
@@ -119,7 +188,76 @@
       "relationship": 292,
       "total": 3440
     },
-    "note": "写入拒绝是前向模拟（基于真实占用与 P6-2 目标），未跑真实写入路径",
+    "real_write_verification": {
+      "four_zone_independent": {
+        "head_bytes_after": 3771,
+        "head_bytes_before": 3347,
+        "head_delta_bytes": 424,
+        "head_delta_tokens_est": 127.2,
+        "legacy_content_preserved": true,
+        "ongoing_rendered_bytes_after": 510,
+        "rejected_writes": 0,
+        "relationship_active_bytes_after": 1150,
+        "write_log": [
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "facts+120B"
+          },
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "growth+300B"
+          },
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "relationship+900B"
+          },
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "ongoing+300B"
+          }
+        ],
+        "write_rejection_rate": 0.0,
+        "writes": 4
+      },
+      "shared_4000B": {
+        "head_bytes_after": 3771,
+        "head_bytes_before": 3347,
+        "head_delta_bytes": 424,
+        "head_delta_tokens_est": 127.2,
+        "legacy_content_preserved": true,
+        "ongoing_rendered_bytes_after": 139,
+        "rejected_writes": 2,
+        "relationship_active_bytes_after": 292,
+        "write_log": [
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "facts+120B"
+          },
+          {
+            "rejected": false,
+            "status": "成功",
+            "write": "growth+300B"
+          },
+          {
+            "rejected": true,
+            "status": "被拒绝",
+            "write": "relationship+900B"
+          },
+          {
+            "rejected": true,
+            "status": "被拒绝",
+            "write": "ongoing+300B"
+          }
+        ],
+        "write_rejection_rate": 0.5,
+        "writes": 4
+      }
+    },
     "shared_cap": 4000,
     "token_calibration": "0.30 tokens/byte (real context-log calibration ratio median)",
     "version_history_entries": 51,
@@ -130,21 +268,20 @@
       "relationship": 1500
     }
   },
-  "evidence_gaps": [
-    "写入拒绝率来自前向模拟，未跑真实写入路径；HEAD 增量只估算 facts+growth 渲染"
-  ],
+  "evidence_gaps": [],
   "experiment_id": "AB-A3",
-  "finished_at": "2026-11-26T18:37:26.023+08:00",
-  "fixed_baseline": "隔离回放 learned-context 历史 + P6-2/P6-3 实测占用",
+  "finished_at": "2026-11-26T19:09:16.694+08:00",
+  "fixed_baseline": "隔离回放 learned-context 历史 + 真实 LearnedContext 写入/迁移验证",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:26.016+08:00",
+  "started_at": "2026-11-26T19:09:16.688+08:00",
   "status": "completed",
   "tier": 0,
   "title": "learned-context 四区独立存储预算",
   "variable": "4000B 共享 vs 四区独立上限 {\"facts\": 1800, \"growth\": 2000, \"relationship\": 1500, \"ongoing\": 900}",
   "verdict": {
-    "reason": "共享上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒；HEAD 估算增量 +126.0 tokens",
+    "legacy_content_preserved": true,
+    "reason": "隔离副本真实 LearnedContext 写入/迁移验证：共享 4000B 上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒且旧内容 100% 保留；实际 HEAD 渲染增量 +127.2 tokens",
     "recommended": true,
     "zone_caps": {
       "facts": 1800,

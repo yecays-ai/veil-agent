@@ -151,7 +151,10 @@ def main(argv=None):
         'chat_user_message_ids': chat_message_ids,
         'chat_rows': chat_rows,
         'learned_context': _load_json(args.learned_context) if args.learned_context else None,
+        'learned_context_path': args.learned_context,
         'versions_path': args.versions,
+        'embed_api_key': '',
+        'embed_base_url': args.embed_base_url,
         'context_log': args.context_log,
         'recall_diagnostics': args.recall_diagnostics,
         'capabilities': _load_json(args.capabilities) if args.capabilities else {},
@@ -192,6 +195,7 @@ def main(argv=None):
         embedder = core.EmbeddingCache(Path(args.cache_dir) / 'embeddings.jsonl',
                                        model=args.embed_model, base_url=args.embed_base_url,
                                        api_key=api_key, budget=budget)
+        options['embed_api_key'] = api_key
     if not args.skip_paid and not args.fake_embedder and any(TIER_OF[item] > 0 for item in experiments):
         judge_key = pick('DEEPSEEK_API_KEY')
         if not judge_key:

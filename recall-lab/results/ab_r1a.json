@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 7.03,
+          "mean_ms": 5.58,
           "n": 73,
-          "p50_ms": 1.6,
-          "p95_ms": 5.91
+          "p50_ms": 1.22,
+          "p95_ms": 4.05
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 12,
         "latency": {
-          "mean_ms": 2.25,
+          "mean_ms": 1.61,
           "n": 73,
-          "p50_ms": 1.72,
-          "p95_ms": 4.72
+          "p50_ms": 1.21,
+          "p95_ms": 3.35
         },
         "overall": {
           "cross_event_coverage": 0.3,
@@ -554,10 +554,10 @@
         },
         "k": 20,
         "latency": {
-          "mean_ms": 2.34,
+          "mean_ms": 1.55,
           "n": 73,
-          "p50_ms": 1.59,
-          "p95_ms": 6.33
+          "p50_ms": 1.11,
+          "p95_ms": 3.58
         },
         "overall": {
           "cross_event_coverage": 0.4,
@@ -745,10 +745,10 @@
         },
         "k": 30,
         "latency": {
-          "mean_ms": 2.4,
+          "mean_ms": 1.63,
           "n": 73,
-          "p50_ms": 1.66,
-          "p95_ms": 5.06
+          "p50_ms": 1.12,
+          "p95_ms": 3.73
         },
         "overall": {
           "cross_event_coverage": 0.7,
@@ -768,11 +768,11 @@
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
-      "2": 0.084864
+      "1": 1.784595,
+      "2": 0.423659
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 699,
+    "total_cny": 2.208254
   },
   "comparison": [
     {
@@ -806,11 +806,187 @@
   ],
   "evidence": {
     "interpretation": "Recall@K 无饱和拐点；K=8->30 提升 17.2pp 但候选池 3.75 倍",
-    "sample_size": 73
+    "sample_size": 73,
+    "temporal_audit": {
+      "future_pairs_n": 6,
+      "future_samples": [
+        {
+          "category": "empathy",
+          "future_expected": [
+            {
+              "created": "2026-11-17",
+              "memory_id": "2734e06d842c",
+              "query_date": "2026-11-04"
+            }
+          ],
+          "sample_id": "S2-004"
+        },
+        {
+          "category": "empathy",
+          "future_expected": [
+            {
+              "created": "2026-11-17",
+              "memory_id": "2734e06d842c",
+              "query_date": "2026-11-04"
+            }
+          ],
+          "sample_id": "S2-006"
+        },
+        {
+          "category": "empathy",
+          "future_expected": [
+            {
+              "created": "2026-11-17",
+              "memory_id": "2734e06d842c",
+              "query_date": "2026-11-08"
+            }
+          ],
+          "sample_id": "S2-009"
+        },
+        {
+          "category": "cross_event",
+          "future_expected": [
+            {
+              "created": "2026-11-12",
+              "memory_id": "8405e98eb0db",
+              "query_date": "2026-11-06"
+            },
+            {
+              "created": "2026-11-12",
+              "memory_id": "331197d10c6b",
+              "query_date": "2026-11-06"
+            }
+          ],
+          "sample_id": "S3-006"
+        },
+        {
+          "category": "autonomy",
+          "future_expected": [
+            {
+              "created": "2026-11-12",
+              "memory_id": "8405e98eb0db",
+              "query_date": "2026-11-06"
+            }
+          ],
+          "sample_id": "S6-006"
+        }
+      ],
+      "future_samples_n": 5,
+      "point_in_time_clean_samples": 68,
+      "total_expected_pairs": 99,
+      "total_samples": 73
+    },
+    "tier1_judge_net_benefit_18": [
+      {
+        "arm": "judge_K=8",
+        "config": {
+          "card": "300",
+          "prompt": "conservative",
+          "timeout": 4.0
+        },
+        "metrics": {
+          "calls_cached": 18,
+          "calls_paid": 0,
+          "calls_total": 18,
+          "candidate_ceiling_recall": 0.6806,
+          "cost_cny": 0.0,
+          "empty_correct": 3,
+          "empty_expected_n": 6,
+          "errors": {},
+          "false_positive_rate": 0.5,
+          "judge_ndcg_at_8": 0.4326,
+          "judge_precision": 0.3502,
+          "judge_recall": 0.4444,
+          "latency": {
+            "mean_ms": 897.61,
+            "n": 18,
+            "p50_ms": 748.83,
+            "p95_ms": 2026.79
+          },
+          "picked_total": 37,
+          "samples": 18,
+          "timeouts": 0,
+          "tokens": {
+            "input": 32468,
+            "output": 188
+          }
+        }
+      },
+      {
+        "arm": "judge_K=12",
+        "config": {
+          "card": "300",
+          "prompt": "conservative",
+          "timeout": 4.0
+        },
+        "metrics": {
+          "calls_cached": 18,
+          "calls_paid": 0,
+          "calls_total": 18,
+          "candidate_ceiling_recall": 0.6806,
+          "cost_cny": 0.0,
+          "empty_correct": 3,
+          "empty_expected_n": 6,
+          "errors": {},
+          "false_positive_rate": 0.5,
+          "judge_ndcg_at_8": 0.4645,
+          "judge_precision": 0.4167,
+          "judge_recall": 0.5278,
+          "latency": {
+            "mean_ms": 1839.19,
+            "n": 18,
+            "p50_ms": 1711.53,
+            "p95_ms": 3064.56
+          },
+          "picked_total": 42,
+          "samples": 18,
+          "timeouts": 0,
+          "tokens": {
+            "input": 39173,
+            "output": 202
+          }
+        }
+      },
+      {
+        "arm": "judge_K=20",
+        "config": {
+          "card": "300",
+          "prompt": "conservative",
+          "timeout": 4.0
+        },
+        "metrics": {
+          "calls_cached": 18,
+          "calls_paid": 0,
+          "calls_total": 18,
+          "candidate_ceiling_recall": 0.7222,
+          "cost_cny": 0.0,
+          "empty_correct": 3,
+          "empty_expected_n": 6,
+          "errors": {},
+          "false_positive_rate": 0.5,
+          "judge_ndcg_at_8": 0.4795,
+          "judge_precision": 0.3306,
+          "judge_recall": 0.5208,
+          "latency": {
+            "mean_ms": 1284.28,
+            "n": 18,
+            "p50_ms": 1227.8,
+            "p95_ms": 2101.86
+          },
+          "picked_total": 50,
+          "samples": 18,
+          "timeouts": 0,
+          "tokens": {
+            "input": 52986,
+            "output": 229
+          }
+        }
+      }
+    ]
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R1a",
-  "finished_at": "2026-11-26T18:37:20.094+08:00",
+  "finished_at": "2026-11-26T19:09:15.223+08:00",
   "fixed_baseline": "Baseline-1 融合 0.65/0.35 + importance +0.05 max",
   "harness_version": "recall-lab-0.1",
   "notes": [
@@ -819,22 +995,22 @@
     "K=20: recall@K=0.6019, vector_fill=0.2377",
     "K=30: recall@K=0.6778, vector_fill=0.2616"
   ],
-  "started_at": "2026-11-26T18:37:18.380+08:00",
+  "started_at": "2026-11-26T19:09:13.977+08:00",
   "status": "completed",
   "tier": 0,
   "title": "混合候选池大小 K",
   "variable": "K ∈ {8,12,20,30}",
   "verdict": {
-    "best_k": 20,
+    "best_k": 8,
     "best_recall": 0.6778,
     "knee_k": 30,
-    "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 22.2%->26.2%）；离线无法确认判官 token/延迟代价，不推荐仅凭检索侧扩大候选池，下游实验用 K=20 折中",
+    "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 20.2%->26.2%）；仅凭离线检索不推荐扩大候选池，下游实验维持生产默认 K=8（判官侧 K=8/12/20 净收益见 Tier 1）",
     "recommended": false,
     "vector_fill_share": {
-      "8": 0.2021,
       "12": 0.2123,
       "20": 0.2377,
-      "30": 0.2616
+      "30": 0.2616,
+      "8": 0.2021
     }
   }
 }

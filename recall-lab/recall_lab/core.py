@@ -47,6 +47,10 @@ PRICES = {
     'judge': {'model': 'deepseek-flash', 'input_cny_per_million': 2.0,
               'cached_input_cny_per_million': 0.04, 'output_cny_per_million': 8.0,
               'price_source': 'character.toml [providers.deepseek] peak rates'},
+    'rerank_bge_m3': {'model': 'BAAI/bge-reranker-v2-m3', 'input_cny_per_million': 0.0,
+                      'price_source': 'SiliconFlow official pricing (free tier, verified 2026-11-26)'},
+    'rerank_qwen3_06b': {'model': 'Qwen/Qwen3-Reranker-0.6B', 'input_cny_per_million': 0.07,
+                         'price_source': 'SiliconFlow official pricing (0.07 CNY / 1M input tokens, verified 2026-11-26)'},
 }
 TIER_CAPS_CNY = {0: 0.0, 1: 6.0, 2: 10.0}
 TOTAL_CAP_CNY = 20.0
@@ -438,6 +442,7 @@ class Memory:
     type: str
     tags: tuple
     category: str
+    pinned: int = 0
 
 
 @dataclass
@@ -502,9 +507,12 @@ def load_snapshot(db_path):
     try:
         memories = {}
         vectors = {}
+        cols = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
+        pinned_expr = 'COALESCE(pinned, 0) AS pinned' if 'pinned' in cols else '0 AS pinned'
         rows = connection.execute(
             'SELECT id,title,body,raw_markdown,created,last_active,importance,valence,arousal,'
-            'why_remembered,bucket,type,tags_json,category,is_tombstone,is_deleted FROM memories'
+            'why_remembered,bucket,type,tags_json,category,is_tombstone,is_deleted,'
+            + pinned_expr + ' FROM memories'
         ).fetchall()
         for row in rows:
             if row['is_tombstone'] or row['is_deleted']:
@@ -522,7 +530,8 @@ def load_snapshot(db_path):
                 last_active=str(row['last_active'] or ''), importance=int(row['importance'] or 5),
                 valence=row['valence'], arousal=row['arousal'],
                 why_remembered=row['why_remembered'] or '', bucket=row['bucket'] or '',
-                type=row['type'] or '', tags=tags, category=row['category'] or '')
+                type=row['type'] or '', tags=tags, category=row['category'] or '',
+                pinned=int(row['pinned'] or 0))
         for row in connection.execute('SELECT memory_id,dim,vector FROM vectors'):
             if not row['vector']:
                 continue
@@ -888,6 +897,33 @@ def compare(metric_a, metric_b, key, higher_is_better=True):
         'worse' if delta != 0 else 'same')
     return {'metric': key, 'a': round(first, 4), 'b': round(second, 4),
             'delta': round(delta, 4), 'direction': direction}
+
+
+def temporal_audit(samples, snapshot):
+    """Distinguish point-in-time historical replay from final-snapshot capability evaluation.
+
+    Returns counts and sample ids whose expected memory was created after the query date.
+    """
+    future_samples = []
+    future_pairs = 0
+    total_pairs = 0
+    for sample in samples:
+        qdate = str((sample.context or {}).get('time') or '')[:10]
+        bad = []
+        for expected_id in sample.expected:
+            total_pairs += 1
+            memory = snapshot.memories.get(expected_id)
+            cdate = str((memory.created if memory else '') or '')[:10]
+            if qdate and cdate and cdate > qdate:
+                future_pairs += 1
+                bad.append({'memory_id': expected_id, 'created': cdate, 'query_date': qdate})
+        if bad:
+            future_samples.append({'sample_id': sample.sample_id, 'category': sample.category,
+                                   'future_expected': bad})
+    return {'total_samples': len(samples), 'total_expected_pairs': total_pairs,
+            'future_samples_n': len(future_samples), 'future_pairs_n': future_pairs,
+            'point_in_time_clean_samples': len(samples) - len(future_samples),
+            'future_samples': future_samples}
 
 
 def result_stub(experiment_id, tier, *, title, variable, fixed):

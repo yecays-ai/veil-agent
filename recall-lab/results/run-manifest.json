@@ -2,19 +2,19 @@
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
-      "2": 0.084864
+      "1": 1.784595,
+      "2": 0.423659
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 699,
+    "total_cny": 2.208254
   },
-  "code_commit": "fe03b9ab636d7e0bf62cb65512c8a2e7c7ae3716",
+  "code_commit": "ef3e988047038a71953a2081695f978f42acc573",
   "coverage": {
     "count": 24,
     "experiments": [
       {
         "experiment_id": "AB-R1a",
-        "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 22.2%->26.2%）；离线无法确认判官 token/延迟代价，不推荐仅凭检索侧扩大候选池，下游实验用 K=20 折中",
+        "reason": "K 到 30 仍未收敛（Recall@K 单调上升，向量补位占比 20.2%->26.2%）；仅凭离线检索不推荐扩大候选池，下游实验维持生产默认 K=8（判官侧 K=8/12/20 净收益见 Tier 1）",
         "recommended": false,
         "status": "completed",
         "tier": 0,
@@ -78,7 +78,7 @@
       },
       {
         "experiment_id": "AB-A1a",
-        "reason": "长尾 imp=8 覆盖 +-10，噪声/工作违和 +0；对话自然度盲评留给 AB-A1b/ Tier 2",
+        "reason": "离线长尾覆盖大幅提升（唯一记忆 2->37、imp=8 覆盖 0->35/44、工作态违和 0），但 Tier 2 真实回复盲评（8 场景）显示纯重要度+沉默轮换因缺少语义相关性，胜负不及对照（vs 无联想 1-4、vs 生产 breath8 0-4），不推荐直接上线聊天主链路；建议仅在引入话题相关性过滤或用于闲暇自主唤醒（AB-A1b）后再实施",
         "recommended": false,
         "status": "completed",
         "tier": 0,
@@ -86,15 +86,15 @@
       },
       {
         "experiment_id": "AB-A2",
-        "reason": "当前数据没有任何 event 能凭 Lan 原话/chat 证据晋升（5/76 事件只有 tool 级请求血缘）；扩展规则不产生有效晋升，建议维持 chat-only，并让 S3 先补 chat 证据链",
-        "recommended": false,
+        "reason": "历史快照（S2 前）64 条 stage-evidence 全为 tool、0/76 事件可溯源；在隔离副本运行最新 S2 写入链路验证：10 条高频 tool 调用下仍保留 2 条 user chat 证据，严格 event+stage-evidence(chat)/quotes 规则有效晋升 2/2、自写猜测/无证据循环自证率 0.0%（朴素 event 指针自证率 100%）、Lan 纠正/删除主权全部生效；建议 S3 在 S2 新证据链之上谨慎实施严格溯源晋升",
+        "recommended": true,
         "status": "completed",
         "tier": 0,
         "title": "关系认知证据链与 confirmed 晋升边界"
       },
       {
         "experiment_id": "AB-A3",
-        "reason": "共享上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒；HEAD 估算增量 +126.0 tokens",
+        "reason": "隔离副本真实 LearnedContext 写入/迁移验证：共享 4000B 上限下 2/4 次写入被拒（当前余量仅 560B），四区独立后 0/4 次被拒且旧内容 100% 保留；实际 HEAD 渲染增量 +127.2 tokens",
         "recommended": true,
         "status": "completed",
         "tier": 0,
@@ -110,15 +110,15 @@
       },
       {
         "experiment_id": "AB-R2",
-        "reason": "没有可用的 rerank provider、模型或价格上界；按工单规则不在无法确认价格时发起付费调用",
-        "recommended": null,
-        "status": "blocked",
+        "reason": "SiliconFlow /v1/rerank 实测（73 条全集，Top-20 重排）：最优模型 Qwen/Qwen3-Reranker-0.6B Recall@8 +6.49pp / Precision@5 +3.56pp / NDCG@8 +6.58pp，p50/p95 2719/8249ms，估算千轮费用 ¥0.5023",
+        "recommended": true,
+        "status": "completed",
         "tier": 1,
         "title": "Reranker 候选排序"
       },
       {
         "experiment_id": "AB-R3a",
-        "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，6.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
+        "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，4.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
         "recommended": false,
         "status": "completed",
         "tier": 1,
@@ -150,55 +150,55 @@
       },
       {
         "experiment_id": "AB-C1",
-        "reason": "能力描述在 HEAD 内变化时缓存命中率 5.9%，移出 HEAD 后 88.4%（HEAD 稳定时 89.5%），方向与 AB-C1 假设一致",
+        "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 93.4%；capabilities 在 HEAD 内展开变更后骤降至 28.2%；移出 HEAD 到 runtime 后展开变更仍保持 92.4%（净保住 +64.2pp 前缀缓存）",
         "recommended": true,
-        "status": "partial",
+        "status": "completed",
         "tier": 2,
         "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）"
       },
       {
         "experiment_id": "AB-C2a",
-        "reason": "真实 555 次请求中非首轮 332 次；按空召回率 50.4% 估算每窗口节省 6563 tokens",
+        "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 2, \"omit_empty_hint\": 3, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
         "recommended": true,
-        "status": "partial",
+        "status": "completed",
         "tier": 2,
         "title": "非首轮省略 memory.recall.empty 等空提示"
       },
       {
         "experiment_id": "AB-C2b",
-        "reason": "真实诊断里 10/220 次请求注入超过 3 条；按平均记忆长度估算每窗口节省 4606 tokens",
+        "reason": "短闲聊 6 条真实生成盲评：Top-2+1 实省 4542 tokens（真实诊断 10/220 超 3 条），自然度 +0.50 / 情绪贴合 +0.00，胜负 {\"uncapped_6\": 3, \"cap_top2+1\": 2, \"tie\": 1}",
         "recommended": true,
-        "status": "partial",
+        "status": "completed",
         "tier": 2,
         "title": "短闲聊记忆注入上限 Top-2+1 vs 不限"
       },
       {
         "experiment_id": "AB-C3",
-        "reason": "75/76 个事件 story 长于摘要+指针，平均每条注入可省 216 tokens；模型主动读全文频次与回复完整度未测",
-        "recommended": true,
-        "status": "partial",
+        "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 4/6 次（67%），净 token 变化 -4447（省为正），事实准确度 +0.17，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
+        "recommended": false,
+        "status": "completed",
         "tier": 2,
         "title": "完整 story vs 标题+因果摘要+timeline 指针"
       },
       {
         "experiment_id": "AB-A1b",
-        "reason": "12 条自主唤醒切片里 0 条闲暇唤醒有可用联想候选；只加在闲暇态，任务态 8 条不受影响。自然度盲评未执行",
+        "reason": "独立 wake 门控实测：4/4 条闲暇唤醒触发长尾联想，8/8 条任务唤醒零干扰（0 误触）；真实自主输出盲评自然度 +0.00、工作干扰 1、胜负 {\"association_off\": 1, \"wake_association_on\": 3, \"tie\": 2}；同步产出 AB-A1a 聊天盲评",
         "recommended": false,
-        "status": "partial",
+        "status": "completed",
         "tier": 2,
         "title": "autonomy 闲暇唤醒低打扰联想分支"
       },
       {
         "experiment_id": "AB-E1",
-        "reason": "历史数据无法验证巩固收益：证据链/有效认知样本不足，且真实巩固需要多日前瞻生成与人工验收，超出本次预算与隔离条件",
-        "recommended": null,
-        "status": "blocked",
+        "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 2, \"evidence_constrained_consolidation\": 4, \"tie\": 0}、经验行为影响 +0.16。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
+        "recommended": false,
+        "status": "completed",
         "tier": 2,
         "title": "认知巩固收益与跨时间认知修订"
       },
       {
         "experiment_id": "AB-COMB",
-        "reason": "组合离线 Recall@K +3.88pp（单变量加总 +4.26pp），负交互=no；判官臂费用 ¥0.0000",
+        "reason": "端到端组合验证（共 7 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)、AB-C2b(短闲聊Top-2+1上限)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
         "recommended": true,
         "status": "completed",
         "tier": 2,
@@ -233,15 +233,13 @@
     ],
     "note": "P6-4 正文写 21 项原子实验、工单描述写 22 项，实际矩阵表列出 24 个 ID（23 原子 + AB-COMB 组合）；本 harness 按实际表逐行覆盖 24 个。",
     "status_counts": {
-      "blocked": 2,
-      "completed": 17,
-      "partial": 5
+      "completed": 24
     }
   },
-  "elapsed_seconds": 12.5,
+  "elapsed_seconds": 38.2,
   "embedding": {
     "blocked_calls": 0,
-    "cache_hits": 149,
+    "cache_hits": 73,
     "cost_cny": 0.0,
     "input_cny_per_million": 0.0,
     "model": "BAAI/bge-m3",
@@ -259,33 +257,13 @@
     "warnings": []
   },
   "experiments_run": [
-    "AB-R1a",
-    "AB-R1b",
-    "AB-R1c",
-    "AB-R4b",
-    "AB-R4c",
-    "AB-R5a",
-    "AB-R5b",
-    "AB-R5c",
-    "AB-A1a",
-    "AB-A2",
-    "AB-A3",
-    "AB-R4a",
-    "AB-R2",
     "AB-R3a",
-    "AB-R3b",
-    "AB-R3c",
-    "AB-R3d",
-    "AB-C1",
-    "AB-C2a",
-    "AB-C2b",
-    "AB-C3",
     "AB-A1b",
     "AB-E1",
     "AB-COMB"
   ],
   "experiments_skipped_paid": [],
-  "generated_at": "2026-11-26T18:37:30.764+08:00",
+  "generated_at": "2026-11-26T19:28:26.738+08:00",
   "harness_version": "recall-lab-0.1",
   "platform": "win32",
   "prices": {
@@ -300,6 +278,16 @@
       "model": "deepseek-flash",
       "output_cny_per_million": 8.0,
       "price_source": "character.toml [providers.deepseek] peak rates"
+    },
+    "rerank_bge_m3": {
+      "input_cny_per_million": 0.0,
+      "model": "BAAI/bge-reranker-v2-m3",
+      "price_source": "SiliconFlow official pricing (free tier, verified 2026-11-26)"
+    },
+    "rerank_qwen3_06b": {
+      "input_cny_per_million": 0.07,
+      "model": "Qwen/Qwen3-Reranker-0.6B",
+      "price_source": "SiliconFlow official pricing (0.07 CNY / 1M input tokens, verified 2026-11-26)"
     }
   },
   "python": "3.12.10",

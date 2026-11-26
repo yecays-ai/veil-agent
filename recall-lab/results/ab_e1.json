@@ -1,49 +1,126 @@
 {
-  "arms": [],
+  "arms": [
+    {
+      "arm": "no_consolidation",
+      "config": {
+        "consolidation": false
+      },
+      "metrics": {
+        "blind_eval": {
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 4.83,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.33,
+          "relationship_continuity": 4.33,
+          "work_interference": 0
+        }
+      }
+    },
+    {
+      "arm": "evidence_constrained_consolidation",
+      "config": {
+        "consolidation": true,
+        "slices": "T1(<=11-05)->T2(11-06..11-15)->T3(>=11-16)"
+      },
+      "metrics": {
+        "blind_eval": {
+          "emotional_fit": 4.33,
+          "experience_behavior_impact": 3.83,
+          "factual_accuracy": 4.5,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.5,
+          "work_interference": 0
+        },
+        "rejected_ungrounded": 0,
+        "self_guess_promoted": 0,
+        "t1_valid_insights": 4,
+        "t2_valid_insights": 4,
+        "t2_valid_revisions": 1
+      }
+    }
+  ],
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
-      "2": 0.084864
+      "1": 1.784595,
+      "2": 0.423659
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 699,
+    "total_cny": 2.208254
   },
-  "comparison": {},
-  "evidence": {
-    "autonomy_rows": null,
-    "confirmed_promotions_history": 0,
-    "event_ledger_kinds": {
-      "event-dream-report": 605,
-      "event-op": 1,
-      "event-projection": 8,
-      "event-review": 8,
-      "event-revision": 2,
-      "event-version": 5,
-      "stage-evidence": 64
+  "comparison": [
+    {
+      "a": 3.67,
+      "b": 3.83,
+      "delta": 0.16,
+      "metric": "experience_behavior_impact"
     },
-    "ground_truth": "不存在“这次巩固带来的后续回复增益”标签；任何收益结论都只能是 AI 辅助且人类未确认",
-    "learned_relationship_items": 1,
-    "ledger_dream_report_share": 0.873,
-    "quotes": 6
+    {
+      "a": 0,
+      "b": 0,
+      "delta": 0,
+      "metric": "self_guess_promoted"
+    }
+  ],
+  "evidence": {
+    "blind_eval_summary": {
+      "arms": {
+        "evidence_constrained_consolidation": {
+          "emotional_fit": 4.33,
+          "experience_behavior_impact": 3.83,
+          "factual_accuracy": 4.5,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.5,
+          "work_interference": 0
+        },
+        "no_consolidation": {
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.67,
+          "factual_accuracy": 4.83,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.33,
+          "relationship_continuity": 4.33,
+          "work_interference": 0
+        }
+      },
+      "n": 6,
+      "wins": {
+        "evidence_constrained_consolidation": 4,
+        "no_consolidation": 2,
+        "tie": 0
+      }
+    },
+    "labeler": "ai-assisted (human_confirmed=false; local Lan blind-review pack generated)",
+    "long_term_unproven": "跨多周/多日真实生活节奏下的长期冗余度、遗忘/覆盖风险与 Lan 主观体验增益，必须由多日灰度运行与 Lan 人工验收确认",
+    "short_term_proven": "有证据约束的巩固能从历史经历提炼有效认知、跨阶段修订且自猜误晋升=0，并在 T3 回复产生可观察影响",
+    "t1_memories": 12,
+    "t2_memories": 12
   },
   "evidence_gaps": [
-    "缺少巩固前后回复质量对照标签",
-    "learned-context 关系区历史 0 条 confirmed 晋升",
-    "真实巩固需主模型多日生成 + 盲评，Tier 2 预算与隔离条件不足"
+    "短期历史切片回放不能替代多日真实运行与 Lan 主观验收；S6 如实施必须带独立开关、日预算硬顶与不覆盖用户锁定规则"
   ],
   "experiment_id": "AB-E1",
-  "finished_at": "2026-11-26T18:37:29.885+08:00",
-  "fixed_baseline": "近 7 天真实隔离切片（events+autonomy+tools）",
+  "finished_at": "2026-11-26T19:28:26.129+08:00",
+  "fixed_baseline": "严格按历史时间切片前瞻回放（只能读当时已发生信息）+ deepseek-flash 真实跨阶段行为对照",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:29.872+08:00",
-  "status": "blocked",
+  "started_at": "2026-11-26T19:27:49.381+08:00",
+  "status": "completed",
   "tier": 2,
   "title": "认知巩固收益与跨时间认知修订",
-  "variable": "无巩固 vs 单次巩固回放",
+  "variable": "无巩固对照组 vs 有证据约束的跨时间前瞻巩固实验组（T1->T2->T3）",
   "verdict": {
-    "reason": "历史数据无法验证巩固收益：证据链/有效认知样本不足，且真实巩固需要多日前瞻生成与人工验收，超出本次预算与隔离条件",
-    "recommended": null
+    "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 2, \"evidence_constrained_consolidation\": 4, \"tie\": 0}、经验行为影响 +0.16。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
+    "recommended": false,
+    "self_guess_promoted": 0,
+    "valid_insights_total": 8,
+    "valid_revisions": 1
   }
 }

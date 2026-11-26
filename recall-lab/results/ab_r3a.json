@@ -74,11 +74,11 @@
   "budget": {
     "by_tier": {
       "0": 0.0,
-      "1": 1.53994,
-      "2": 0.084864
+      "1": 1.784595,
+      "2": 0.423659
     },
-    "calls": 380,
-    "total_cny": 1.624804
+    "calls": 699,
+    "total_cny": 2.208254
   },
   "comparison": [
     {
@@ -151,6 +151,15 @@
   },
   "evidence": {
     "candidate_layout": "fused top-8 + vector top-8 (production recall_judge layout)",
+    "failure_attribution_36": {
+      "fp_by_category": {
+        "trap": 6
+      },
+      "miss_card_truncation_possible": 9,
+      "miss_judge_rejected": 0,
+      "miss_retrieval_ceiling": 20,
+      "misses_total": 29
+    },
     "judge_model": "deepseek-flash",
     "nondeterminism": "deepseek-flash has no fixed seed; repeated identical arms differ in picks, so small recall deltas are noise unless backed by timeout counts",
     "sample_per_category": {
@@ -162,22 +171,72 @@
       "trap": 6
     },
     "samples": 36,
-    "timeout_arms": true
+    "timeout_arms": true,
+    "wake_prompt_check_6": {
+      "wake=False": {
+        "candidate_ceiling_recall": 0.6944,
+        "cost_cny": 0.0,
+        "empty_correct": 0,
+        "empty_expected_n": 0,
+        "errors": {},
+        "false_positive_rate": null,
+        "judge_ndcg_at_8": 0.3724,
+        "judge_precision": 0.2083,
+        "judge_recall": 0.3333,
+        "latency": {
+          "mean_ms": 804.99,
+          "n": 6,
+          "p50_ms": 873.42,
+          "p95_ms": 1166.66
+        },
+        "picked_total": 17,
+        "samples": 6,
+        "timeouts": 0,
+        "tokens": {
+          "input": 10819,
+          "output": 76
+        }
+      },
+      "wake=True": {
+        "candidate_ceiling_recall": 0.6944,
+        "cost_cny": 0.0,
+        "empty_correct": 0,
+        "empty_expected_n": 0,
+        "errors": {},
+        "false_positive_rate": null,
+        "judge_ndcg_at_8": 0.5254,
+        "judge_precision": 0.3167,
+        "judge_recall": 0.5278,
+        "latency": {
+          "mean_ms": 1116.6,
+          "n": 6,
+          "p50_ms": 1077.77,
+          "p95_ms": 1426.92
+        },
+        "picked_total": 17,
+        "samples": 6,
+        "timeouts": 0,
+        "tokens": {
+          "input": 10483,
+          "output": 76
+        }
+      }
+    }
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R3a",
-  "finished_at": "2026-11-26T18:37:27.052+08:00",
+  "finished_at": "2026-11-26T19:27:49.066+08:00",
   "fixed_baseline": "现网判官链路（Embed 与模型超时已分离），card 300，保守 prompt",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T18:37:26.798+08:00",
+  "started_at": "2026-11-26T19:27:48.612+08:00",
   "status": "completed",
   "tier": 1,
   "title": "judge timeout 4.0s vs 6.0s",
   "variable": "timeout=4.0s / timeout=6.0s",
   "verdict": {
     "pick_overlap_between_arms": 0.6683,
-    "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，6.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
+    "reason": "本样本 4s/6s 均 0 次超时；两臂同 prompt 同候选的判官选择重叠率仅 0.6683，4.3pp 召回差属于模型采样噪声，维持 4s 并记录该限制",
     "recommended": false,
     "timeout_seconds": 4.0
   }

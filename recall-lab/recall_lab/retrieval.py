@@ -417,6 +417,8 @@ class Retriever:
                 score = config.weight_vector * vec / vector_top
             else:
                 raise ValueError('unknown fusion %r' % config.fusion)
+            if score <= 0:
+                continue
             bonus = 0.0
             if config.importance_weight:
                 bonus += min(config.importance_weight, max(0.0, (memory.importance - 5) * 0.01))
@@ -432,11 +434,10 @@ class Retriever:
                 if (sentiment > 0 and valence >= 0.55) or (sentiment < 0 and valence <= 0.45):
                     bonus += config.affect_boost
             score += bonus
-            if score > 0:
-                ranked.append(Ranked(id=memory_id, score=score, vector=round(vec, 6),
-                                     stored_vector=round(stored_vector.get(memory_id, 0.0), 6),
-                                     keyword=round(kw, 6), story=round(story_hits.get(memory_id, 0.0), 6),
-                                     bonus=round(bonus, 6)))
+            ranked.append(Ranked(id=memory_id, score=score, vector=round(vec, 6),
+                                 stored_vector=round(stored_vector.get(memory_id, 0.0), 6),
+                                 keyword=round(kw, 6), story=round(story_hits.get(memory_id, 0.0), 6),
+                                 bonus=round(bonus, 6)))
         ranked.sort(key=lambda item: (-item.score, item.id))
         diagnostics = {'alias_matched': list(alias_ids), 'sentiment': sentiment,
                        'story_hits': len(story_hits)}
@@ -494,30 +495,48 @@ def judge_candidate_pool(ranker, query, query_vector, *, fused_limit=8, vector_l
             for mid in candidates]
 
 
-def stratified_long_tail_pool(snapshot, *, size=24, importance_min=7, rotation=0):
+def production_breath_pool(snapshot, *, limit=8):
+    """Exact replica of brain_authority.BrainAuthority.breath(): static top-N ordered by
+    (pinned DESC, importance DESC, created DESC) across visible memories."""
+    visible = [snapshot.memories[mid] for mid in snapshot.visible_ids if mid in snapshot.memories]
+    visible.sort(key=lambda m: (int(getattr(m, 'pinned', 0) or 0), int(m.importance or 0), str(m.created or '')),
+                 reverse=True)
+    return visible[:limit]
+
+
+def stratified_long_tail_pool(snapshot, *, size=24, importance_min=7, rotation=0,
+                              exclude_work=True, stride=None):
     """AB-A1a: library-wide stratified rotation pool of high-importance memories.
 
-    Strata are (category, created year-month); within a stratum ids are sorted so the rotation is
-    deterministic and restart-safe. Pinned memories (none in this snapshot) sort first.
+    Strata are (category, created year-month); memories are interleaved across strata into a
+    full-library ring, and `rotation` slides a window of `size` across the entire ring (not just
+    reordering the same 24 items), so long-tail imp>=7/8 memories genuinely surface across turns.
     """
+    from natural_association import _NOT_LIGHT
+    visible_set = set(snapshot.visible_ids)
     candidates = [memory for memory in snapshot.memories.values()
-                  if memory.id in snapshot.visible_ids and memory.importance >= importance_min]
+                  if memory.id in visible_set and memory.importance >= importance_min
+                  and (not exclude_work or not _NOT_LIGHT.search((memory.body or '')[:600]))]
     strata = {}
     for memory in candidates:
         strata.setdefault((memory.category, (memory.created or '')[:7]), []).append(memory)
     ordered = []
     for key in sorted(strata):
-        ordered.append(sorted(strata[key], key=lambda item: item.id))
-    pool, index = [], 0
-    while len(pool) < size and any(index < len(group) for group in ordered):
+        ordered.append(sorted(strata[key], key=lambda item: (-int(getattr(item, 'pinned', 0) or 0), item.id)))
+    ring, index = [], 0
+    while any(index < len(group) for group in ordered):
         for group in ordered:
-            if index < len(group) and len(pool) < size:
-                pool.append(group[index])
+            if index < len(group):
+                ring.append(group[index])
         index += 1
-    if pool:
-        offset = int(rotation) % len(pool)
-        pool = pool[offset:] + pool[:offset]
-    return pool[:size]
+    if not ring:
+        return []
+    if len(ring) <= size:
+        offset = int(rotation) % len(ring)
+        return ring[offset:] + ring[:offset]
+    step = max(1, int(stride) if stride is not None else max(1, size // 3))
+    start = (int(rotation) * step) % len(ring)
+    return [ring[(start + idx) % len(ring)] for idx in range(size)]
 
 
 def association_choice(snapshot, query, candidates, *, turn=0, already=(), recall_cfg=None,
@@ -527,7 +546,67 @@ def association_choice(snapshot, query, candidates, *, turn=0, already=(), recal
     metas = {}
     for memory in candidates:
         metas[memory.id if hasattr(memory, 'id') else memory] = {
-            'importance': getattr(memory, 'importance', 0), 'pinned': 'false'}
+            'importance': getattr(memory, 'importance', 0),
+            'pinned': 'true' if getattr(memory, 'pinned', 0) else 'false'}
     pairs = [(memory.id, memory.body) for memory in candidates]
     return choose(query, pairs, metas, dict(last_shown or {}), int(turn), set(already),
                   recall_cfg=recall_cfg, previous=previous)
+
+
+def wake_association_choice(snapshot, wake_context, candidates, *, turn=0, already=(),
+                            last_shown=None, previous=None, is_idle=True,
+                            min_importance=4, cooldown_turns=8):
+    """AB-A1b: independent wake-side candidate gate for autonomous idle wakes.
+
+    Unlike production `natural_association.choose()`, idle wakes have long system/activity prompts
+    (>40 chars), so the 40-char `light_chat` gate is replaced by an explicit `is_idle` gate:
+    - task wakes (`is_idle=False`) are strictly blocked (0 task interference);
+    - idle wakes filter out work-topic candidate bodies, respect cooldown and `already`, and score
+      candidates by importance + silence + light lexical affinity to the idle wake context.
+    """
+    from natural_association import _NOT_LIGHT
+    if not is_idle:
+        return {'key': '', 'body': '', 'score': 0, 'reason': 'task_wake', 'dropped': []}
+    if not candidates:
+        return {'key': '', 'body': '', 'score': 0, 'reason': 'no_candidates', 'dropped': []}
+    already_set = set(already or ())
+    last_map = dict(last_shown or {})
+    wake_tokens = set(tokenize(wake_context, stopwords=STOPWORDS))
+    scored = []
+    dropped = []
+    for memory in candidates:
+        key = memory.id
+        body = memory.body or ''
+        if key in already_set:
+            dropped.append({'id': key, 'reason': 'already_in_context'})
+            continue
+        imp = int(getattr(memory, 'importance', 0) or 0)
+        if getattr(memory, 'pinned', 0):
+            imp = max(imp, 9)
+        if imp < min_importance:
+            dropped.append({'id': key, 'reason': 'not_meaningful'})
+            continue
+        if _NOT_LIGHT.search(body[:600]):
+            dropped.append({'id': key, 'reason': 'work_topic'})
+            continue
+        last = last_map.get(key)
+        gap = cooldown_turns
+        if isinstance(previous, dict) and previous.get('key') == key:
+            streak = previous.get('repeat')
+            streak = streak if type(streak) is int and 0 <= streak <= 8 else 0
+            gap = gap * (2 ** min(streak, 3))
+        if type(last) is int and gap and turn - last <= gap:
+            dropped.append({'id': key, 'reason': 'association_cooldown'})
+            continue
+        silence = 50 if type(last) is not int else min(max(0, turn - last), 50)
+        overlap = 0
+        if wake_tokens:
+            mem_tokens = set(tokenize((memory.title or '') + ' ' + body[:300], stopwords=STOPWORDS))
+            overlap = min(15, len(wake_tokens & mem_tokens) * 5)
+        weight = imp * 10 + silence + overlap
+        scored.append((weight, key, body))
+    if not scored:
+        return {'key': '', 'body': '', 'score': 0, 'reason': 'nothing_suitable', 'dropped': dropped}
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    score, key, body = scored[0]
+    return {'key': key, 'body': body, 'score': score, 'reason': 'wake_idle_selected', 'dropped': dropped}
