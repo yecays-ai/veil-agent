@@ -552,6 +552,20 @@ class ParityAndNewModuleTests(unittest.TestCase):
         self.assertTrue(strict['lan_sovereignty_ok'])
         self.assertEqual(naive['circular_self_promotion_rate'], 1.0)
 
+    def test_comb_e2e_decay_protection_and_cli_parser(self):
+        from recall_lab.comb_e2e import apply_decay_penalty, build_parser
+        self.assertEqual(apply_decay_penalty(0.8, age=30, importance=8, mode='no_decay'), 0.8)
+        self.assertLess(apply_decay_penalty(0.8, age=30, importance=8, mode='naive_time_decay'), 0.8)
+        self.assertEqual(apply_decay_penalty(0.8, age=30, importance=8, mode='protected_decay'), 0.8)
+        self.assertLess(apply_decay_penalty(0.8, age=30, importance=5, mode='protected_decay'), 0.8)
+        parser = build_parser()
+        ns = parser.parse_args([
+            '--db', 'a.db', '--eval', 'e.jsonl', '--learned-context', 'lc.json',
+            '--rerank-detail', 'rr.jsonl', '--cache-dir', 'c', '--results-dir', 'r',
+            '--detail-dir', 'd', '--budget-ledger', 'b.jsonl', '--offline-only',
+        ])
+        self.assertTrue(ns.offline_only)
+
 
 if __name__ == '__main__':
     unittest.main()

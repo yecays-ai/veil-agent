@@ -50,9 +50,10 @@ P6-S4（统一消融实验执行与候选机制决策）的隔离实验环境。
     recall_lab/tier0.py      11 个 Tier 0 实验 runner
     recall_lab/tier12.py     Tier 1/2 runner（Reranker、判官臂、真实上下文与工具调用、认知巩固、组合验证）
     recall_lab/tier2_real.py Tier 2 真实模型生成、工具调用、前瞻巩固与 8 维匿名 AI 辅助盲评（生成本机 Lan 对照包）
+    recall_lab/comb_e2e.py   AB-COMB 端到端 4 路 Rerank+Judge 联动、多机制回复对照与离线时间衰减保护可复现入口
     recall_lab/runtime.py    Context（query 向量缓存、评估、结果 I/O）、快照指纹
     recall_lab/cli.py        命令行入口、依赖链、断点续跑、覆盖统计
-    tests/                   合成数据单测（39 项，无网络、无真实数据）
+    tests/                   合成数据单测（40 项，无网络、无真实数据）
     schema/                  eval-v2 / 预算台账 / 实验结果 JSON Schema
     results/                 已提交的聚合结果（24/24 completed + coverage.json + run-manifest.json + budget-summary.json）
 
@@ -84,7 +85,9 @@ provider 回报 usage）；失败调用按预留上界保守结算。硬上限�
 2. 按「快速开始」命令运行；每个实验写 `results/<实验>.json`，每样本明细只写 `--detail-dir`
    （gitignored）。
 3. `python scripts/p6_s1_baseline.py --out .local-baseline-1.json` 复跑 Baseline-1 门禁，确认 20/20。
-4. 单测：`python -m unittest discover -s recall-lab/tests -v`（当前 39 项，含并发账本、cache-only、缺 usage 保守结算、门控口径、生产 breath/分层轮换/wake 门控、时序审计、Reranker 价格拦截与 S2 隔离写入验证回归）。
+4. 单测：`python -m unittest discover -s recall-lab/tests -v`（当前 40 项，含并发账本、cache-only、缺 usage 保守结算、门控口径、生产 breath/分层轮换/wake 门控、时序审计、Reranker 价格拦截、S2 隔离写入验证与 `comb_e2e` 衰减保护回归）。
+5. 复跑 `AB-COMB` 端到端补测与离线衰减保护（命中本地缓存时新增费用 ¥0）：
+   `python -m recall_lab.comb_e2e --db <isolated/brain.db> --eval <eval-v2.jsonl> --learned-context <learned-context.json> --rerank-detail <runs/ab_r2_Qwen_Qwen3-Reranker-0_6B.jsonl> --cache-dir <cache> --results-dir results --detail-dir <runs> --budget-ledger <budget-ledger.jsonl>`（加 `--offline-only` 可零费用仅跑衰减保护检查）。
 
 ## 已知边界
 

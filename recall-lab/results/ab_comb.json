@@ -640,22 +640,38 @@
   "variable": "Baseline-1 vs 候选组合（检索 + 重排 + 自然联想 + 上下文）",
   "verdict": {
     "active_mechanisms": [
-      "AB-R1b(停用词)",
-      "AB-R2(Qwen/Qwen3-Reranker-0.6B)",
       "AB-A2(S2严格证据链晋升)",
       "AB-A3(四区独立预算)",
       "AB-C1(HEAD前缀纯化)",
-      "AB-C2a(省略非首轮空提示)"
+      "AB-C2a(省略非首轮空提示)",
+      "AB-R1b(停用词·S5可关闭候选)",
+      "AB-R2(Qwen/Qwen3-Reranker-0.6B·待本地/异步+门控)"
+    ],
+    "caveats": [
+      "AB-R1b 虽提升离线检索 Recall@8 (+3.88pp)，但在 4 路联合判官实测中判官召回(0.5867→0.5267)与精确率(0.3531→0.3363)下降、FPR 上升(0.4545→0.5455)，S5 仅作为可关闭候选机制，须验证最终链路净收益后再决定是否默认开启。",
+      "AB-R2 单独仅喂 Rerank Top-8 给判官会因丢失向量兜底导致判官召回崩跌至 0.3467；保留 Vec-8 兜底虽拿到最高召回(0.5900)/精确率(0.3840)且省 44.5% token，但空查询 FPR 升至 0.7273，接入时必须保留向量兜底并前置重排分数门控。",
+      "离线衰减补测证实无保护时间衰减会误伤 14 天以上重要共同经历(imp>=8 召回 3/9→2/9)，仅对 imp<=6 衰减且保护 imp>=7 零衰减时整体与重要旧经历均上升(0.5556 / 4/9)。"
     ],
     "metrics": {
+      "baseline_judge_fpr": 0.4545,
+      "baseline_judge_precision": 0.3531,
+      "baseline_judge_recall": 0.5867,
+      "e2e_multi_mechanism_ties": 0,
+      "e2e_multi_mechanism_wins": "3-3",
       "ndcg_at_8": 0.4809,
+      "r1b_judge_fpr": 0.5455,
+      "r1b_judge_precision": 0.3363,
+      "r1b_judge_recall": 0.5267,
       "recall_at_k": 0.5444,
+      "rerank_plus_vec_judge_fpr": 0.7273,
+      "rerank_plus_vec_judge_precision": 0.384,
+      "rerank_plus_vec_judge_recall": 0.59,
       "rerank_recall_at_8": 0.6093
     },
-    "reason": "端到端组合验证（共 6 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
+    "reason": "真实多机制端到端联合验证：A2/A3/C1/C2a 稳定通过且 6 场景多机制端到端回复 3-3 无负交互（幻觉 1 vs 2，S5-001 陷阱减少误召回并省 386 tok）；但 4 路联合判官实测暴露两项重要约束：(1) AB-R1b 停用词在最终判官链路召回/精确率下降且 FPR 上升，S5 须作为可关闭候选先验证最终链路净收益再决定是否默认开启；(2) AB-R2 Rerank+判官必须保留向量兜底并前置分数门控。离线衰减补测证实保护 imp>=7 零衰减可避免误伤重要共同经历。",
     "recommended": true,
     "winners_used": {
-      "stopwords": true
+      "stopwords": "toggleable_candidate_in_s5"
     }
   },
   "e2e_judge_4way": [
