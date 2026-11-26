@@ -767,10 +767,153 @@ body:not(.detached-window) .page:not([data-page-view="chat"]):not([data-page-vie
   border-radius: 16px !important;
   padding: 20px 24px !important;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.025) !important;
+  transition: transform 120ms ease, background 140ms ease, border-color 140ms ease;
 }
 #peter-view .peter-textarea {
   width: 100% !important;
   min-height: 112px;
+}
+
+/* ==========================================================================
+   Warm Craft & Anti-AI-Slop Polish (Concentric Radii, Tabular Numerals,
+   Flat Inner Feeds, Swatch Beads & Tactile Button States)
+   ========================================================================== */
+
+:root {
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+}
+
+.workspace-heading h2,
+.page-heading h2 {
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.kpi-val,
+.health-kpi-item strong,
+.tl-meta,
+.reader-meta-grid {
+  font-variant-numeric: tabular-nums;
+}
+
+/* KPI cards: remove repetitive pill badges, reveal gentle directional cue on hover */
+.kpi-arrow {
+  opacity: 0;
+  transform: translateX(-4px);
+  color: var(--veil-accent);
+  font-size: 13px;
+  transition: opacity 160ms ease, transform 160ms var(--ease-spring);
+}
+.kpi-card:hover .kpi-arrow {
+  opacity: 0.9;
+  transform: translateX(0);
+}
+
+/* Anti-Card-in-Card: flatten nested layers & timeline rows inside parent glass cards */
+.veil-card .layer-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 22px;
+}
+.veil-card .layer-item {
+  border: 0 !important;
+  border-bottom: 1px solid var(--veil-rule) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 11px 2px !important;
+}
+.veil-card .veil-timeline {
+  border-left: 1px solid var(--veil-rule-strong);
+  padding-left: 18px;
+  gap: 2px;
+}
+.veil-card .tl-dot {
+  left: -23px;
+  top: 15px;
+  width: 8px;
+  height: 8px;
+}
+.veil-card .tl-card {
+  border: 0 !important;
+  border-bottom: 1px solid var(--veil-rule) !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  padding: 10px 10px !important;
+}
+.veil-card .tl-card:hover {
+  background: var(--surface-muted) !important;
+}
+
+/* Warm Empty Mark & Status Dot (zero raw emojis) */
+.empty-pane-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--veil-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--veil-accent) 26%, transparent);
+  position: relative;
+}
+.empty-pane-mark::after {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: var(--veil-accent);
+}
+.health-badge-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: block;
+}
+.health-badge-dot.good { background: var(--good); box-shadow: 0 0 0 4px var(--good-soft); }
+.health-badge-dot.warn { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+
+/* macOS Swatch Theme Beads */
+.theme-pills {
+  gap: 5px !important;
+  padding: 4px 7px !important;
+  background: var(--glass-card-strong) !important;
+}
+.theme-pill-btn {
+  width: 16px !important;
+  height: 16px !important;
+  min-width: 16px !important;
+  min-height: 16px !important;
+  border: 1px solid rgba(0, 0, 0, 0.14) !important;
+  transition: transform 150ms var(--ease-spring), box-shadow 150ms ease !important;
+}
+.theme-pill-btn.t-rose { background: linear-gradient(135deg, #F3DFE8, #C29AAD) !important; }
+.theme-pill-btn.t-gold { background: linear-gradient(135deg, #F6EFE2, #C8AE85) !important; }
+.theme-pill-btn.t-blue { background: linear-gradient(135deg, #E3ECF5, #94ADC7) !important; }
+.theme-pill-btn.t-night { background: linear-gradient(135deg, #342D3F, #1E1A26) !important; }
+.theme-pill-btn[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--veil-paper), 0 0 0 3.5px var(--veil-accent) !important;
+  transform: scale(1.1);
+}
+
+/* Tactile State Completeness on Buttons */
+.page button:focus-visible,
+.top-actions button:focus-visible,
+.theme-pill-btn:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 3px var(--veil-accent-soft) !important;
+}
+.page button.primary,
+.page button[type="submit"],
+.page #save-limits,
+.page #apply-css,
+.page #life-new,
+.page #mcp-add,
+.page #add-endpoint,
+.page #add-model,
+.page #workbench-add {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 2px 6px rgba(0, 0, 0, 0.06) !important;
+}
+.page button:active:not(:disabled) {
+  transform: translateY(0.5px) scale(0.985);
 }
 
 /* Reference-Style Right Rail & Curved Hairline Waiting Pill */

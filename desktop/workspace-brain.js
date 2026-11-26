@@ -77,7 +77,7 @@
 
   function renderEmptyState(title, subtitle) {
     const box = el('div', 'empty-pane');
-    box.append(el('div', 'empty-pane-icon', '🌿'), el('strong', '', title), el('small', '', subtitle));
+    box.append(el('span', 'empty-pane-mark'), el('strong', '', title), el('small', '', subtitle));
     return box;
   }
 
@@ -111,7 +111,7 @@
     for (const k of kpiDefs) {
       const card = el('article', 'veil-card kpi-card');
       const top = el('div', 'kpi-top');
-      top.append(el('span', '', k.label), pill('进入 →'));
+      top.append(el('span', '', k.label), el('span', 'kpi-arrow', '→'));
       card.append(top, el('div', 'kpi-val', k.val), el('div', 'kpi-sub', k.sub));
       card.addEventListener('click', () => window.veilWorkspace?.go(k.page));
       kpiGrid.append(card);
@@ -749,7 +749,9 @@
       const banner = el('div', 'health-summary-banner');
       const lead = el('div', 'health-status-lead');
       const iconCls = sum.warn_count || sum.error_count ? 'warn' : 'good';
-      lead.append(el('div', `health-status-icon ${iconCls}`, iconCls === 'warn' ? '⚠️' : '✅'));
+      const statusBadge = el('div', `health-status-icon ${iconCls}`);
+      statusBadge.append(el('span', `health-badge-dot ${iconCls}`));
+      lead.append(statusBadge);
       const leadText = el('div');
       leadText.append(
         el('h3', '', sum.status_label || '状态正常'),
