@@ -696,46 +696,81 @@ body:not(.detached-window) .topbar .top-actions {
 .overview-grid > .veil-card { height: 100%; display: flex; flex-direction: column; }
 .overview-grid > .veil-card .veil-timeline { flex: 1; align-content: start; }
 
-/* Activity, Diagnostics & Settings Unified Cards */
-#more-view, #diagnostics-view, #context-view, #instructions-view, #mcp-view {
-  padding: 20px 24px 48px !important;
+/* Activity, Diagnostics, Settings, MCP, Peter & Context: Full-Width Unified Workspaces */
+body:not(.detached-window) .page:not([data-page-view="chat"]):not([data-page-view="life"]) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 24px 32px 48px !important;
+  align-items: stretch !important;
 }
-#diagnostics-view > .diagnostics-sections,
-#diagnostics-view > div:not(.page-heading) {
-  max-width: 1160px;
-  margin-inline: auto;
+body:not(.detached-window) .page:not([data-page-view="chat"]):not([data-page-view="life"]):not(.workspace-view) > * {
+  width: 100% !important;
+  max-width: 1160px !important;
+  margin-inline: auto !important;
+  box-sizing: border-box;
 }
+
 #diagnostics-view .diag-system,
 #diagnostics-view .surface {
+  width: 100%;
   border-radius: 16px !important;
   background: var(--glass-card) !important;
   border: 1px solid var(--veil-rule) !important;
-  padding: 16px 20px !important;
-  margin-bottom: 12px;
+  padding: 18px 22px !important;
+  margin-bottom: 14px;
 }
-#more-view > *, #mcp-view > *, #instructions-view > *, #context-view > * {
-  max-width: 1080px;
-  margin-inline: auto;
+
+#mcp-view .mcp-master,
+#mcp-view .mcp-card,
+.page[data-page-view="mcp"] .surface {
+  border: 1px solid var(--veil-rule) !important;
+  border-radius: 16px !important;
+  background: var(--glass-card) !important;
+  padding: 18px 22px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.025);
 }
-#more-view details.settings-section {
+#mcp-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+#more-view .settings-section {
+  width: 100%;
   border-radius: 16px !important;
   background: var(--glass-card) !important;
   border: 1px solid var(--veil-rule) !important;
-  padding: 6px 18px !important;
-  margin-bottom: 12px !important;
+  padding: 6px 20px !important;
+  margin-bottom: 14px !important;
   backdrop-filter: blur(18px);
 }
 #more-view details.settings-section summary {
   font-size: 15px !important;
   font-weight: 650 !important;
-  padding: 10px 4px !important;
+  padding: 12px 4px !important;
   cursor: pointer;
 }
-#more-view details.settings-section .surface {
+#more-view details.settings-section .surface,
+.page[data-page-view="more"] .surface {
   border: 0 !important;
+  border-radius: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
-  padding: 8px 0 12px !important;
+  padding: 8px 0 14px !important;
+}
+
+#peter-view .peter-card {
+  width: 100% !important;
+  background: var(--glass-card) !important;
+  border: 1px solid var(--veil-rule) !important;
+  border-radius: 16px !important;
+  padding: 20px 24px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.025) !important;
+}
+#peter-view .peter-textarea {
+  width: 100% !important;
+  min-height: 112px;
 }
 
 /* Reference-Style Right Rail & Curved Hairline Waiting Pill */

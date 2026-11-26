@@ -467,6 +467,14 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('document.documentElement.dataset.visualTheme === "night" && document.documentElement.dataset.theme === "dark"'), 'visual theme night failed');
   await chat.webContents.executeJavaScript('document.querySelector("[data-visual-theme-pick=rose]").click()');
 
+  // Verify settings, MCP, and Peter profile cards span full workspace width cleanly (not collapsed strips)
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=more]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#more-view").hidden && (document.querySelector("#more-view .settings-section")?.getBoundingClientRect().width || 0) >= 500'), 'settings card collapsed narrow');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=mcp]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#mcp-view").hidden && (document.querySelector("#mcp-view .mcp-master")?.getBoundingClientRect().width || 0) >= 500'), 'mcp master card collapsed narrow');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=peter]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#peter-view").hidden && (document.querySelector("#peter-view .peter-card")?.getBoundingClientRect().width || 0) >= 500'), 'peter profile card collapsed narrow');
+
   assert.equal(await chat.webContents.executeJavaScript('window.veilDesktop.detachView("chat",{x:760,y:320})'), true, 'chat detach for pin test failed');
   let pinnedChat;
   await wait(() => { pinnedChat = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=chat')); return pinnedChat?.isVisible(); }, 'detached chat for pin check missing');
