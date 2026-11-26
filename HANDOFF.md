@@ -1,25 +1,25 @@
 # HANDOFF
 
-> 更新时间：2026-11-26T11:30:00Z
+> 更新时间：2026-11-26T13:40:00Z
 
 ## 当前停点
 
 - **P6-S2 / P6-S1**：均已合并并通过加固 PR（#450/#451/#454/#452/#453），CI 全绿。正式 `data/peter` 未动。
-- **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）PR #455 已完成接手施工与全部 24/24 实验交付：
+- **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）PR #455 已完成全部 24/24 实验、Lan 全量 46 场景人工盲评与 P6-0（41 项）+ P6（20 项）原始需求覆盖审计（含 `混合检索+Rerank+判官` 4 路对照、`AB-COMB` 多机制端到端回复对照及时间衰减保护补测）：
   - 状态：**24 completed / 0 partial / 0 blocked**；
-  - 预算：累计 **¥2.666046 / ¥20**（Tier 0 ¥0、Tier 1 ¥1.784595、Tier 2 ¥0.881451，862 条 append-only 结算记录，含真实 Peter 人设重跑与完整记忆盲评修复）；
+  - 预算：累计 **¥3.084122 / ¥20（15.4%）**（Tier 0 ¥0、Tier 1 ¥2.160207、Tier 2 ¥0.923915，1,006 条 append-only 结算记录）；
   - 验证：合成单测 **39/39 通过**，Baseline-1 门禁 **20/20 通过**，隐私/路径/密钥/人设泄露扫描 0 命中；
-  - 本地匿名 A/B 回复对照：`.local-tmp/s4/lan-blind-review.md`（46 组真实人设回复，83/92 英文，完整记忆核验基准，不进 git），供 Lan 直接阅读体验。
+  - 交付文档：`docs/reports/p6-s4-ablations-20261126.md`、`docs/reports/p6-s4-decision-table-20261126.md`、`docs/reports/p6-s4-requirements-coverage-audit-20261126.md`；本机匿名对照 `.local-tmp/s4/lan-blind-review.md`（已由 Lan 全量审阅，不进 git）。
   - 按工单规则，**达到完整交付且可合并状态后停止，不自行合并，不启动 S3/S5/S6/S7**。
 
 ## 下一个窗口第一步
 
-1. 确认 PR #455 最新 HEAD 对应 CI 全绿及审查无阻断意见；请 Lan 抽读本机 `.local-tmp/s4/lan-blind-review.md` 与 `docs/reports/p6-s4-decision-table-20261126.md` 并拍板是否合并。
-2. S4 合并后按决策表分阶段施工：
-   - **S3**：四区独立存储预算（AB-A3）+ S2 新证据链下严格溯源晋升（AB-A2，循环自证率=0）；
-   - **S5**：中文停用词过滤（AB-R1b），判官链维持现状（可选灰度 K=12）；Qwen3-Reranker 待本地化/异步方案；
-   - **S7**：HEAD 前缀纯化（AB-C1）+ 非首轮省略空提示（AB-C2a）；不做 C2b 短闲聊硬截断（会丢有效补充记忆）与 C3 替换相关长事件全文；
-   - **S6**：夜间认知巩固（AB-E1）与闲暇联想（AB-A1b）仅在带独立开关与日预算顶前提下小步灰度。
+1. 确认 PR #455 最新 HEAD 对应 CI 全绿后，由 Lan 合并 PR #455。
+2. S4 合并后按决策表与 `p6-s4-requirements-coverage-audit-20261126.md` 分阶段施工：
+   - **S3**：四区独立存储预算（AB-A3）+ S2 新证据链下严格溯源晋升（AB-A2，循环自证率=0）+ 1500B 满载优先级压缩与 `stale_ref` 降级；
+   - **S5**：中文停用词过滤（AB-R1b），判官链维持现状（可选灰度 K=12），优化工作/技术 `trap` 误报抑制，设计带情境相关性约束的聊天自然联想；Qwen3-Reranker 待本地化/异步方案（且须保留向量兜底 + 前置分数门控）；
+   - **S7**：HEAD 前缀纯化（AB-C1）+ 非首轮省略空提示（AB-C2a）+ 预留 `p7.experience_hints` 槽位；不做 C2b 短闲聊硬截断与 C3 替换相关长事件全文；
+   - **S6**：激活 `last_active` 与长期重要度动态重评（保护 `imp>=7`/`pinned` 零衰减且永不删除）；先修自主态旁白/无工具扮演再灰度 `AB-A1b`；`AB-E1` 认知巩固带开关与日预算顶做多日灰度并衔接 P7。
 3. 继续遵守红线：不执行未授权的正式 `data/peter` 历史恢复；不启停正式 Peter。
 
 ## 维护窗口红线
