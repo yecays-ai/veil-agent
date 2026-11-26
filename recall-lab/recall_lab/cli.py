@@ -89,7 +89,11 @@ def build_parser():
     parser.add_argument('--fake-embedder', action='store_true',
                         help='exercise the harness with a local fake embedder (not for real ablations)')
     parser.add_argument('--skip-paid', action='store_true',
-                        help='run only Tier 0; Tier 1/2 are recorded as not_run')
+                        help='run only Tier 0 with cached embeddings; Tier 1/2 stay not_run and '
+                             'no provider call is allowed')
+    parser.add_argument('--embedding-rate-cny-per-million', type=float, default=None,
+                        help='declared embedding price per million tokens; required for provider runs '
+                             '(0.0 only when the endpoint is declared free/covered)')
     parser.add_argument('--embed-base-url', default='https://api.siliconflow.cn/v1')
     parser.add_argument('--embed-model', default='BAAI/bge-m3')
     parser.add_argument('--judge-base-url', default='https://api.deepseek.com')
@@ -99,21 +103,32 @@ def build_parser():
 
 
 def _select(args):
+    """(selected, skipped_paid). Experiment ids are matched case-insensitively to canonical ids."""
+    canonical = {experiment_id.casefold(): experiment_id for experiment_id in ORDER}
     if args.experiments:
-        chosen = [item.strip().upper() for item in args.experiments.split(',') if item.strip()]
-        unknown = [item for item in chosen if item not in ORDER]
+        chosen, unknown = [], []
+        for raw in args.experiments.split(','):
+            item = raw.strip()
+            if not item:
+                continue
+            canonical_id = canonical.get(item.casefold())
+            if canonical_id is None:
+                unknown.append(item)
+            elif canonical_id not in chosen:
+                chosen.append(canonical_id)
         if unknown:
-            raise SystemExit('unknown experiment ids: %s' % ', '.join(unknown))
-        return chosen
-    if args.tier == 'all':
+            raise SystemExit('unknown experiment ids: %s (known: %s)'
+                             % (', '.join(unknown), ', '.join(ORDER)))
+        selected = chosen
+    elif args.tier == 'all':
         selected = list(ORDER)
     else:
         tiers = {int(item) for item in str(args.tier).split(',') if item.strip()}
         selected = [item for item in ORDER if TIER_OF[item] in tiers]
     if args.skip_paid:
-        selected = [item for item in selected if TIER_OF[item] == 0] + [
-            item for item in selected if TIER_OF[item] > 0]
-    return selected
+        skipped = [item for item in selected if TIER_OF[item] > 0]
+        return [item for item in selected if TIER_OF[item] == 0], skipped
+    return selected, []
 
 
 def main(argv=None):
@@ -123,13 +138,15 @@ def main(argv=None):
         for experiment_id in ORDER:
             print('%s\ttier %d' % (experiment_id, TIER_OF[experiment_id]))
         return 0
-    experiments = _select(args)
+    experiments, skipped_paid = _select(args)
     snapshot = core.load_snapshot(args.db)
     known_ids = set(snapshot.memories) | set(snapshot.events)
     samples, eval_report = core.load_eval(args.eval, validate_ids=known_ids)
     chat_message_ids, chat_rows = (set(), [])
     if args.chat:
         chat_message_ids, chat_rows = core.load_chat_user_messages(args.chat)
+    if skipped_paid:
+        print('--skip-paid: not running paid experiments: %s' % ', '.join(skipped_paid))
     options = {
         'chat_user_message_ids': chat_message_ids,
         'chat_rows': chat_rows,
@@ -141,25 +158,45 @@ def main(argv=None):
         'cache_dir': args.cache_dir,
         'judge_base_url': args.judge_base_url,
         'judge_model': args.judge_model,
-        'embedding_mode': 'fake' if args.fake_embedder else 'provider',
+        'embedding_mode': ('fake' if args.fake_embedder
+                           else ('cache-only' if args.skip_paid else 'provider')),
     }
     pick = _keys(args)
+    embedding_rate = args.embedding_rate_cny_per_million
+    if args.fake_embedder:
+        core.configure_embedding_price(0.0, source='fake embedder (harness validation only)')
+    elif args.skip_paid:
+        # Cache-only: a cache miss must fail the experiment instead of silently paying for it.
+        core.configure_embedding_price(0.0 if embedding_rate is None else embedding_rate,
+                                       source='cache-only run (no provider call allowed)')
+    else:
+        if embedding_rate is None:
+            raise SystemExit(
+                'embedding price is not declared; pass --embedding-rate-cny-per-million X '
+                '(use 0.0 only when the embedding endpoint is declared free/covered). '
+                'An unknown price is refused so the spend ledger cannot silently undercount.')
+        core.configure_embedding_price(embedding_rate,
+                                       source='--embedding-rate-cny-per-million')
+    budget = core.BudgetLedger(args.budget_ledger,
+                               run_id='recall-lab-%s' % time.strftime('%Y%m%d-%H%M%S'))
     if args.fake_embedder:
         embedder = core.FakeEmbedder()
+    elif args.skip_paid:
+        embedder = core.EmbeddingCache(Path(args.cache_dir) / 'embeddings.jsonl',
+                                       model=args.embed_model, base_url=args.embed_base_url,
+                                       api_key='', budget=budget, allow_provider=False)
     else:
         api_key = pick('EMBED_API_KEY')
         if not api_key:
             raise SystemExit('no EMBED_API_KEY supplied (pass --env-file or set the environment)')
         embedder = core.EmbeddingCache(Path(args.cache_dir) / 'embeddings.jsonl',
                                        model=args.embed_model, base_url=args.embed_base_url,
-                                       api_key=api_key)
+                                       api_key=api_key, budget=budget)
     if not args.skip_paid and not args.fake_embedder and any(TIER_OF[item] > 0 for item in experiments):
         judge_key = pick('DEEPSEEK_API_KEY')
         if not judge_key:
             raise SystemExit('Tier 1/2 selected but no DEEPSEEK_API_KEY supplied')
         options['judge_api_key'] = judge_key
-    budget = core.BudgetLedger(args.budget_ledger,
-                               run_id='recall-lab-%s' % time.strftime('%Y%m%d-%H%M%S'))
     expected_ids = list(ORDER)
     ctx = Context(snapshot=snapshot, samples=samples, eval_report=eval_report, embedder=embedder,
                   budget=budget, results_dir=args.results_dir, detail_dir=args.detail_dir,
@@ -203,7 +240,7 @@ def main(argv=None):
               flush=True)
     embedding_stats = ctx.charge_embeddings('PREP-embedding',
                                             note='one-off query/story embedding preparation')
-    coverage = _coverage(ctx, expected_ids)
+    coverage = _coverage(ctx, expected_ids, skipped_paid=skipped_paid)
     manifest = {
         'harness_version': core.HARNESS_VERSION,
         'generated_at': core.utc_now(),
@@ -212,7 +249,7 @@ def main(argv=None):
         'platform': sys.platform,
         'embedding_mode': options['embedding_mode'],
         'embedding': embedding_stats,
-        'prices': core.PRICES,
+        'prices': json.loads(json.dumps(core.PRICES)),
         'tier_caps_cny': core.TIER_CAPS_CNY,
         'total_cap_cny': core.TOTAL_CAP_CNY,
         'snapshot': snapshot_fingerprint(snapshot, eval_report, extra_files={
@@ -222,6 +259,8 @@ def main(argv=None):
         'eval': eval_report,
         'budget': budget.totals(),
         'experiments_run': experiments,
+        'experiments_skipped_paid': skipped_paid,
+        'skip_paid': bool(args.skip_paid),
         'coverage': coverage,
         'elapsed_seconds': round(time.time() - started, 1),
     }
@@ -268,12 +307,18 @@ def _runners():
     }
 
 
-def _coverage(ctx, expected_ids):
-    titles = {}
+def _coverage(ctx, expected_ids, skipped_paid=()):
+    skipped = set(skipped_paid)
     rows = []
     for experiment_id in expected_ids:
         result = ctx.results.get(experiment_id) or {}
         verdict = result.get('verdict') or {}
+        if experiment_id in skipped:
+            rows.append({'experiment_id': experiment_id, 'tier': TIER_OF[experiment_id],
+                         'title': result.get('title') or experiment_id,
+                         'status': 'not_run', 'recommended': None,
+                         'reason': 'skipped by --skip-paid in this invocation'})
+            continue
         rows.append({'experiment_id': experiment_id, 'tier': TIER_OF[experiment_id],
                      'title': result.get('title') or experiment_id,
                      'status': result.get('status') or 'not_run',

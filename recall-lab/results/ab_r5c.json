@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.66,
+          "mean_ms": 2.83,
           "n": 73,
-          "p50_ms": 1.18,
-          "p95_ms": 3.77
+          "p50_ms": 2.09,
+          "p95_ms": 6.09
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.64,
+          "mean_ms": 2.66,
           "n": 73,
-          "p50_ms": 1.16,
-          "p95_ms": 3.63
+          "p50_ms": 2.07,
+          "p95_ms": 6.5
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -389,7 +389,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -411,11 +411,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R5c",
-  "finished_at": "2026-11-26T17:51:02.058+08:00",
+  "finished_at": "2026-11-26T18:37:24.982+08:00",
   "fixed_baseline": "K=8, importance=0.05",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:01.807+08:00",
+  "started_at": "2026-11-26T18:37:24.565+08:00",
   "status": "completed",
   "tier": 0,
   "title": "valence/arousal 情感数值门控加分",

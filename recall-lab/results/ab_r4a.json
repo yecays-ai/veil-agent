@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 4.96,
+          "mean_ms": 7.14,
           "n": 73,
-          "p50_ms": 1.17,
-          "p95_ms": 3.79
+          "p50_ms": 2.08,
+          "p95_ms": 6.26
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -293,7 +293,7 @@
               "empty_injected_n": 0,
               "false_positive_rate": null,
               "miss_rate": 0.85,
-              "ndcg_at_8": 0.158,
+              "ndcg_at_8": 0.166,
               "precision_at_5": 0.1833,
               "recall_at_k": 0.15,
               "samples": 10
@@ -355,7 +355,7 @@
             "empty_injected_n": 24,
             "false_positive_rate": 0.8571,
             "miss_rate": 0.5593,
-            "ndcg_at_8": 0.4351,
+            "ndcg_at_8": 0.4369,
             "precision_at_5": 0.2407,
             "recall_at_k": 0.4407,
             "samples": 73
@@ -363,10 +363,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.7,
+          "mean_ms": 2.49,
           "n": 73,
-          "p50_ms": 1.21,
-          "p95_ms": 3.49
+          "p50_ms": 1.96,
+          "p95_ms": 5.56
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -389,7 +389,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -422,11 +422,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R4a",
-  "finished_at": "2026-11-26T17:51:03.292+08:00",
+  "finished_at": "2026-11-26T18:37:26.765+08:00",
   "fixed_baseline": "K=8 最佳检索 + 停用词=True + minmax 融合",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:02.784+08:00",
+  "started_at": "2026-11-26T18:37:26.031+08:00",
   "status": "completed",
   "tier": 1,
   "title": "events.story 纳入向量索引",

@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.68,
+          "mean_ms": 2.32,
           "n": 73,
-          "p50_ms": 1.18,
-          "p95_ms": 3.97
+          "p50_ms": 1.88,
+          "p95_ms": 4.72
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.78,
+          "mean_ms": 1.95,
           "n": 73,
-          "p50_ms": 1.16,
-          "p95_ms": 3.92
+          "p50_ms": 1.13,
+          "p95_ms": 4.82
         },
         "overall": {
           "cross_event_coverage": 0.2,
@@ -554,10 +554,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.71,
+          "mean_ms": 1.87,
           "n": 73,
-          "p50_ms": 1.23,
-          "p95_ms": 3.83
+          "p50_ms": 1.53,
+          "p95_ms": 4.08
         },
         "overall": {
           "cross_event_coverage": 0.3,
@@ -580,7 +580,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -618,11 +618,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R1c",
-  "finished_at": "2026-11-26T17:50:59.768+08:00",
+  "finished_at": "2026-11-26T18:37:21.687+08:00",
   "fixed_baseline": "K=8, 停用词=True",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:50:59.377+08:00",
+  "started_at": "2026-11-26T18:37:21.226+08:00",
   "status": "completed",
   "tier": 0,
   "title": "融合算法：Min-Max vs RRF(k=60) vs 纯向量",

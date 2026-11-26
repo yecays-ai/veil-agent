@@ -10,6 +10,7 @@ import json
 import math
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -298,6 +299,190 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(coverage['count'], 24)
         self.assertIn('24', coverage['note'])
         self.assertEqual(coverage['status_counts'].get('not_run'), 24)
+
+
+
+
+class CliSelectionTests(unittest.TestCase):
+    def _args(self, argv):
+        from recall_lab import cli
+        return cli.build_parser().parse_args(['--eval', 'x', '--db', 'y'] + argv)
+
+    def test_lowercase_suffix_experiment_ids_are_canonical(self):
+        from recall_lab import cli
+        selected, skipped = cli._select(self._args(['--experiments', 'ab-r1b,AB-R3a']))
+        self.assertEqual(selected, ['AB-R1b', 'AB-R3a'])
+        self.assertEqual(skipped, [])
+
+    def test_skip_paid_removes_paid_experiments_and_reports_them(self):
+        from recall_lab import cli
+        selected, skipped = cli._select(self._args(['--tier', 'all', '--skip-paid']))
+        self.assertTrue(all(cli.TIER_OF[item] == 0 for item in selected))
+        self.assertEqual(len(skipped), len(cli.ORDER) - 11)
+        explicit, explicit_skipped = cli._select(
+            self._args(['--experiments', 'AB-R1a,AB-R3a', '--skip-paid']))
+        self.assertEqual(explicit, ['AB-R1a'])
+        self.assertEqual(explicit_skipped, ['AB-R3a'])
+
+    def test_coverage_marks_skipped_paid_as_not_run(self):
+        from recall_lab import cli
+        ctx = type('Ctx', (), {'results': {'AB-R3a': {'status': 'completed', 'title': 'x'}}})()
+        coverage = cli._coverage(ctx, cli.ORDER, skipped_paid=['AB-R3a'])
+        row = next(item for item in coverage['experiments']
+                   if item['experiment_id'] == 'AB-R3a')
+        self.assertEqual(row['status'], 'not_run')
+        self.assertIn('--skip-paid', row['reason'])
+
+
+class _FakeEmbeddingClient:
+    class _Embeddings:
+        def __init__(self, *, usage_tokens=7, fail=False):
+            self.usage_tokens, self.fail = usage_tokens, fail
+
+        def create(self, **_kwargs):
+            if self.fail:
+                raise RuntimeError('provider down')
+            usage = None
+            if self.usage_tokens is not None:
+                usage = type('Usage', (), {'prompt_tokens': self.usage_tokens})()
+            return type('Response', (), {
+                'data': [type('Item', (), {'embedding': [0.1, 0.2]})()],
+                'usage': usage})()
+
+    def __init__(self, **kwargs):
+        self.embeddings = self._Embeddings(**kwargs)
+
+    def close(self):
+        pass
+
+
+class EmbeddingBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ledger_path = Path(self.tmp.name) / 'ledger.jsonl'
+        self.cache_path = Path(self.tmp.name) / 'embeddings.jsonl'
+
+    def test_cache_only_mode_never_calls_a_provider_on_a_miss(self):
+        from recall_lab.core import EmbeddingCache, EmbeddingError, configure_embedding_price
+        configure_embedding_price(0.0, source='test')
+        cache = EmbeddingCache(self.cache_path, model='m', base_url='https://invalid', api_key='',
+                               allow_provider=False)
+        with self.assertRaises(EmbeddingError):
+            cache.embed('not cached')
+        self.assertEqual(cache.calls, 0)
+
+    def test_embedding_reserves_before_dispatch_and_settles_reported_usage(self):
+        from recall_lab.core import (BudgetLedger, EmbeddingCache,
+                                     configure_embedding_price)
+        configure_embedding_price(2.0, source='test')
+        ledger = BudgetLedger(self.ledger_path, run_id='test')
+        cache = EmbeddingCache(self.cache_path, model='m', base_url='https://invalid', api_key='k',
+                               budget=ledger, tier=1)
+        cache._client = _FakeEmbeddingClient(usage_tokens=7)
+        cache.embed('hello world')
+        totals = ledger.totals()
+        self.assertAlmostEqual(totals['by_tier']['1'], 7 * 2.0 / 1_000_000, places=8)
+        rows = [json.loads(line) for line in
+                self.ledger_path.read_text(encoding='utf-8').splitlines()]
+        kinds = [row.get('type') for row in rows]
+        self.assertEqual(kinds[:2], ['reserve', 'settle'])
+        self.assertEqual(rows[1].get('accounting'), 'embedding-usage')
+
+    def test_a_failed_embedding_keeps_the_reserved_upper_bound(self):
+        from recall_lab.core import (BudgetLedger, EmbeddingCache,
+                                     configure_embedding_price)
+        configure_embedding_price(2.0, source='test')
+        ledger = BudgetLedger(self.ledger_path, run_id='test')
+        cache = EmbeddingCache(self.cache_path, model='m', base_url='https://invalid', api_key='k',
+                               budget=ledger, tier=1)
+        cache._client = _FakeEmbeddingClient(fail=True)
+        with self.assertRaises(RuntimeError):
+            cache.embed('hello world')
+        self.assertGreater(ledger.totals()['total_cny'], 0)
+        self.assertEqual(cache.calls, 0)
+
+    def test_an_unknown_embedding_price_is_refused(self):
+        from recall_lab.core import configure_embedding_price, embedding_price
+        core.PRICES['embedding']['input_cny_per_million'] = None
+        with self.assertRaises(ValueError):
+            embedding_price()
+        with self.assertRaises(ValueError):
+            configure_embedding_price(None)
+        configure_embedding_price(0.0, source='test')
+
+
+class LedgerConcurrencyTests(unittest.TestCase):
+    def test_two_instances_sharing_a_file_cannot_jointly_cross_the_tier_cap(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / 'ledger.jsonl'
+        caps = {1: 6.0, 2: 10.0}
+        first = core.BudgetLedger(path, tier_caps=caps, total_cap=20.0, run_id='first')
+        second = core.BudgetLedger(path, tier_caps=caps, total_cap=20.0, run_id='second')
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def worker(ledger):
+            barrier.wait()
+            try:
+                ticket = ledger.reserve(1, 'AB-TEST', provider='p', model='m', kind='chat',
+                                        reserve_cny=3.5)
+                ledger.settle(ticket, 3.5)
+                outcomes.append('ok')
+            except core.BudgetBlocked:
+                outcomes.append('blocked')
+
+        threads = [threading.Thread(target=worker, args=(ledger,))
+                   for ledger in (first, second)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(outcomes), ['blocked', 'ok'])
+        self.assertLessEqual(first.totals()['total_cny'], 6.0 + 1e-9)
+
+
+class JudgeUsageSettlementTests(unittest.TestCase):
+    def test_missing_usage_settles_the_reserved_upper_bound(self):
+        from recall_lab import tier12
+        from recall_lab.judge import JudgeCall
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ledger = core.BudgetLedger(Path(tmp.name) / 'ledger.jsonl', run_id='test')
+        ctx = type('Ctx', (), {'budget': ledger})()
+
+        class FakeJudge:
+            model = 'deepseek-flash'
+
+            def call(self, _messages, *, timeout):
+                return JudgeCall(text='{"ids": []}', prompt_tokens=0, completion_tokens=0,
+                                 cached_tokens=0, latency_ms=1.0, usage_missing=True)
+
+        record = tier12.ledgered_judge_call(
+            ctx, FakeJudge(), tier=1, experiment='AB-TEST',
+            messages=[{'role': 'user', 'content': 'hello'}], timeout=4, cache_path=None)
+        self.assertGreater(record['amount_cny'], 0)
+        rows = [json.loads(line) for line in
+                (Path(tmp.name) / 'ledger.jsonl').read_text(encoding='utf-8').splitlines()]
+        settle = [row for row in rows if row.get('type') == 'settle'][-1]
+        self.assertEqual(settle.get('accounting'), 'usage-missing-conservative')
+        self.assertAlmostEqual(ledger.totals()['total_cny'], record['amount_cny'], places=8)
+
+
+class StoryGateTests(unittest.TestCase):
+    def test_story_index_does_not_change_the_common_relevance_gate(self):
+        snap = RetrievalTests._snapshot(self)
+        retriever = Retriever(snap, story_vectors={'e2': [0.0, 1.0]})
+        retriever.prepare()
+        ranked, _diag = retriever.rank('query', [0.0, 1.0],
+                                       RetrievalConfig(k=3, story_index=True))
+        by_id = {item.id: item for item in ranked}
+        self.assertGreater(by_id['m1'].vector, 0.9)
+        self.assertAlmostEqual(by_id['m1'].stored_vector, 0.0, places=6)
+        gated = [item.id for item in ranked if item.stored_vector >= 0.45][:3]
+        self.assertNotIn('m1', gated)
+        self.assertIn('m2', gated)
 
 
 if __name__ == '__main__':

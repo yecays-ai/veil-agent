@@ -177,10 +177,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.8,
+          "mean_ms": 2.32,
           "n": 73,
-          "p50_ms": 1.25,
-          "p95_ms": 4.13
+          "p50_ms": 1.55,
+          "p95_ms": 5.2
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -373,10 +373,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 4.87,
+          "mean_ms": 5.93,
           "n": 73,
-          "p50_ms": 1.22,
-          "p95_ms": 4.27
+          "p50_ms": 1.66,
+          "p95_ms": 6.11
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -399,7 +399,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -470,11 +470,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R1b",
-  "finished_at": "2026-11-26T17:50:59.369+08:00",
+  "finished_at": "2026-11-26T18:37:21.209+08:00",
   "fixed_baseline": "K=8 生产基线（另附 K=20 敏感性）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:50:58.575+08:00",
+  "started_at": "2026-11-26T18:37:20.103+08:00",
   "status": "completed",
   "tier": 0,
   "title": "中文停用词过滤",

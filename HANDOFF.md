@@ -6,7 +6,7 @@
 
 - **P6-S2**：`#450` 合并 `774b4bd`；合并后加固 `#451` 合并 `beb5fa3`；补充加固 `#454` 合并 `588701c`（`retry_pending()` 锁定阶段跳过且不占批次名额，避免批次饿死；7 条回归先红后绿，定向 363/363）。三者 CI 全绿。正式数据未动，维护窗口恢复仍需 bundle + dry-run + Lan 确认。
 - **P6-S1**：`#452` 合并 `fd59f7a`；合并后加固 `#453` 合并 `b3d14c2`（换模型待索引 0 付费/0 写入 + `scripts/embedding_reindex.py` 显式重建、诊断 API 透出、日期反转校验；7 项回归 + Baseline-1 20/20）。桌面 UI 展示归 P6-S7。
-- **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）已开 PR #455，24 个实验 ID 状态 17 completed / 5 partial / 2 blocked；总花费 ≈¥1.62（Tier1 ≈¥1.54、Tier2 ≈¥0.08、Tier0 ¥0）。CodeRabbit 6 条 Major 已按实质问题在本分支修复中（CLI 选择/--skip-paid/账本互斥/judge 缺 usage/embedding 预扣/故事门控口径），修完重跑受影响实验与 CI 后停止，**不自行合并**。
+- **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）PR #455，24 个实验 ID 状态 17 completed / 5 partial / 2 blocked；总花费 ≈¥1.62（Tier1 ≈¥1.54、Tier2 ≈¥0.08、Tier0 ¥0）。CodeRabbit 6 条 Major（CLI 选择/--skip-paid/账本互斥/judge 缺 usage/embedding 预扣/故事门控口径）已全部修复，单测 33/33，修复后全量复跑 24 项（全缓存命中、新增费用 ¥0、核心指标不变）；等最新 CI/审查通过后停止，**不自行合并**。
 
 ## 下一个窗口第一步
 

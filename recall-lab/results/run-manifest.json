@@ -8,7 +8,7 @@
     "calls": 380,
     "total_cny": 1.624804
   },
-  "code_commit": "e5b3494944037cccb2521a8d49761ece833494a5",
+  "code_commit": "fe03b9ab636d7e0bf62cb65512c8a2e7c7ae3716",
   "coverage": {
     "count": 24,
     "experiments": [
@@ -238,12 +238,14 @@
       "partial": 5
     }
   },
-  "elapsed_seconds": 9.7,
+  "elapsed_seconds": 12.5,
   "embedding": {
+    "blocked_calls": 0,
     "cache_hits": 149,
     "cost_cny": 0.0,
     "input_cny_per_million": 0.0,
     "model": "BAAI/bge-m3",
+    "note": "one-off query/story embedding preparation",
     "provider_calls": 0,
     "usage_tokens": 0
   },
@@ -282,14 +284,15 @@
     "AB-E1",
     "AB-COMB"
   ],
-  "generated_at": "2026-11-26T17:51:06.661+08:00",
+  "experiments_skipped_paid": [],
+  "generated_at": "2026-11-26T18:37:30.764+08:00",
   "harness_version": "recall-lab-0.1",
   "platform": "win32",
   "prices": {
     "embedding": {
       "input_cny_per_million": 0.0,
       "model": "BAAI/bge-m3",
-      "price_source": "character.toml [memory] input_cny_per_million = 0"
+      "price_source": "--embedding-rate-cny-per-million"
     },
     "judge": {
       "cached_input_cny_per_million": 0.04,
@@ -300,6 +303,7 @@
     }
   },
   "python": "3.12.10",
+  "skip_paid": false,
   "snapshot": {
     "brain_db_sha256": "2e6dd769a7c3e1f5bb8ca9603ef0fb5b2b8a3c4cf42662d4dd3be659553b3492",
     "chat_sha256": "a948c60acdece4cf0b5b3f88b65b512928e004e1fd7e8e6949a6010c8584bf76",

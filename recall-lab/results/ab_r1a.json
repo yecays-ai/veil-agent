@@ -172,10 +172,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 6.44,
+          "mean_ms": 7.03,
           "n": 73,
-          "p50_ms": 1.5,
-          "p95_ms": 4.48
+          "p50_ms": 1.6,
+          "p95_ms": 5.91
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -363,10 +363,10 @@
         },
         "k": 12,
         "latency": {
-          "mean_ms": 2.0,
+          "mean_ms": 2.25,
           "n": 73,
-          "p50_ms": 1.59,
-          "p95_ms": 4.52
+          "p50_ms": 1.72,
+          "p95_ms": 4.72
         },
         "overall": {
           "cross_event_coverage": 0.3,
@@ -554,10 +554,10 @@
         },
         "k": 20,
         "latency": {
-          "mean_ms": 1.92,
+          "mean_ms": 2.34,
           "n": 73,
-          "p50_ms": 1.39,
-          "p95_ms": 4.24
+          "p50_ms": 1.59,
+          "p95_ms": 6.33
         },
         "overall": {
           "cross_event_coverage": 0.4,
@@ -745,10 +745,10 @@
         },
         "k": 30,
         "latency": {
-          "mean_ms": 1.9,
+          "mean_ms": 2.4,
           "n": 73,
-          "p50_ms": 1.34,
-          "p95_ms": 4.24
+          "p50_ms": 1.66,
+          "p95_ms": 5.06
         },
         "overall": {
           "cross_event_coverage": 0.7,
@@ -771,7 +771,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -810,7 +810,7 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R1a",
-  "finished_at": "2026-11-26T17:50:58.566+08:00",
+  "finished_at": "2026-11-26T18:37:20.094+08:00",
   "fixed_baseline": "Baseline-1 融合 0.65/0.35 + importance +0.05 max",
   "harness_version": "recall-lab-0.1",
   "notes": [
@@ -819,7 +819,7 @@
     "K=20: recall@K=0.6019, vector_fill=0.2377",
     "K=30: recall@K=0.6778, vector_fill=0.2616"
   ],
-  "started_at": "2026-11-26T17:50:57.032+08:00",
+  "started_at": "2026-11-26T18:37:18.380+08:00",
   "status": "completed",
   "tier": 0,
   "title": "混合候选池大小 K",

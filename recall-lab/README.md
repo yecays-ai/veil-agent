@@ -27,15 +27,17 @@ P6-S4（统一消融实验执行与候选机制决策）的隔离实验环境。
         --recall-diagnostics ../.local-tmp/s4/extra/recall-diagnostics.jsonl \
         --capabilities ../.local-tmp/s4/extra/capabilities.json \
         --env-file ../../../veil-agent/.env \
+        --embedding-rate-cny-per-million 0 \
         --cache-dir ../.local-tmp/s4/cache \
         --budget-ledger ../.local-tmp/s4/budget-ledger.jsonl \
         --detail-dir ../.local-tmp/s4/runs \
         --tier all
 
 - `--tier 0` 只跑零付费离线实验；`--tier 1` 检索/判官实测；`--tier 2` 回复体验/上下文成本。
-- `--skip-paid` 只跑 Tier 0；`--fake-embedder` 用本地假向量只验证 harness（结果不能当真实基线）。
-- `--experiments AB-R1a,AB-R3a` 可单跑指定实验；已有结果会被读取用于依赖链（断点续跑）。
-- env 文件只读，需要 `EMBED_API_KEY`（Tier 0/1 向量）与 `DEEPSEEK_API_KEY`（Tier 1/2 判官/生成）。
+- `--embedding-rate-cny-per-million` 是**必填**的显式单价声明（0.0 仅当 embedding 端点为免费/已含订阅价）；未声明价格一律拒绝，避免账本少记花费。每次 embedding 调用前按 token 上界 reserve、调用后 settle。
+- `--skip-paid` 只跑 Tier 0 且 embedding 为 **cache-only**：缓存未命中直接拒绝，不会发起任何 provider 请求；被跳过的实验在 coverage 中记为 `not_run`。`--fake-embedder` 只用本地假向量验证 harness（结果不能当真实基线）。
+- `--experiments AB-R1a,AB-R3a` 可单跑指定实验（ID 大小写无关）；已有结果会被读取用于依赖链（断点续跑）。
+- env 文件只读，需要 `EMBED_API_KEY`（Tier 0/1 向量）与 `DEEPSEEK_API_KEY`（Tier 1/2 判官/生成）；`--skip-paid` 不需要任何 key。
 
 ## 目录
 
@@ -79,7 +81,7 @@ provider 回报 usage）；失败调用按预留上界保守结算。硬上限�
 2. 按「快速开始」命令运行；每个实验写 `results/<实验>.json`，每样本明细只写 `--detail-dir`
    （gitignored）。
 3. `python scripts/p6_s1_baseline.py --out .local-baseline-1.json` 复跑 Baseline-1 门禁，确认 18/18。
-4. 单测：`python -m unittest discover -s recall-lab/tests -v`。
+4. 单测：`python -m unittest discover -s recall-lab/tests -v`（当前 33 项，含并发账本、cache-only、缺 usage 保守结算与门控口径回归）。
 
 ## 已知边界
 

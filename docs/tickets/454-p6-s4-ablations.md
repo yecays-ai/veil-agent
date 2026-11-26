@@ -1,7 +1,7 @@
 # 454 · P6-S4 统一消融实验执行与候选机制决策
 
-> 状态：**已达到可合并状态，独立 PR 待审查（不自行合并）**。实验执行、报告、决策表、覆盖核对已完成；
-> 未启动 S3/S5/S6/S7 施工，未修改正式运行环境与真实记忆。
+> 状态：**已达到可合并状态，独立 PR #455 待审查/CI（不自行合并）**。实验执行、报告、决策表、覆盖核对已完成；
+> PR 审查发现 harness 6 条实质问题已在本 PR 内修复并全量复跑（0 新增费用）；未启动 S3/S5/S6/S7 施工，未修改正式运行环境与真实记忆。
 
 ## 一、属于哪一格
 
@@ -29,8 +29,8 @@
 
 ### 代码与数据层（可在本机复跑）
 
-1. 跑合成单测：python -m unittest discover -s recall-lab/tests -v → 23 项全过（无网络、无真实数据）。
-2. 复跑 Baseline-1 门禁：python scripts/p6_s1_baseline.py --out .local-tmp/s4/baseline-1-gate.json → 18/18 通过。
+1. 跑合成单测：python -m unittest discover -s recall-lab/tests -v → 33 项全过（无网络、无真实数据）。
+2. 复跑 Baseline-1 门禁：python scripts/p6_s1_baseline.py --out .local-tmp/s4/baseline-1-gate.json → 20/20 通过。
 3. 复跑实验（命令见 recall-lab/README.md）→ recall-lab/results/coverage.json 里 24 个 ID 状态与参数可核对；
    各实验 JSON 含 fixed_baseline / variable / arms / verdict / budget。
 4. 预算核对：recall-lab 的 append-only 台账 + 本单报告第九节；Tier 1 ≤¥6、Tier 2 ≤¥10、总 ≤¥20 均未超。
@@ -57,13 +57,25 @@
 
 ## 五、交付物
 
-- recall-lab/：隔离 harness、检索/判官变体、预算台账、指标、23 项合成单测、JSON Schema、README
+- recall-lab/：隔离 harness、检索/判官变体、预算台账（含跨进程互斥）、指标、33 项合成单测、JSON Schema、README
 - recall-lab/results/：24 个实验聚合结果 + coverage.json + run-manifest.json + baseline-1-gate.json
 - docs/reports/p6-s4-ablations-20261126.md：完整脱敏实验报告
 - docs/reports/p6-s4-decision-table-20261126.md：Lan 白话决策表
 - 本工单 + STATUS.md / HANDOFF.md 状态更新
 
-## 六、隐私与边界
+## 六、PR 审查修复（CodeRabbit 6 条 Major，均已在本 PR 修复）
+
+1. `--experiments` 大小写转换导致 17 个带小写后缀的 ID 无法选择 → 改为大小写无关映射回规范 ID。
+2. `--skip-paid` 仍运行 Tier 1/2 并可能发起 embed 请求 → 真正过滤为 not_run + embedding cache-only（miss 拒绝，不发请求）。
+3. 共享账本 reserve 的 headroom 检查与 append 无跨进程互斥 → 账本文件级互斥锁（进程内重入、僵死锁清理），并发双实例测试只允许一个成功。
+4. 判官 provider 成功但缺 usage 时按 ¥0 结算 → 缺 usage 按预留上界保守结算；有效 usage 按实际结算。
+5. Embedding 先请求后按硬编码 ¥0 记账 → 每次调用前按显式声明单价与 token 上界 reserve、调用后 settle；未声明价格拒绝，费率不写死为 0。
+6. story 索引臂门控使用被 story 抬高后的融合分 → 新增 `Ranked.stored_vector`，统一门控只用存储向量余弦。
+
+- 验证：recall-lab 单测 33/33；修复后全量复跑 24 项实验，embedding/判官全缓存命中、**新增费用 ¥0**，总支出保持 ¥1.624804；除 AB-R4a/AB-COMB 门控口径纠正外全部核心指标不变。
+- PR：https://github.com/yecays-ai/veil-agent/pull/455
+
+## 七、隐私与边界
 
 - 未修改正式运行目录任何文件；未启停正式进程；未向正式 Peter 发消息；未写 data/peter。
 - 未提交真实聊天/记忆/人设/API key/本机路径/日志；报告只含聚合结果、哈希、计数与匿名化描述。

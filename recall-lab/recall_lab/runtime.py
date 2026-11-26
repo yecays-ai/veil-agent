@@ -62,19 +62,16 @@ class Context:
         return self.story_vectors
 
     def charge_embeddings(self, experiment, note=''):
-        """Record the one-off embedding preparation in the Tier 1 ledger even when the
-        configured price is zero: rate, calls and tokens must still be auditable."""
+        """Return the embedding audit summary; the per-call booking already happened in
+        EmbeddingCache (reserve before dispatch, settle with reported usage). Keeping this method
+        avoids double-counting the same embedding spend in the ledger."""
         stats = self.embedder.stats() if hasattr(self.embedder, 'stats') else {
             'model': getattr(self.embedder, 'model', 'fake'), 'provider_calls': getattr(self.embedder, 'calls', 0),
             'usage_tokens': getattr(self.embedder, 'usage_tokens', 0), 'cost_cny': 0.0,
-            'input_cny_per_million': 0.0, 'cache_hits': getattr(self.embedder, 'used_cache', 0)}
-        ticket = self.budget.reserve(1, experiment, provider='embedding', model=stats.get('model', ''),
-                                     kind='embedding', reserve_cny=0.0,
-                                     detail={'rate_cny_per_million': stats.get('input_cny_per_million', 0),
-                                             'note': note})
-        self.budget.settle(ticket, stats.get('cost_cny', 0.0),
-                           usage={'tokens': stats.get('usage_tokens', 0)},
-                           accounting='embedding-configured-price', note=note)
+            'input_cny_per_million': 0.0, 'cache_hits': getattr(self.embedder, 'used_cache', 0),
+            'blocked_calls': 0}
+        stats = dict(stats)
+        stats['note'] = note
         self._embedding_charged = True
         return stats
 
@@ -110,7 +107,10 @@ class Context:
             items, diag = self.retriever.rank(sample.query, self.query_vector(sample), config,
                                               query_time=sample.context.get('time', ''))
             rankings[sample.sample_id] = [item.id for item in items]
-            gated[sample.sample_id] = [item.id for item in items if item.vector >= 0.45][:3]
+            # The gate is defined on the stored-memory cosine, not on the fused score or the
+            # story-index override; otherwise story-index arms would use a different gate and their
+            # FPR/correct-empty counts would not be comparable with the other arms.
+            gated[sample.sample_id] = [item.id for item in items if item.stored_vector >= 0.45][:3]
             latencies.append(diag.get('elapsed_ms', 0.0))
         metrics = core.evaluate_rankings(samples, rankings, config.k)
         metrics['gated'] = core.evaluate_rankings(samples, gated, 3)

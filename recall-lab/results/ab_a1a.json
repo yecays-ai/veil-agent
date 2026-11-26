@@ -45,7 +45,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -74,11 +74,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-A1a",
-  "finished_at": "2026-11-26T17:51:02.734+08:00",
+  "finished_at": "2026-11-26T18:37:25.966+08:00",
   "fixed_baseline": "普通聊天主链路；自然联想打分规则不变",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:02.064+08:00",
+  "started_at": "2026-11-26T18:37:24.993+08:00",
   "status": "completed",
   "tier": 0,
   "title": "全库分层轮换自然联想池",

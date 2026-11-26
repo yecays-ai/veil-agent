@@ -10,6 +10,7 @@ tests feed it in-memory fakes.
 from __future__ import annotations
 
 import array
+import contextlib
 import hashlib
 import json
 import math
@@ -37,15 +38,39 @@ CATEGORY_LABELS = {
 VISIBLE_BUCKETS = ('dynamic', 'permanent')
 HIDDEN_TYPES = ('archived', 'letter', 'plan', 'i', 'feel')
 
-# Configured provider prices (character.toml, checked 2026-10-19). recount them in the report.
+# Provider prices. The judge rates come from character.toml; the embedding rate is NOT hard-coded
+# here: the operator must declare it per run (--embedding-rate-cny-per-million, 0.0 only when the
+# endpoint is declared free), because a wrong embedding price would make the spend ledger lie.
 PRICES = {
-    'embedding': {'model': 'BAAI/bge-m3', 'input_cny_per_million': 0.0, 'price_source': 'character.toml [memory] input_cny_per_million = 0'},
+    'embedding': {'model': 'BAAI/bge-m3', 'input_cny_per_million': None,
+                  'price_source': 'not configured yet (set via --embedding-rate-cny-per-million)'},
     'judge': {'model': 'deepseek-flash', 'input_cny_per_million': 2.0,
               'cached_input_cny_per_million': 0.04, 'output_cny_per_million': 8.0,
               'price_source': 'character.toml [providers.deepseek] peak rates'},
 }
 TIER_CAPS_CNY = {0: 0.0, 1: 6.0, 2: 10.0}
 TOTAL_CAP_CNY = 20.0
+
+
+def configure_embedding_price(rate_cny_per_million, *, source='operator declared'):
+    """Declare the embedding price for this run; refuse unknown, negative or non-finite rates."""
+    if rate_cny_per_million is None:
+        raise ValueError('the embedding price per million tokens must be declared (0.0 only when '
+                         'the endpoint is free/covered); unknown rates are refused')
+    rate = float(rate_cny_per_million)
+    if not math.isfinite(rate) or rate < 0:
+        raise ValueError('the embedding price must be a finite non-negative number')
+    PRICES['embedding']['input_cny_per_million'] = rate
+    PRICES['embedding']['price_source'] = source
+    return dict(PRICES['embedding'])
+
+
+def embedding_price():
+    rate = PRICES['embedding'].get('input_cny_per_million')
+    if rate is None:
+        raise ValueError('embedding price is not configured; call configure_embedding_price() '
+                         'before any embedding request')
+    return float(rate)
 
 
 def utc_now():
@@ -108,8 +133,57 @@ class BudgetLedger:
         self._seq = 0
         self._tickets = {}
         self._mutex = threading.RLock()
+        self._file_lock_depth = 0
+        self._lock_path = self.path.with_name(self.path.name + '.lock')
         for row in self._read():
             self._seq = max(self._seq, int(row.get('seq') or 0))
+
+    @contextlib.contextmanager
+    def _file_lock(self):
+        """Cross-process lock over one ledger file (shared across runs and instances).
+
+        The in-process RLock only serialises threads. Two runs sharing one ledger file could both
+        read the same headroom and each approve a reserve that together cross the cap, so the
+        read-headroom-and-append section is also serialised through an exclusive lock file. Nested
+        acquisitions reuse the outer lock (reserve() appends its own row inside the same section).
+        """
+        if self._file_lock_depth:
+            self._file_lock_depth += 1
+            try:
+                yield
+            finally:
+                self._file_lock_depth -= 1
+            return
+        deadline = time.monotonic() + 20.0
+        handle = None
+        while handle is None:
+            try:
+                handle = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    age = time.time() - self._lock_path.stat().st_mtime
+                    if age > 60:   # a crashed run left the lock file behind
+                        self._lock_path.unlink()
+                        continue
+                except OSError:
+                    pass
+                if time.monotonic() > deadline:
+                    raise RuntimeError('budget ledger lock timeout: %s' % self._lock_path)
+                time.sleep(0.02)
+        self._file_lock_depth = 1
+        try:
+            os.write(handle, ('%d %s' % (os.getpid(), self.run_id)).encode('utf-8'))
+            yield
+        finally:
+            self._file_lock_depth = 0
+            try:
+                os.close(handle)
+            except OSError:
+                pass
+            try:
+                self._lock_path.unlink()
+            except OSError:
+                pass
 
     def _read(self):
         if not self.path.is_file():
@@ -131,11 +205,16 @@ class BudgetLedger:
             return self._append_locked(row)
 
     def _append_locked(self, row):
-        self._seq += 1
-        row['seq'] = self._seq
-        row['at'] = utc_now()
-        with self.path.open('a', encoding='utf-8') as handle:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n')
+        with self._file_lock():
+            # Re-read the highest seq under the cross-process lock so two runs cannot emit the
+            # same seq for different rows.
+            for existing in self._read():
+                self._seq = max(self._seq, int(existing.get('seq') or 0))
+            self._seq += 1
+            row['seq'] = self._seq
+            row['at'] = utc_now()
+            with self.path.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n')
         return row
 
     def totals(self):
@@ -177,9 +256,14 @@ class BudgetLedger:
                                         kind=kind, reserve_cny=reserve_cny, detail=detail)
 
     def _reserve_locked(self, tier, experiment, *, provider, model, kind, reserve_cny, detail):
-        headroom = self.headroom(tier)
         if tier not in self.tier_caps:
             raise BudgetBlocked('tier %r has no cap' % (tier,))
+        with self._file_lock():
+            return self._reserve_under_lock(tier, experiment, provider=provider, model=model,
+                                            kind=kind, reserve_cny=reserve_cny, detail=detail)
+
+    def _reserve_under_lock(self, tier, experiment, *, provider, model, kind, reserve_cny, detail):
+        # headroom and append are inside the same cross-process lock: same-file instances serialise.
         headroom = self.headroom(tier)
         if reserve_cny > headroom['tier_room'] + 1e-9:
             self._append({'type': 'blocked', 'tier': tier, 'experiment': experiment, 'kind': kind,
@@ -578,7 +662,8 @@ class EmbeddingCache:
     read-only env file; the cache never stores the key. A cache hit does not call the provider.
     """
 
-    def __init__(self, cache_path, *, model, base_url, api_key, timeout=30):
+    def __init__(self, cache_path, *, model, base_url, api_key, timeout=30,
+                 budget=None, tier=1, experiment='PREP-embedding', allow_provider=True):
         self.path = Path(cache_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.model = model
@@ -590,6 +675,12 @@ class EmbeddingCache:
         self.calls = 0
         self.usage_tokens = 0
         self.used_cache = 0
+        self.budget = budget
+        self.tier = tier
+        self.experiment = experiment
+        self.allow_provider = bool(allow_provider)
+        self.cost_cny = 0.0
+        self.blocked_calls = 0
         if self.path.is_file():
             with self.path.open('r', encoding='utf-8') as handle:
                 for line in handle:
@@ -612,17 +703,48 @@ class EmbeddingCache:
         if cached is not None:
             self.used_cache += 1
             return list(cached)
+        if not self.allow_provider:
+            self.blocked_calls += 1
+            raise EmbeddingError('paid embedding call blocked (cache-only mode): cache miss for %s'
+                                 % key[:12])
         if not self._api_key:
             raise EmbeddingError('no embedding key supplied')
+        rate = embedding_price()
+        # Reserve a conservative upper bound BEFORE dispatch: an embedding endpoint with a non-zero
+        # declared rate must never be called without cap enforcement, and the ledger must reflect it.
+        tokens_upper = max(512, len(str(text).encode('utf-8')))
+        reserve_cny = round(tokens_upper * rate / 1_000_000, 8)
+        ticket = None
+        if self.budget is not None:
+            ticket = self.budget.reserve(self.tier, self.experiment, provider='embedding',
+                                         model=self.model, kind='embedding',
+                                         reserve_cny=reserve_cny,
+                                         detail={'estimated_input_tokens': tokens_upper,
+                                                 'input_cny_per_million': rate})
         if self._client is None:
             from openai import OpenAI
             self._client = OpenAI(api_key=self._api_key, base_url=self.base_url,
                                   timeout=self.timeout, max_retries=0)
-        response = self._client.embeddings.create(model=self.model, input=str(text)[:4000])
+        try:
+            response = self._client.embeddings.create(model=self.model, input=str(text)[:4000])
+        except Exception:
+            if ticket is not None:
+                self.budget.settle(ticket, reserve_cny, accounting='embedding-failed-conservative',
+                                   note='provider request failed')
+                self.cost_cny += reserve_cny
+            raise
         usage = getattr(response, 'usage', None)
         prompt_tokens = getattr(usage, 'prompt_tokens', None)
-        if type(prompt_tokens) is int and prompt_tokens > 0:
-            self.usage_tokens += prompt_tokens
+        used_tokens = prompt_tokens if type(prompt_tokens) is int and prompt_tokens > 0 else None
+        amount = (used_tokens * rate / 1_000_000) if used_tokens is not None else reserve_cny
+        if ticket is not None:
+            self.budget.settle(ticket, amount,
+                               usage={'prompt_tokens': used_tokens or 0},
+                               accounting='embedding-usage' if used_tokens is not None
+                               else 'embedding-usage-missing-conservative')
+        self.cost_cny += amount
+        if used_tokens is not None:
+            self.usage_tokens += used_tokens
         vector = list(response.data[0].embedding)
         if not vector:
             raise EmbeddingError('empty embedding')
@@ -642,11 +764,10 @@ class EmbeddingCache:
                 pass
 
     def stats(self):
-        price = PRICES['embedding']
-        cost = self.usage_tokens * price['input_cny_per_million'] / 1_000_000
+        price = embedding_price()
         return {'model': self.model, 'provider_calls': self.calls, 'cache_hits': self.used_cache,
-                'usage_tokens': self.usage_tokens, 'cost_cny': round(cost, 8),
-                'input_cny_per_million': price['input_cny_per_million']}
+                'usage_tokens': self.usage_tokens, 'cost_cny': round(self.cost_cny, 8),
+                'input_cny_per_million': price, 'blocked_calls': self.blocked_calls}
 
 
 class FakeEmbedder:

@@ -86,6 +86,7 @@ class JudgeCall:
     error: str = ''
     error_kind: str = ''      # timeout | request_error | bad_json | format
     output: str = ''
+    usage_missing: bool = False   # provider answered without a usage block: never settle at 0
 
 
 class JudgeClient:
@@ -121,7 +122,8 @@ class JudgeClient:
                              error_kind=kind)
         elapsed = (time.perf_counter() - started) * 1000.0
         self.calls += 1
-        usage = response.usage
+        usage = getattr(response, 'usage', None)
+        usage_missing = usage is None
         prompt_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
         completion_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
         cached = 0
@@ -133,7 +135,8 @@ class JudgeClient:
         content = response.choices[0].message.content or ''
         return JudgeCall(text=content, prompt_tokens=prompt_tokens,
                          completion_tokens=completion_tokens, cached_tokens=cached,
-                         latency_ms=round(elapsed, 2), output=content)
+                         latency_ms=round(elapsed, 2), output=content,
+                         usage_missing=usage_missing)
 
     def close(self):
         if self._client is not None:

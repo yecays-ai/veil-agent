@@ -101,7 +101,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -128,11 +128,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R3b",
-  "finished_at": "2026-11-26T17:51:03.671+08:00",
+  "finished_at": "2026-11-26T18:37:27.346+08:00",
   "fixed_baseline": "最佳检索候选池（fused top-8 + vector top-8）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:03.474+08:00",
+  "started_at": "2026-11-26T18:37:27.060+08:00",
   "status": "completed",
   "tier": 1,
   "title": "判官角色：LLM 判官 vs 无判官 vs 阈值门控",

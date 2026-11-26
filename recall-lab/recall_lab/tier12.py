@@ -62,6 +62,12 @@ def ledgered_judge_call(ctx, client, *, tier, experiment, messages, timeout, cac
                                                   'completion_tokens': call.completion_tokens},
                           accounting='failed-conservative', note=call.error_kind)
         amount = reserve
+    elif call.usage_missing:
+        # The provider accepted and answered but omitted usage; the request was still billed.
+        # Settle the reserved upper bound instead of pretending it was free (README rule).
+        ctx.budget.settle(ticket, reserve, usage={},
+                          accounting='usage-missing-conservative', note='no usage block')
+        amount = reserve
     else:
         ctx.budget.settle(ticket, amount, usage={'prompt_tokens': call.prompt_tokens,
                                                  'completion_tokens': call.completion_tokens,

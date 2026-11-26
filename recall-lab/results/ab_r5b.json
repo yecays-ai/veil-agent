@@ -176,10 +176,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.7,
+          "mean_ms": 2.77,
           "n": 73,
-          "p50_ms": 1.41,
-          "p95_ms": 3.7
+          "p50_ms": 1.82,
+          "p95_ms": 6.58
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -371,10 +371,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 5.68,
+          "mean_ms": 8.47,
           "n": 73,
-          "p50_ms": 5.3,
-          "p95_ms": 7.75
+          "p50_ms": 7.88,
+          "p95_ms": 12.41
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -397,7 +397,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -431,11 +431,11 @@
     "旋转/冷却只有最后快照，逐轮冷却状态不可回放"
   ],
   "experiment_id": "AB-R5b",
-  "finished_at": "2026-11-26T17:51:01.800+08:00",
+  "finished_at": "2026-11-26T18:37:24.557+08:00",
   "fixed_baseline": "K=8, importance=0.05",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:01.244+08:00",
+  "started_at": "2026-11-26T18:37:23.713+08:00",
   "status": "completed",
   "tier": 0,
   "title": "last_active 活跃度微调",

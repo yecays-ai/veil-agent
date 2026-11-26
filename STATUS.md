@@ -14,12 +14,13 @@
 - **合并后独立审查**：2 个阻断项（换模型 pending 重复付费/不可恢复、诊断未透出 API）已在 #453 修复；桌面 UI 展示按 P6-4 职责边界归 P6-S7。
 - **验收步骤**：见 `docs/tickets/452-p6-s1-retrieval-determinism.md` 与 `docs/tickets/455-p6-s1-postmerge-hardening.md`。
 
-## P6-S4 · 统一消融实验执行与候选机制决策（达到可合并状态，PR 待审查）
+## P6-S4 · 统一消融实验执行与候选机制决策（PR #455 待审查/CI，达到可合并状态后停止）
 
 - **分支/设施**：`ticket/454-p6-s4-ablations`，隔离 `recall-lab` harness（只读快照回放、检索/判官单变量变体、预算硬控台账、合成单测、JSON schema）+ eval-v2（73 条，labeler=ai-assisted、human_confirmed=false，未经 Lan 人工确认）。
 - **覆盖与状态**：P6-4 第五章实际 24 个实验 ID 逐行有状态——**17 completed / 5 partial / 2 blocked**（R2 无 rerank 服务与价格上界；E1 缺巩固收益金标准）。partial/blocked 均写明覆盖与证据缺口，不虚报完成。
 - **预算**：Tier 0 ¥0；Tier 1 ≈¥1.54 / ≤¥6；Tier 2 ≈¥0.08 / ≤¥10；**总计 ≈¥1.62 / ≤¥20**；append-only 台账如实计入失败与重试，无超限调用。
 - **结论（详见决策表）**：建议实施 AB-R1b 中文停用词过滤与 AB-A3 learned-context 四区独立预算；判官链维持 LLM 判官 + 4s + 300 字卡片 + 保守 prompt；关系认知晋升扩权维持 chat-only（先补证据链）；S6 暂缓；S7 的 C1/C2/C3 只有结构侧证据，需真机复测。
+- **审查修复**：PR #455 的 CodeRabbit 6 条 Major（CLI ID 选择、--skip-paid 真正跳过 + cache-only、账本跨进程互斥、judge 缺 usage 保守结算、embedding 先预扣并显式声明费率、story 门控只用存储余弦）已全部修复；recall-lab 单测 33/33，修复后全量复跑 24 项（全缓存命中、新增费用 ¥0、总支出不变）。CI 通过后停止。
 - **报告**：`docs/reports/p6-s4-ablations-20261126.md`、`docs/reports/p6-s4-decision-table-20261126.md`、`docs/tickets/454-p6-s4-ablations.md`。**S4 达到可合并状态后停止，不自行合并、不启动 S3/S5/S6/S7。**
 
 ## P6 路线

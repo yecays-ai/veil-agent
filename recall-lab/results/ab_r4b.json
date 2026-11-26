@@ -178,10 +178,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.8,
+          "mean_ms": 1.71,
           "n": 73,
-          "p50_ms": 1.16,
-          "p95_ms": 4.85
+          "p50_ms": 1.21,
+          "p95_ms": 3.7
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -375,10 +375,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.83,
+          "mean_ms": 1.71,
           "n": 73,
-          "p50_ms": 1.42,
-          "p95_ms": 4.35
+          "p50_ms": 1.16,
+          "p95_ms": 3.65
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -401,7 +401,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -439,11 +439,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-R4b",
-  "finished_at": "2026-11-26T17:51:00.077+08:00",
+  "finished_at": "2026-11-26T18:37:21.979+08:00",
   "fixed_baseline": "K=8 最佳检索",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:50:59.775+08:00",
+  "started_at": "2026-11-26T18:37:21.695+08:00",
   "status": "completed",
   "tier": 0,
   "title": "related_to 图谱一跳扩展",

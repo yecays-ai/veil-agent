@@ -184,10 +184,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 1.57,
+          "mean_ms": 2.17,
           "n": 73,
-          "p50_ms": 1.09,
-          "p95_ms": 3.65
+          "p50_ms": 1.65,
+          "p95_ms": 5.58
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -244,7 +244,7 @@
       "1": 1.53994,
       "2": 0.084864
     },
-    "calls": 379,
+    "calls": 380,
     "total_cny": 1.624804
   },
   "comparison": [
@@ -282,11 +282,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-COMB",
-  "finished_at": "2026-11-26T17:51:06.642+08:00",
+  "finished_at": "2026-11-26T18:37:30.755+08:00",
   "fixed_baseline": "Baseline-1",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T17:51:06.073+08:00",
+  "started_at": "2026-11-26T18:37:29.895+08:00",
   "status": "completed",
   "tier": 2,
   "title": "最终组合验证",

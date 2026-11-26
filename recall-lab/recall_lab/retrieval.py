@@ -215,7 +215,11 @@ class RetrievalConfig:
 class Ranked:
     id: str
     score: float
+    # vector is the channel value used for fused ranking (story-index arms may raise it).
+    # stored_vector is always the memory's own stored-vector cosine; it is the common relevance
+    # gate so all arms stay comparable.
     vector: float = 0.0
+    stored_vector: float = 0.0
     keyword: float = 0.0
     story: float = 0.0
     bonus: float = 0.0
@@ -325,7 +329,8 @@ class Retriever:
         return self._story_ids, self._story_matrix
 
     # -- channels ---------------------------------------------------------------------
-    def vector_scores(self, query_vector, *, story_index=False):
+    def stored_vector_scores(self, query_vector):
+        """Memory-only stored-vector cosine per visible memory; the common relevance gate."""
         import numpy
         ids, matrix = self._vectors()
         scores = {}
@@ -336,9 +341,16 @@ class Retriever:
         raw = matrix @ (query / norm)
         for index, memory_id in enumerate(ids):
             scores[memory_id] = max(0.0, float(raw[index]))
+        return scores
+
+    def vector_scores(self, query_vector, *, story_index=False):
         if story_index and self.story_vectors:
+            import numpy
+            scores = self.stored_vector_scores(query_vector)
             story_ids, story_matrix = self._story_vectors_matrix()
-            if len(story_ids):
+            if story_ids and query_vector:
+                query = numpy.asarray(query_vector, dtype=numpy.float32)
+                norm = float(numpy.linalg.norm(query)) or 1.0
                 story_raw = story_matrix @ (query / norm)
                 for index, memory_id in enumerate(story_ids):
                     value = max(0.0, float(story_raw[index]))
@@ -346,7 +358,8 @@ class Retriever:
                         scores[memory_id] = value
                         self._last_story_hit = getattr(self, '_last_story_hit', {})
                         self._last_story_hit[memory_id] = value
-        return scores
+            return scores
+        return self.stored_vector_scores(query_vector)
 
     def keyword_scores(self, query, *, stopwords=False, alias_ids=None):
         index = self._lexical_index(stopwords)
@@ -365,9 +378,14 @@ class Retriever:
     def rank(self, query, query_vector, config, *, query_time=''):
         config = config if isinstance(config, RetrievalConfig) else RetrievalConfig(**config)
         started = time.perf_counter()
-        vector = self.vector_scores(query_vector, story_index=config.story_index)
-        story_hits = getattr(self, '_last_story_hit', {}) if config.story_index else {}
-        self._last_story_hit = {}
+        story_hits = {}
+        stored_vector = self.stored_vector_scores(query_vector)
+        vector = dict(stored_vector)
+        if config.story_index and self.story_vectors:
+            self._last_story_hit = {}
+            vector = self.vector_scores(query_vector, story_index=True)
+            story_hits = dict(getattr(self, '_last_story_hit', {}) or {})
+            self._last_story_hit = {}
         alias_ids = self.alias_ids(query) if config.alias_expand else ()
         keyword = self.keyword_scores(query, stopwords=config.stopwords,
                                       alias_ids=alias_ids if config.alias_expand else None)
@@ -416,6 +434,7 @@ class Retriever:
             score += bonus
             if score > 0:
                 ranked.append(Ranked(id=memory_id, score=score, vector=round(vec, 6),
+                                     stored_vector=round(stored_vector.get(memory_id, 0.0), 6),
                                      keyword=round(kw, 6), story=round(story_hits.get(memory_id, 0.0), 6),
                                      bonus=round(bonus, 6)))
         ranked.sort(key=lambda item: (-item.score, item.id))
