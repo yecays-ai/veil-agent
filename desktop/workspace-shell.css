@@ -134,6 +134,7 @@ body:not(.detached-window) .topbar {
   align-items: center;
   gap: 10px 14px;
   padding: 8px 18px;
+  -webkit-app-region: drag;
 }
 
 .curved-subnav-shell {
@@ -141,7 +142,7 @@ body:not(.detached-window) .topbar {
   display: flex;
   justify-content: center;
   min-width: 0;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 .curved-subnav-shell[hidden] { display: none !important; }
 
@@ -158,6 +159,7 @@ body:not(.detached-window) .topbar {
   backdrop-filter: blur(18px);
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-app-region: no-drag;
 }
 .subnav-island::-webkit-scrollbar { display: none; }
 
@@ -914,6 +916,23 @@ body:not(.detached-window) .page:not([data-page-view="chat"]):not([data-page-vie
 }
 .page button:active:not(:disabled) {
   transform: translateY(0.5px) scale(0.985);
+}
+
+/* Frameless Window Drag Usability */
+body:not(.detached-window) .topbar,
+body:not(.detached-window) .topbar .identity,
+body:not(.detached-window) .topbar .header-status,
+body:not(.detached-window) .sidebar-person,
+body:not(.detached-window) .workspace-brand {
+  -webkit-app-region: drag;
+}
+body:not(.detached-window) .topbar button,
+body:not(.detached-window) .topbar select,
+body:not(.detached-window) .topbar .veil-select,
+body:not(.detached-window) .topbar .theme-pills,
+body:not(.detached-window) .sidebar-person button,
+body:not(.detached-window) .sidebar-person input {
+  -webkit-app-region: no-drag;
 }
 
 /* Activity Page: Left MCP-style Switch Cards + Right Activity Feed Timeline */
