@@ -602,21 +602,26 @@
   function ensureJumpButtons() {
     if (jumpRoot) return;
     jumpRoot = el('div', 'workspace-jump');
+    jumpRoot.hidden = true;
     jumpUp = el('button', '', '↑');
     jumpUp.type = 'button';
+    jumpUp.hidden = true;
     jumpUp.setAttribute('aria-label', '回到顶部');
     jumpDown = el('button', '', '↓');
     jumpDown.type = 'button';
+    jumpDown.hidden = true;
     jumpDown.setAttribute('aria-label', '回到底部');
     jumpRoot.append(jumpUp, jumpDown);
     document.body.append(jumpRoot);
 
     const activeScroller = () => {
-      if (currentPage === 'chat') return document.getElementById('log');
-      if (CUSTOM_PAGES.has(currentPage)) return customSections.get(currentPage)?.section || null;
+      const page = document.body.dataset.currentPage || currentPage;
+      if (page === 'chat') return document.getElementById('log');
+      if (CUSTOM_PAGES.has(page)) return customSections.get(page)?.section || null;
       return [...document.querySelectorAll('.page:not(.workspace-view)')].find(p => !p.hidden) || null;
     };
     const updateJump = () => {
+      const page = document.body.dataset.currentPage || currentPage;
       const box = activeScroller();
       if (!box) {
         jumpRoot.hidden = true;
@@ -624,7 +629,7 @@
       }
       const overflow = box.scrollHeight - box.clientHeight > 120;
       const distBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
-      if (currentPage === 'chat') {
+      if (page === 'chat') {
         jumpRoot.hidden = distBottom <= 140;
         jumpRoot.classList.add('workspace-chat-jump');
         jumpUp.hidden = true;
