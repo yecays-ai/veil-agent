@@ -64,6 +64,29 @@ class JudgeFailed(Exception):
         self.reason, self.detail = reason, detail
 
 
+def split_card(raw):
+    """(front matter, body) of one memory file, reading LF, CRLF and a UTF-8 BOM the same way.
+
+    P6-S1 G-A04: 154/225 stored memories use CRLF, so a hard-coded '\n---\n' split made the judge
+    read no body at all for most of the library. Only the marker search is newline-agnostic; the
+    returned body keeps its original line endings."""
+    if isinstance(raw, bytes):
+        raw = raw.decode('utf-8', 'replace')
+    if not isinstance(raw, str):
+        return '', ''
+    text = raw[1:] if raw.startswith('\ufeff') else raw
+    first, newline, rest = text.partition('\n')
+    if not newline or first.strip() != '---':
+        return '', text
+    lines = rest.splitlines(keepends=True)
+    head = []
+    for index, line in enumerate(lines):
+        if line.strip() == '---':
+            return ''.join(head), ''.join(lines[index + 1:])
+        head.append(line)
+    return '', text
+
+
 def card_text(raw):
     """Title, keywords and both ends of one memory file: all the judge reads of it.
 
@@ -71,9 +94,9 @@ def card_text(raw):
     invisible to the judge because the card was only the opening. The card now also carries a short
     closing line, so the judge can recognise a memory whose relevant detail comes at its end without
     reading the whole body."""
-    if not isinstance(raw, str):
+    head, body = split_card(raw)
+    if not head and not body:
         return ''
-    head, _, body = raw.partition('\n---\n')
     title = re.search(r'^title:\s*(.*)$', head, re.M) or re.search(r'^name:\s*(.*)$', head, re.M)
     tags, inside = [], False
     for line in head.splitlines():
@@ -306,13 +329,31 @@ class RecallJudge:
     def _vector_candidates(self, query_vector, taken):
         from pathlib import Path
         from memory_agent import vault_path
+        self._vector_note = {'skipped_dim': 0, 'skipped_model': False}
         if getattr(self.memory, 'brain_authority', None) is not None:
             from brain_read import BrainRead
             with BrainRead(self.memory.brain_authority.db_path) as reader:
                 vectors = reader.all_vectors()
+                stored_model = reader.embedding_model()
+            current_model = str((getattr(self.memory, 'cfg', None) and
+                                  getattr(self.memory.cfg, 'memory', {}) or {}).get('model') or '')
+            # P6-S1 G-A14: never compare vectors produced by a different embedding model. If the
+            # writer recorded a model and the configured one changed, the vector channel is stale;
+            # the judge keeps its keyword-only candidate pool and the diagnostic says why.
+            if stored_model and current_model and stored_model != current_model:
+                self._vector_note = {'skipped_dim': 0, 'skipped_model': True,
+                                     'stored_model': stored_model, 'current_model': current_model}
+                return []
         else:
             vectors = all_vectors(vault_path(self.memory.store.root, self.memory.cfg.id) / 'embeddings.db')
-        ranked = sorted(((cosine(query_vector, vector), key) for key, vector in vectors.items()), reverse=True)
+        expected = len(query_vector or ())
+        usable = {}
+        for key, vector in vectors.items():
+            if expected and len(vector) == expected:
+                usable[key] = vector
+            else:
+                self._vector_note['skipped_dim'] += 1
+        ranked = sorted(((cosine(query_vector, vector), key) for key, vector in usable.items()), reverse=True)
         found, checked = [], 0
         for _, key in ranked:
             if len(found) >= self.settings['vector_candidates'] or checked >= 30:
@@ -356,15 +397,22 @@ class RecallJudge:
     def choose(self, query, pool, prefetched, *, wake=False, max_picks=None, candidate_limit=None):
         """(key, body) pairs the judge picked, best first; [] when it says none. Raises JudgeFailed on a technical failure."""
         started = self.clock()
-        deadline = started + self.settings['timeout_seconds'] + 0.5
+        # P6-S1 G-A12: the embedding request and the judge model request are separate calls with
+        # separate failure modes; one shared deadline let a slow embedding consume the model's whole
+        # budget and every failure came back as timeout:model. Each call keeps the configured timeout
+        # (the timeout parameter itself is unchanged and still waiting for the S4 experiment).
+        embed_deadline = started + self.settings['timeout_seconds'] + 0.5
+        timings = {'embedding_seconds': 0.0, 'model_seconds': 0.0}
         candidates, picked = [], []
-        self.last_choice = {'status': 'running', 'candidates': 0, 'picked': [], 'vector': []}
+        self.last_choice = {'status': 'running', 'candidates': 0, 'picked': [], 'vector': [], **timings}
         try:
             self._files = self._scan()
             pool = list(pool)[:self.settings['ombre_candidates'] if candidate_limit is None else candidate_limit]
             try:
-                query_vector = prefetched.result(timeout=max(0.05, deadline - self.clock()))
+                query_vector = prefetched.result(timeout=max(0.05, embed_deadline - self.clock()))
+                timings['embedding_seconds'] = round(self.clock() - started, 3)
             except FutureTimeout as exc:
+                timings['embedding_seconds'] = round(self.clock() - started, 3)
                 raise JudgeFailed('timeout', 'embedding') from exc
             except JudgeFailed:
                 raise
@@ -378,10 +426,11 @@ class RecallJudge:
                 raise JudgeFailed('vectors_unreadable', type(exc).__name__) from exc
             candidates = pool + extra
             vector_keys = [key for key, _ in extra]
-            self.last_choice.update({'candidates': len(candidates), 'vector': vector_keys})
+            self.last_choice.update({'candidates': len(candidates), 'vector': vector_keys,
+                                     'vector_note': dict(getattr(self, '_vector_note', {}) or {})})
             if not candidates:
-                self.last_choice.update({'status': 'empty'})
-                self._record('empty', started, candidates=0, picked=0)
+                self.last_choice.update({'status': 'empty', **timings})
+                self._record('empty', started, candidates=0, picked=0, **timings)
                 return []
             order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
             letters = {label: key for label, (key, _) in zip(labels_for(len(order)), order)}
@@ -394,9 +443,13 @@ class RecallJudge:
                         {'role': 'user', 'content': '%s: "%s"\n\nSaved memories:\n%s' % (
                             context_label, query[:QUERY_CHARS], '\n'.join(lines))}]
             future = self._pool.submit(self._ask, messages)
+            model_started = self.clock()
+            model_deadline = model_started + self.settings['timeout_seconds'] + 0.5
             try:
-                text = future.result(timeout=max(0.05, deadline - self.clock()))
+                text = future.result(timeout=max(0.05, model_deadline - self.clock()))
+                timings['model_seconds'] = round(self.clock() - model_started, 3)
             except FutureTimeout as exc:
+                timings['model_seconds'] = round(self.clock() - model_started, 3)
                 raise JudgeFailed('timeout', 'model') from exc
             except JudgeFailed:
                 raise
@@ -405,24 +458,29 @@ class RecallJudge:
             keys = parse_choice(text, letters, max_picks=max_picks)
             bodies = dict(candidates)
             picked = [(key, bodies[key]) for key in keys]
-            self.last_choice.update({'status': 'chosen' if picked else 'empty',
+            self.last_choice.update({'status': 'chosen' if picked else 'empty', **timings,
                                      'candidates': len(candidates), 'picked': list(keys), 'vector': vector_keys})
         except JudgeFailed as failure:
-            self._failed(failure.reason, started, len(candidates), failure.detail)
+            self._failed(failure.reason, started, len(candidates), failure.detail, **timings)
             raise
         with self._lock:
             self.failures = 0
-        self._record('ok' if picked else 'empty', started, candidates=len(candidates), picked=len(picked))
+        self._record('ok' if picked else 'empty', started, candidates=len(candidates),
+                     picked=len(picked), **timings)
         return picked
 
     # --- bookkeeping --------------------------------------------------------------------------------------
-    def _failed(self, reason, started, candidates, detail=''):
-        self.last_choice.update({'status': 'failed', 'candidates': candidates, 'picked': []})
+    def _failed(self, reason, started, candidates, detail='', **timings):
+        # P6-S1 G-A12: keep the failure stage and the two timings visible, so P4/P5 can tell
+        # "normal empty recall", "embedding failed", "judge model failed" and "degraded to pool" apart.
+        self.last_choice.update({'status': 'failed', 'reason': reason, 'detail': detail,
+                                 'candidates': candidates, 'picked': [], **timings})
         with self._lock:
             self.failures += 1
             if self.failures >= self.settings['breaker_failures']:
                 self.open_until = self.clock() + self.settings['breaker_seconds']
-        self._record('failed', started, reason=reason, detail=detail, candidates=candidates, picked=0)
+        self._record('failed', started, reason=reason, detail=detail, candidates=candidates,
+                     picked=0, **timings)
 
     def _record(self, kind, started, **detail):
         seconds = round(self.clock() - started, 3)

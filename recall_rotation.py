@@ -153,18 +153,6 @@ def is_followup(query, recent=None):
 
 
 
-def drift_hits(text):
-    """Memories in Ombre's "忽然想起来（非检索命中）" section, cleaned of separators."""
-    if not isinstance(text, str) or '=== 忽然想起来' not in text:
-        return []
-    section = text.split('=== 忽然想起来', 1)[1].split('=== ombre:result-ids ===')[0]
-    found = []
-    for key, body in blocks(section):
-        body = re.sub(r'(?:\s*\n---\s*)?(?:\s*\[联想浮现·非检索命中\]\s*)?$', '', body.rstrip())
-        found.append((key, body.rstrip()))
-    return found
-
-
 def front_matter(raw):
     """Scalars and relation links from one Ombre Markdown file. Unknown shapes are left out."""
     meta = {'links': []}
