@@ -176,10 +176,10 @@
         },
         "k": 8,
         "latency": {
-          "mean_ms": 4.89,
+          "mean_ms": 5.99,
           "n": 73,
-          "p50_ms": 1.43,
-          "p95_ms": 4.61
+          "p50_ms": 2.29,
+          "p95_ms": 6.53
         },
         "overall": {
           "cross_event_coverage": 0.1,
@@ -412,10 +412,10 @@
           },
           "k": 8,
           "latency": {
-            "mean_ms": 1.7,
+            "mean_ms": 1.94,
             "n": 73,
-            "p50_ms": 1.23,
-            "p95_ms": 3.82
+            "p50_ms": 1.37,
+            "p95_ms": 4.38
           },
           "overall": {
             "cross_event_coverage": 0.1,
@@ -561,6 +561,7 @@
         "mechanisms": [
           "AB-R1b(停用词)",
           "AB-R2(Qwen/Qwen3-Reranker-0.6B)",
+          "AB-A1b(闲暇唤醒联想)",
           "AB-A2(S2严格证据链晋升)",
           "AB-A3(四区独立预算)"
         ]
@@ -579,6 +580,7 @@
         "mechanisms": [
           "AB-R1b(停用词)",
           "AB-R2(Qwen/Qwen3-Reranker-0.6B)",
+          "AB-A1b(闲暇唤醒联想)",
           "AB-A2(S2严格证据链晋升)",
           "AB-A3(四区独立预算)",
           "AB-C1(HEAD前缀纯化)",
@@ -587,9 +589,9 @@
         ]
       },
       "metrics": {
-        "c1_cache_after_expand": 0.9243,
+        "c1_cache_after_expand": 0.9371,
         "c2a_hallucinated_memory": 0,
-        "mechanism_count": 7,
+        "mechanism_count": 8,
         "negative_interaction": false
       }
     }
@@ -598,10 +600,10 @@
     "by_tier": {
       "0": 0.0,
       "1": 1.784595,
-      "2": 0.423659
+      "2": 0.705629
     },
-    "calls": 699,
-    "total_cny": 2.208254
+    "calls": 821,
+    "total_cny": 2.490224
   },
   "comparison": [
     {
@@ -630,11 +632,11 @@
   },
   "evidence_gaps": [],
   "experiment_id": "AB-COMB",
-  "finished_at": "2026-11-26T19:28:26.727+08:00",
+  "finished_at": "2026-11-26T20:00:01.020+08:00",
   "fixed_baseline": "Baseline-1（K=8, minmax 0.65/0.35, importance 0.05, breath(8), 4000B共享）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T19:28:26.139+08:00",
+  "started_at": "2026-11-26T20:00:00.308+08:00",
   "status": "completed",
   "tier": 2,
   "title": "最终组合验证",
@@ -643,6 +645,7 @@
     "active_mechanisms": [
       "AB-R1b(停用词)",
       "AB-R2(Qwen/Qwen3-Reranker-0.6B)",
+      "AB-A1b(闲暇唤醒联想)",
       "AB-A2(S2严格证据链晋升)",
       "AB-A3(四区独立预算)",
       "AB-C1(HEAD前缀纯化)",
@@ -654,7 +657,7 @@
       "recall_at_k": 0.5444,
       "rerank_recall_at_8": 0.6093
     },
-    "reason": "端到端组合验证（共 7 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)、AB-C2b(短闲聊Top-2+1上限)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
+    "reason": "端到端组合验证（共 8 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A1b(闲暇唤醒联想)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)、AB-C2b(短闲聊Top-2+1上限)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
     "recommended": true,
     "winners_used": {
       "stopwords": true

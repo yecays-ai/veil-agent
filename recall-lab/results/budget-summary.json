@@ -2,9 +2,9 @@
   "by_tier_cny": {
     "0": 0.0,
     "1": 1.784595,
-    "2": 0.423659
+    "2": 0.705629
   },
-  "generated_at": "2026-11-26T11:28:46.786311+00:00",
+  "generated_at": "2026-11-26T12:00:17.160284+00:00",
   "notes": [
     "Every paid and failed provider call is counted, including earlier DS harness-fix reruns and Phase 2 real-model Tier 1/2 runs.",
     "Embedding (BAAI/bge-m3) and free-tier rerank (BAAI/bge-reranker-v2-m3) are recorded at 0 CNY/1M while token counts and calls are kept."
@@ -68,34 +68,34 @@
     },
     {
       "experiment_or_category": "AB-A1a",
-      "input_tokens": 10919,
-      "output_tokens": 886,
-      "settled_calls": 14,
-      "settled_cny": 0.019142,
+      "input_tokens": 40542,
+      "output_tokens": 1960,
+      "settled_calls": 28,
+      "settled_cny": 0.038309,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-A1a-vs-none",
-      "input_tokens": 7662,
-      "output_tokens": 1823,
-      "settled_calls": 8,
-      "settled_cny": 0.02464,
+      "input_tokens": 15471,
+      "output_tokens": 3673,
+      "settled_calls": 16,
+      "settled_cny": 0.047782,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-A1a-vs-prod",
-      "input_tokens": 3427,
-      "output_tokens": 876,
-      "settled_calls": 4,
-      "settled_cny": 0.009095,
+      "input_tokens": 7078,
+      "output_tokens": 1767,
+      "settled_calls": 8,
+      "settled_cny": 0.018759,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-A1b",
-      "input_tokens": 13325,
-      "output_tokens": 2892,
-      "settled_calls": 16,
-      "settled_cny": 0.041005,
+      "input_tokens": 40610,
+      "output_tokens": 6331,
+      "settled_calls": 32,
+      "settled_cny": 0.087964,
       "tier": 2
     },
     {
@@ -108,52 +108,52 @@
     },
     {
       "experiment_or_category": "AB-C1-real",
-      "input_tokens": 18991,
-      "output_tokens": 72,
-      "settled_calls": 6,
-      "settled_cny": 0.017986,
+      "input_tokens": 41000,
+      "output_tokens": 95,
+      "settled_calls": 12,
+      "settled_cny": 0.03434,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-C2a",
-      "input_tokens": 7201,
-      "output_tokens": 1232,
-      "settled_calls": 15,
-      "settled_cny": 0.01899,
+      "input_tokens": 27896,
+      "output_tokens": 2627,
+      "settled_calls": 30,
+      "settled_cny": 0.039176,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-C2b",
-      "input_tokens": 23755,
-      "output_tokens": 2407,
-      "settled_calls": 18,
-      "settled_cny": 0.051462,
+      "input_tokens": 63880,
+      "output_tokens": 5063,
+      "settled_calls": 36,
+      "settled_cny": 0.101781,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-C3",
-      "input_tokens": 18049,
-      "output_tokens": 2730,
-      "settled_calls": 22,
-      "settled_cny": 0.046899,
+      "input_tokens": 59962,
+      "output_tokens": 5886,
+      "settled_calls": 45,
+      "settled_cny": 0.094508,
       "tier": 2
     },
     {
       "experiment_or_category": "AB-E1",
-      "input_tokens": 44003,
-      "output_tokens": 7306,
-      "settled_calls": 34,
-      "settled_cny": 0.109577,
+      "input_tokens": 84718,
+      "output_tokens": 10474,
+      "settled_calls": 52,
+      "settled_cny": 0.158146,
       "tier": 2
     }
   ],
   "run_id_scope": "local append-only ledger (raw JSONL stays under .local-tmp, not committed; no keys/paths inside)",
-  "settled_rows": 699,
+  "settled_rows": 821,
   "tier_caps_cny": {
     "0": 0.0,
     "1": 6.0,
     "2": 10.0
   },
   "total_cap_cny": 20.0,
-  "total_cny": 2.208254
+  "total_cny": 2.490224
 }

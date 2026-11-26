@@ -4,72 +4,72 @@
       "arm": "stable_head_1",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.0,
-        "cached_tokens": 0,
-        "cost_cny": 0.006562,
+        "cached_ratio": 0.3151,
+        "cached_tokens": 1152,
+        "cost_cny": 0.00507008,
         "error": "",
-        "latency_ms": 3425.89,
-        "prompt_tokens": 3153
+        "latency_ms": 3083.57,
+        "prompt_tokens": 3656
       }
     },
     {
       "arm": "stable_head_2",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.9337,
-        "cached_tokens": 2944,
-        "cost_cny": 0.00055176,
+        "cached_ratio": 0.9453,
+        "cached_tokens": 3456,
+        "cost_cny": 0.00055424,
         "error": "",
-        "latency_ms": 1449.83,
-        "prompt_tokens": 3153
+        "latency_ms": 1020.35,
+        "prompt_tokens": 3656
       }
     },
     {
       "arm": "changed_in_head",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.2823,
-        "cached_tokens": 896,
-        "cost_cny": 0.00460784,
+        "cached_ratio": 0.3829,
+        "cached_tokens": 1408,
+        "cost_cny": 0.00461032,
         "error": "",
-        "latency_ms": 1734.75,
-        "prompt_tokens": 3174
+        "latency_ms": 1341.86,
+        "prompt_tokens": 3677
       }
     },
     {
       "arm": "moved_head_1",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.2428,
-        "cached_tokens": 768,
-        "cost_cny": 0.00483672,
+        "cached_ratio": 0.3492,
+        "cached_tokens": 1280,
+        "cost_cny": 0.0049192,
         "error": "",
-        "latency_ms": 1186.78,
-        "prompt_tokens": 3163
+        "latency_ms": 1907.72,
+        "prompt_tokens": 3666
       }
     },
     {
       "arm": "moved_head_2",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.9308,
-        "cached_tokens": 2944,
-        "cost_cny": 0.00057176,
+        "cached_ratio": 0.9427,
+        "cached_tokens": 3456,
+        "cost_cny": 0.00057424,
         "error": "",
-        "latency_ms": 1760.24,
-        "prompt_tokens": 3163
+        "latency_ms": 1204.22,
+        "prompt_tokens": 3666
       }
     },
     {
       "arm": "moved_head_after_expand",
       "config": {},
       "metrics": {
-        "cached_ratio": 0.9243,
-        "cached_tokens": 2944,
-        "cost_cny": 0.00085576,
+        "cached_ratio": 0.9371,
+        "cached_tokens": 3456,
+        "cost_cny": 0.00062624,
         "error": "",
-        "latency_ms": 1330.56,
-        "prompt_tokens": 3185
+        "latency_ms": 1449.98,
+        "prompt_tokens": 3688
       }
     }
   ],
@@ -77,23 +77,23 @@
     "by_tier": {
       "0": 0.0,
       "1": 1.784595,
-      "2": 0.10285
+      "2": 0.440014
     },
-    "calls": 568,
-    "total_cny": 1.887445
+    "calls": 705,
+    "total_cny": 2.224609
   },
   "comparison": [
     {
       "metric": "cache_hit_ratio_stable_head",
-      "value": 0.9337
+      "value": 0.9453
     },
     {
       "metric": "cache_hit_ratio_changed_in_head",
-      "value": 0.2823
+      "value": 0.3829
     },
     {
       "metric": "cache_hit_ratio_moved_head_after_expand",
-      "value": 0.9243
+      "value": 0.9371
     }
   ],
   "evidence": {
@@ -111,17 +111,17 @@
     "隔离环境使用中性占位人设而非真实私人人设正文；S7 上线后建议在生产 context-log 抽检一次缓存命中率"
   ],
   "experiment_id": "AB-C1",
-  "finished_at": "2026-11-26T19:21:58.966+08:00",
+  "finished_at": "2026-11-26T19:55:20.877+08:00",
   "fixed_baseline": "复用生产 veil_agent.self_facts + learned_context + 真实多轮历史前缀组装（deepseek-flash 实测）",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T19:21:42.815+08:00",
+  "started_at": "2026-11-26T19:55:05.495+08:00",
   "status": "completed",
   "tier": 2,
   "title": "HEAD 静态前缀纯化（capabilities.description 移出 system.facts）",
   "variable": "capabilities.description 在 HEAD vs 移到 runtime_required",
   "verdict": {
-    "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 93.4%；capabilities 在 HEAD 内展开变更后骤降至 28.2%；移出 HEAD 到 runtime 后展开变更仍保持 92.4%（净保住 +64.2pp 前缀缓存）",
+    "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 94.5%；capabilities 在 HEAD 内展开变更后骤降至 38.3%；移出 HEAD 到 runtime 后展开变更仍保持 93.7%（净保住 +55.4pp 前缀缓存）",
     "recommended": true
   }
 }

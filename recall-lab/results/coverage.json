@@ -139,7 +139,7 @@
     },
     {
       "experiment_id": "AB-C1",
-      "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 93.4%；capabilities 在 HEAD 内展开变更后骤降至 28.2%；移出 HEAD 到 runtime 后展开变更仍保持 92.4%（净保住 +64.2pp 前缀缓存）",
+      "reason": "完整生产结构前缀实测（self_facts + learned_context + 12轮历史）：HEAD 稳定时缓存命中 94.5%；capabilities 在 HEAD 内展开变更后骤降至 38.3%；移出 HEAD 到 runtime 后展开变更仍保持 93.7%（净保住 +55.4pp 前缀缓存）",
       "recommended": true,
       "status": "completed",
       "tier": 2,
@@ -147,7 +147,7 @@
     },
     {
       "experiment_id": "AB-C2a",
-      "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 2, \"omit_empty_hint\": 3, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
+      "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 0, \"omit_empty_hint\": 5, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
       "recommended": true,
       "status": "completed",
       "tier": 2,
@@ -155,7 +155,7 @@
     },
     {
       "experiment_id": "AB-C2b",
-      "reason": "短闲聊 6 条真实生成盲评：Top-2+1 实省 4542 tokens（真实诊断 10/220 超 3 条），自然度 +0.50 / 情绪贴合 +0.00，胜负 {\"uncapped_6\": 3, \"cap_top2+1\": 2, \"tie\": 1}",
+      "reason": "短闲聊 6 条真实生成盲评：Top-2+1 实省 4542 tokens（真实诊断 10/220 超 3 条），自然度 +0.83 / 情绪贴合 +0.00，胜负 {\"uncapped_6\": 2, \"cap_top2+1\": 4, \"tie\": 0}",
       "recommended": true,
       "status": "completed",
       "tier": 2,
@@ -163,7 +163,7 @@
     },
     {
       "experiment_id": "AB-C3",
-      "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 4/6 次（67%），净 token 变化 -4447（省为正），事实准确度 +0.17，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
+      "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 5/6 次（83%），净 token 变化 -12031（省为正），事实准确度 +0.17，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
       "recommended": false,
       "status": "completed",
       "tier": 2,
@@ -171,15 +171,15 @@
     },
     {
       "experiment_id": "AB-A1b",
-      "reason": "独立 wake 门控实测：4/4 条闲暇唤醒触发长尾联想，8/8 条任务唤醒零干扰（0 误触）；真实自主输出盲评自然度 +0.00、工作干扰 1、胜负 {\"association_off\": 1, \"wake_association_on\": 3, \"tie\": 2}；同步产出 AB-A1a 聊天盲评",
-      "recommended": false,
+      "reason": "独立 wake 门控实测：4/4 条闲暇唤醒触发长尾联想，8/8 条任务唤醒零干扰（0 误触）；真实自主输出盲评自然度 +0.34、工作干扰 0、胜负 {\"association_off\": 1, \"wake_association_on\": 3, \"tie\": 2}；同步产出 AB-A1a 聊天盲评",
+      "recommended": true,
       "status": "completed",
       "tier": 2,
       "title": "autonomy 闲暇唤醒低打扰联想分支"
     },
     {
       "experiment_id": "AB-E1",
-      "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 2, \"evidence_constrained_consolidation\": 4, \"tie\": 0}、经验行为影响 +0.16。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
+      "reason": "前瞻时间切片回放（T1<=11-05 -> T2<=11-15 -> T3 真实回复）：提炼有效认知 8 条、跨阶段修订 1 条、拦截无证据 0 条、自猜误晋升 0（红线=0）；下游 6 条 T3 回复盲评胜负 {\"no_consolidation\": 3, \"evidence_constrained_consolidation\": 3, \"tie\": 0}、经验行为影响 -0.17。短期回放已证明受控巩固可行且安全，但长期多日净收益仍需 S6 灰度开关 + Lan 真机验收确认",
       "recommended": false,
       "status": "completed",
       "tier": 2,
@@ -187,7 +187,7 @@
     },
     {
       "experiment_id": "AB-COMB",
-      "reason": "端到端组合验证（共 7 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)、AB-C2b(短闲聊Top-2+1上限)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
+      "reason": "端到端组合验证（共 8 项通过准入：AB-R1b(停用词)、AB-R2(Qwen/Qwen3-Reranker-0.6B)、AB-A1b(闲暇唤醒联想)、AB-A2(S2严格证据链晋升)、AB-A3(四区独立预算)、AB-C1(HEAD前缀纯化)、AB-C2a(省略非首轮空提示)、AB-C2b(短闲聊Top-2+1上限)）：离线检索 Recall@8 +3.88pp（单变量加总 +3.88pp，负交互=no）；安全红线（A2 自证率=0、A1b 任务零干扰、C2a 幻觉=0）全部守住；判官臂新增费用 ¥0.0000",
       "recommended": true,
       "status": "completed",
       "tier": 2,

@@ -7,9 +7,9 @@
 - **P6-S2 / P6-S1**：均已合并并通过加固 PR（#450/#451/#454/#452/#453），CI 全绿。正式 `data/peter` 未动。
 - **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）PR #455 已完成接手施工与全部 24/24 实验交付：
   - 状态：**24 completed / 0 partial / 0 blocked**；
-  - 预算：累计 **¥2.208254 / ¥20**（Tier 0 ¥0、Tier 1 ¥1.784595、Tier 2 ¥0.423659，699 条 append-only 结算记录）；
-  - 验证：合成单测 **39/39 通过**，Baseline-1 门禁 **20/20 通过**，隐私/路径/密钥扫描 0 命中；
-  - 本地匿名 A/B 回复对照：`.local-tmp/s4/lan-blind-review.md`（46 组，不进 git），供 Lan 直接阅读体验。
+  - 预算：累计 **¥2.490224 / ¥20**（Tier 0 ¥0、Tier 1 ¥1.784595、Tier 2 ¥0.705629，821 条 append-only 结算记录，含真实 Peter 人设重跑）；
+  - 验证：合成单测 **39/39 通过**，Baseline-1 门禁 **20/20 通过**，隐私/路径/密钥/人设泄露扫描 0 命中；
+  - 本地匿名 A/B 回复对照：`.local-tmp/s4/lan-blind-review.md`（46 组真实人设回复，83/92 英文，不进 git），供 Lan 直接阅读体验。
   - 按工单规则，**达到完整交付且可合并状态后停止，不自行合并，不启动 S3/S5/S6/S7**。
 
 ## 下一个窗口第一步

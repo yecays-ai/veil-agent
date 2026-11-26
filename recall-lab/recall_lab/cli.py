@@ -79,6 +79,7 @@ def build_parser():
     parser.add_argument('--context-log', help='isolated context-log.jsonl')
     parser.add_argument('--recall-diagnostics', help='isolated recall-diagnostics.jsonl')
     parser.add_argument('--capabilities', help='isolated capabilities.json')
+    parser.add_argument('--persona-file', help='read-only local persona markdown for Tier 2 replies (never committed)')
     parser.add_argument('--env-file', help='read-only .env to read keys from (never written)')
     parser.add_argument('--cache-dir', default='.local/cache', help='embedding/judge cache dir')
     parser.add_argument('--results-dir', default='results', help='committed aggregate results dir')
@@ -158,6 +159,9 @@ def main(argv=None):
         'context_log': args.context_log,
         'recall_diagnostics': args.recall_diagnostics,
         'capabilities': _load_json(args.capabilities) if args.capabilities else {},
+        'persona_text': (Path(args.persona_file).read_text(encoding='utf-8-sig').strip()
+                         if args.persona_file and Path(args.persona_file).is_file() else ''),
+        'persona_loaded': bool(args.persona_file and Path(args.persona_file).is_file()),
         'cache_dir': args.cache_dir,
         'judge_base_url': args.judge_base_url,
         'judge_model': args.judge_model,

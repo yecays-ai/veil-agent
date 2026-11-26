@@ -7,16 +7,16 @@
       },
       "metrics": {
         "blind_eval": {
-          "emotional_fit": 3.0,
+          "emotional_fit": 4.0,
           "experience_behavior_impact": 3.0,
-          "factual_accuracy": 4.83,
+          "factual_accuracy": 5.0,
           "forced_association": 0,
           "hallucinated_memory": 0,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 3.5,
+          "memory_naturalness": 3.67,
+          "relationship_continuity": 3.83,
           "work_interference": 0
         },
-        "real_prompt_tokens": 2657
+        "real_prompt_tokens": 10637
       }
     },
     {
@@ -26,19 +26,19 @@
       },
       "metrics": {
         "blind_eval": {
-          "emotional_fit": 3.17,
+          "emotional_fit": 4.67,
           "experience_behavior_impact": 3.0,
-          "factual_accuracy": 4.83,
+          "factual_accuracy": 5.0,
           "forced_association": 0,
           "hallucinated_memory": 0,
           "memory_naturalness": 4.0,
-          "relationship_continuity": 3.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         },
         "empty_hint_bytes": 131,
         "estimated_empty_occurrences": 167,
         "non_first_steps": 332,
-        "real_prompt_tokens": 2519,
+        "real_prompt_tokens": 10499,
         "real_tokens_saved": 138,
         "saved_bytes": 21877,
         "saved_tokens_est": 6563.1
@@ -49,10 +49,10 @@
     "by_tier": {
       "0": 0.0,
       "1": 1.784595,
-      "2": 0.173302
+      "2": 0.510519
     },
-    "calls": 601,
-    "total_cny": 1.957897
+    "calls": 738,
+    "total_cny": 2.295114
   },
   "comparison": [
     {
@@ -78,30 +78,30 @@
     "blind_eval_summary": {
       "arms": {
         "keep_empty_hint": {
-          "emotional_fit": 3.0,
+          "emotional_fit": 4.0,
           "experience_behavior_impact": 3.0,
-          "factual_accuracy": 4.83,
+          "factual_accuracy": 5.0,
           "forced_association": 0,
           "hallucinated_memory": 0,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 3.5,
+          "memory_naturalness": 3.67,
+          "relationship_continuity": 3.83,
           "work_interference": 0
         },
         "omit_empty_hint": {
-          "emotional_fit": 3.17,
+          "emotional_fit": 4.67,
           "experience_behavior_impact": 3.0,
-          "factual_accuracy": 4.83,
+          "factual_accuracy": 5.0,
           "forced_association": 0,
           "hallucinated_memory": 0,
           "memory_naturalness": 4.0,
-          "relationship_continuity": 3.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         }
       },
       "n": 6,
       "wins": {
-        "keep_empty_hint": 2,
-        "omit_empty_hint": 3,
+        "keep_empty_hint": 0,
+        "omit_empty_hint": 5,
         "tie": 1
       }
     },
@@ -113,18 +113,18 @@
     "AI 辅助盲评（未经 Lan 人工验收）；本地已生成匿名对照材料供 Lan 抽检"
   ],
   "experiment_id": "AB-C2a",
-  "finished_at": "2026-11-26T19:22:57.103+08:00",
+  "finished_at": "2026-11-26T19:56:34.662+08:00",
   "fixed_baseline": "完整多步工具循环切片 + deepseek-flash 真实生成盲评",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T19:21:58.974+08:00",
+  "started_at": "2026-11-26T19:55:20.887+08:00",
   "status": "completed",
   "tier": 2,
   "title": "非首轮省略 memory.recall.empty 等空提示",
   "variable": "tool_step>0 省略空提示 关 vs 开",
   "verdict": {
     "hallucinated_memory_omit": 0,
-    "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 2, \"omit_empty_hint\": 3, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
+    "reason": "真实多步工具循环 6 条对照：省略空提示实省 138 tokens（窗口估算省 6563 tokens），幻觉回忆 0/6（保留组 0/6），盲评胜负 {\"keep_empty_hint\": 0, \"omit_empty_hint\": 5, \"tie\": 1}；满足幻觉=0红线，建议 S7 实施",
     "recommended": true
   }
 }

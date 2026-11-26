@@ -160,7 +160,7 @@ class ChatClient:
 # ---------------------------------------------------------------------------------------
 # Anonymized AI-Assisted Blind Evaluation (8 dimensions, hidden arm names)
 # ---------------------------------------------------------------------------------------
-BLIND_RUBRIC_SYSTEM = """你是一位严谨的 AI 伴侣对话体验盲评评审员。你将看到同一场景下两个匿名回复（Reply A 与 Reply B），以及该场景的参考背景（仅供核验事实，不要偏好任何一方的顺序）。
+BLIND_RUBRIC_SYSTEM = """你是一位严谨的 AI 伴侣对话体验盲评评审员。你将看到同一场景下两个匿名回复（Reply A 与 Reply B），以及该场景的参考背景（仅供核验事实，不要偏好任何一方的顺序；回复使用英文或中英混用属于角色本身语言习惯，绝不因语言是英文扣分）。
 请严格按以下 8 个维度分别对 Reply A 和 Reply B 打分，并输出 JSON：
 1. memory_naturalness (1-5): 记忆融入是否自然，不生硬、不背书。
 2. emotional_fit (1-5): 情绪贴合与共情度。
@@ -269,6 +269,17 @@ COMPANION_SYSTEM_BASE = (
     "Never invent memories or details that are not present in the provided context. "
     "If Lan is discussing work, bugs, logs, or tasks, focus directly on the task without forcing unrelated old personal memories."
 )
+
+
+def _system_base(ctx):
+    """Use the real local persona file (read-only, never committed) when supplied, else neutral fallback."""
+    persona = (ctx.options.get('persona_text') or '').strip()
+    if persona:
+        return (
+            persona
+            + "\n\n[ISOLATED EVAL GUARDRAIL: Never invent past memories or details not present in the provided context.]"
+        )
+    return COMPANION_SYSTEM_BASE
 
 
 def _format_memories_block(snapshot, memory_ids, *, summary_pointer=False):
@@ -452,7 +463,7 @@ def run_a1a_a1b_real(ctx, chat_client):
         for arm_name, assoc_id in (('no_association', ''),
                                    ('prod_breath8', ch_prod.get('key', '')),
                                    ('stratified_rotation24', ch_strat.get('key', ''))):
-            sys_parts = [COMPANION_SYSTEM_BASE]
+            sys_parts = [_system_base(ctx)]
             if learned_head:
                 sys_parts.append(learned_head)
             rec_block = _format_memories_block(ctx.snapshot, recalled_ids)
@@ -527,7 +538,7 @@ def run_a1a_a1b_real(ctx, chat_client):
         assoc_id = surfaced_map.get(s.sample_id, '') if is_idle else ''
         replies = {}
         for arm_name, aid in (('association_off', ''), ('wake_association_on', assoc_id)):
-            sys_parts = [COMPANION_SYSTEM_BASE,
+            sys_parts = [_system_base(ctx),
                          "This is an autonomous wake moment. Decide what to think about, note, or do naturally."]
             if learned_head:
                 sys_parts.append(learned_head)
@@ -600,8 +611,9 @@ def run_c1_real_context(ctx, chat_client):
         provider={'model': 'deepseek-flash'}, history_rounds=80,
         tools={'enabled': True},
     )
-    # Build realistic static suffix (~3,500+ tokens: neutral persona block + learned_context + multi-turn history)
-    persona_stub = ('Companion operating principles and style baseline for isolated cache measurement. ' * 80)
+    # Build realistic static suffix: real local persona when supplied, else neutral stub of production length
+    persona_stub = (ctx.options.get('persona_text') or '').strip() or (
+        'Companion operating principles and style baseline for isolated cache measurement. ' * 80)
     learned_head = _learned_head_text(ctx)
     # Build 12 realistic history turns (anonymized/synthetic length matching production)
     history_msgs = []
@@ -682,12 +694,12 @@ def run_c2a_c2b_real(ctx, chat_client):
     for s in c2a_samples:
         history = [
             {'role': 'user', 'content': s.query},
-            {'role': 'assistant', 'content': '我先查一下本地状态和相关记录，马上给你确认。'},
-            {'role': 'user', 'content': '[tool_result step=1]: check completed, no errors found. 请继续给出一句简短自然的答复。'},
+            {'role': 'assistant', 'content': 'Let me check the local state and logs first.'},
+            {'role': 'user', 'content': '[tool_result step=1]: check completed, no errors found. Continue with your brief reply.'},
         ]
         replies = {}
         for arm_name, include_hint in (('keep_empty_hint', True), ('omit_empty_hint', False)):
-            sys_text = COMPANION_SYSTEM_BASE + ('\n\n' + learned_head if learned_head else '')
+            sys_text = _system_base(ctx) + ('\n\n' + learned_head if learned_head else '')
             if include_hint:
                 sys_text += '\n\n' + empty_hint
             r = chat_client.call(
@@ -723,7 +735,7 @@ def run_c2a_c2b_real(ctx, chat_client):
         cap_ids = all_ids[:3]
         replies = {}
         for arm_name, mids in (('uncapped_6', all_ids), ('cap_top2+1', cap_ids)):
-            sys_parts = [COMPANION_SYSTEM_BASE]
+            sys_parts = [_system_base(ctx)]
             if learned_head:
                 sys_parts.append(learned_head)
             sys_parts.append('RECALLED MEMORIES:\n' + _format_memories_block(ctx.snapshot, mids))
@@ -812,7 +824,7 @@ def run_c3_real_tool(ctx, chat_client):
 
     for s, long_eids in c3_samples:
         # Arm A: full_story
-        sys_full = '\n\n'.join([COMPANION_SYSTEM_BASE, learned_head,
+        sys_full = '\n\n'.join([_system_base(ctx), learned_head,
                                 'RECALLED MEMORIES:\n' + _format_memories_block(ctx.snapshot, long_eids, summary_pointer=False)])
         r_full = chat_client.call(
             [{'role': 'system', 'content': sys_full}, {'role': 'user', 'content': s.query}],
@@ -822,7 +834,7 @@ def run_c3_real_tool(ctx, chat_client):
         full_lat.append(r_full['latency_ms'])
 
         # Arm B: summary + timeline_pointer WITH live memory_timeline tool
-        sys_ptr = '\n\n'.join([COMPANION_SYSTEM_BASE, learned_head,
+        sys_ptr = '\n\n'.join([_system_base(ctx), learned_head,
                                'RECALLED MEMORIES:\n' + _format_memories_block(ctx.snapshot, long_eids, summary_pointer=True)])
         msgs_ptr = [{'role': 'system', 'content': sys_ptr}, {'role': 'user', 'content': s.query}]
         r_ptr1 = chat_client.call(msgs_ptr, experiment='AB-C3', tier=2, max_tokens=320,
@@ -1033,7 +1045,7 @@ def run_e1_forward_consolidation(ctx, chat_client):
         rec_block = _format_memories_block(ctx.snapshot, recalled_ids)
         replies = {}
         for arm_name, use_cons in (('no_consolidation', False), ('evidence_constrained_consolidation', True)):
-            sys_parts = [COMPANION_SYSTEM_BASE]
+            sys_parts = [_system_base(ctx)]
             if learned_head:
                 sys_parts.append(learned_head)
             if use_cons:

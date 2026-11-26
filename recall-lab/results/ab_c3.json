@@ -7,22 +7,22 @@
         "avg_story_chars": 961.2,
         "blind_eval": {
           "emotional_fit": 4.0,
-          "experience_behavior_impact": 3.33,
+          "experience_behavior_impact": 3.83,
           "factual_accuracy": 4.5,
           "forced_association": 0,
-          "hallucinated_memory": 1,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 4.0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.17,
           "work_interference": 0
         },
         "events": 76,
         "latency": {
-          "mean_ms": 2489.45,
+          "mean_ms": 2431.92,
           "n": 6,
-          "p50_ms": 2184.06,
-          "p95_ms": 4849.03
+          "p50_ms": 2173.14,
+          "p95_ms": 3294.46
         },
-        "total_tokens": 4526
+        "total_tokens": 12616
       }
     },
     {
@@ -35,26 +35,26 @@
       "metrics": {
         "avg_saved_tokens_est": 216.4,
         "blind_eval": {
-          "emotional_fit": 4.33,
-          "experience_behavior_impact": 3.83,
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.67,
           "factual_accuracy": 4.67,
-          "forced_association": 0,
-          "hallucinated_memory": 0,
-          "memory_naturalness": 4.0,
-          "relationship_continuity": 4.17,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         },
         "latency": {
-          "mean_ms": 2611.86,
+          "mean_ms": 3794.39,
           "n": 6,
-          "p50_ms": 2716.08,
-          "p95_ms": 3624.98
+          "p50_ms": 3962.25,
+          "p95_ms": 5017.02
         },
-        "net_tokens_saved": -4447,
+        "net_tokens_saved": -12031,
         "summary_pointer_chars": 240,
-        "tool_call_rate": 0.6667,
-        "tool_calls_made": 4,
-        "total_tokens": 8973
+        "tool_call_rate": 0.8333,
+        "tool_calls_made": 5,
+        "total_tokens": 24647
       }
     }
   ],
@@ -62,21 +62,21 @@
     "by_tier": {
       "0": 0.0,
       "1": 1.784595,
-      "2": 0.220201
+      "2": 0.558127
     },
-    "calls": 623,
-    "total_cny": 2.004796
+    "calls": 761,
+    "total_cny": 2.342722
   },
   "comparison": [
     {
-      "a": 4526,
-      "b": 8973,
-      "delta": -4447,
+      "a": 12616,
+      "b": 24647,
+      "delta": -12031,
       "metric": "net_tokens_saved_6samples"
     },
     {
       "metric": "tool_call_rate",
-      "value": 0.6667
+      "value": 0.8333
     },
     {
       "a": 4.5,
@@ -90,22 +90,22 @@
       "arms": {
         "full_story": {
           "emotional_fit": 4.0,
-          "experience_behavior_impact": 3.33,
+          "experience_behavior_impact": 3.83,
           "factual_accuracy": 4.5,
           "forced_association": 0,
-          "hallucinated_memory": 1,
-          "memory_naturalness": 3.83,
-          "relationship_continuity": 4.0,
+          "hallucinated_memory": 0,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.17,
           "work_interference": 0
         },
         "summary_pointer": {
-          "emotional_fit": 4.33,
-          "experience_behavior_impact": 3.83,
+          "emotional_fit": 4.0,
+          "experience_behavior_impact": 3.67,
           "factual_accuracy": 4.67,
-          "forced_association": 0,
-          "hallucinated_memory": 0,
-          "memory_naturalness": 4.0,
-          "relationship_continuity": 4.17,
+          "forced_association": 1,
+          "hallucinated_memory": 1,
+          "memory_naturalness": 4.17,
+          "relationship_continuity": 4.33,
           "work_interference": 0
         }
       },
@@ -124,19 +124,19 @@
     "AI 辅助盲评（未经 Lan 人工验收）；本地已生成匿名对照材料供 Lan 抽检"
   ],
   "experiment_id": "AB-C3",
-  "finished_at": "2026-11-26T19:23:40.115+08:00",
+  "finished_at": "2026-11-26T19:57:26.891+08:00",
   "fixed_baseline": "完整长事件召回切片 + deepseek-flash 真实工具调用与回复盲评",
   "harness_version": "recall-lab-0.1",
   "notes": [],
-  "started_at": "2026-11-26T19:22:57.141+08:00",
+  "started_at": "2026-11-26T19:56:34.709+08:00",
   "status": "completed",
   "tier": 2,
   "title": "完整 story vs 标题+因果摘要+timeline 指针",
   "variable": "注入完整 events.story vs 摘要+指针（含真实 memory_timeline 工具调用）",
   "verdict": {
     "long_events": 75,
-    "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 4/6 次（67%），净 token 变化 -4447（省为正），事实准确度 +0.17，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
+    "reason": "6 条长事件真实工具对照：摘要+指针触发 memory_timeline 读全文 5/6 次（83%），净 token 变化 -12031（省为正），事实准确度 +0.17，胜负 {\"full_story\": 2, \"summary_pointer\": 4, \"tie\": 0}",
     "recommended": false,
-    "tool_call_rate": 0.6667
+    "tool_call_rate": 0.8333
   }
 }

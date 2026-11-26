@@ -114,59 +114,59 @@
         "arms": {
           "no_association": {
             "emotional_fit": 4.0,
-            "experience_behavior_impact": 3.38,
-            "factual_accuracy": 4.62,
-            "forced_association": 0,
+            "experience_behavior_impact": 3.12,
+            "factual_accuracy": 4.25,
+            "forced_association": 1,
             "hallucinated_memory": 1,
-            "memory_naturalness": 3.88,
-            "relationship_continuity": 4.25,
+            "memory_naturalness": 3.38,
+            "relationship_continuity": 3.88,
             "work_interference": 0
           },
           "stratified_rotation24": {
-            "emotional_fit": 3.75,
-            "experience_behavior_impact": 3.0,
-            "factual_accuracy": 4.62,
-            "forced_association": 0,
+            "emotional_fit": 3.88,
+            "experience_behavior_impact": 3.12,
+            "factual_accuracy": 4.5,
+            "forced_association": 1,
             "hallucinated_memory": 1,
-            "memory_naturalness": 3.38,
-            "relationship_continuity": 3.5,
+            "memory_naturalness": 3.25,
+            "relationship_continuity": 3.75,
             "work_interference": 0
           }
         },
         "n": 8,
         "wins": {
-          "no_association": 4,
-          "stratified_rotation24": 1,
-          "tie": 3
+          "no_association": 3,
+          "stratified_rotation24": 3,
+          "tie": 2
         }
       },
       "vs_prod_breath8": {
         "arms": {
           "prod_breath8": {
-            "emotional_fit": 4.0,
-            "experience_behavior_impact": 3.25,
-            "factual_accuracy": 4.75,
+            "emotional_fit": 4.12,
+            "experience_behavior_impact": 3.12,
+            "factual_accuracy": 4.25,
             "forced_association": 0,
-            "hallucinated_memory": 0,
+            "hallucinated_memory": 1,
             "memory_naturalness": 3.5,
-            "relationship_continuity": 4.0,
+            "relationship_continuity": 4.25,
             "work_interference": 0
           },
           "stratified_rotation24": {
-            "emotional_fit": 3.62,
-            "experience_behavior_impact": 3.12,
-            "factual_accuracy": 4.75,
-            "forced_association": 0,
+            "emotional_fit": 3.75,
+            "experience_behavior_impact": 3.25,
+            "factual_accuracy": 4.38,
+            "forced_association": 1,
             "hallucinated_memory": 1,
-            "memory_naturalness": 3.25,
-            "relationship_continuity": 3.5,
+            "memory_naturalness": 3.5,
+            "relationship_continuity": 3.88,
             "work_interference": 0
           }
         },
         "n": 8,
         "wins": {
-          "prod_breath8": 4,
-          "stratified_rotation24": 0,
+          "prod_breath8": 2,
+          "stratified_rotation24": 2,
           "tie": 4
         }
       }
