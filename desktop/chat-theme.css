@@ -17,65 +17,162 @@
   background: var(--custom-chat-bg, rgb(var(--veil-canvas-rgb) / var(--view-alpha, var(--window-alpha))));
 }
 
+/* 消息气泡：复制 yecays-ai/veil 小手机群组连接圆角 + 小脚脚（tail）+ 仅首句带头像 */
 #log .col {
   padding: 18px 20px 28px;
-  gap: 10px;
+  gap: 8px;
 }
 
-/* 消息气泡：随内容自然收紧，弱化用户气泡饱和度与投影 */
+#log .msg-assistant-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin-left: 44px;
+  margin-top: 4px;
+  margin-bottom: -2px;
+  min-height: 18px;
+}
+#log .msg-assistant-head .msg-avatar-trigger {
+  position: absolute;
+  left: -44px;
+  top: 2px;
+  width: var(--custom-avatar-size, 36px) !important;
+  height: var(--custom-avatar-size, 36px) !important;
+  min-width: 36px !important;
+  min-height: 36px !important;
+  flex: none;
+  padding: 0 !important;
+  border: 1px solid var(--veil-rule-strong) !important;
+  border-radius: var(--custom-avatar-radius, 50%) !important;
+  overflow: hidden;
+  background: var(--glass-card-strong) !important;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: transform 140ms var(--ease-spring);
+  z-index: 2;
+}
+#log .msg-assistant-head .msg-avatar-trigger:hover { transform: scale(1.06); }
+#log .msg-assistant-head .msg-avatar-trigger img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+#log .msg-assistant-head .msg-assistant-name {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--veil-soft);
+  padding-left: 2px;
+}
+
 #log .msg {
+  position: relative;
   width: fit-content;
-  max-width: var(--custom-bubble-max-width, min(78%, 620px));
+  max-width: var(--custom-bubble-max-width, min(74%, 600px));
   padding: var(--custom-bubble-padding, 10px 15px);
   font-size: var(--custom-chat-font-size, 14px);
   line-height: var(--custom-chat-line-height, 1.62);
+  border-radius: 20px;
   transition: transform 120ms ease, filter 140ms ease;
+}
+#log .msg.grouped {
+  margin-top: -5px !important;
 }
 
 #log .msg.assistant {
+  margin-left: 44px;
   background: var(--custom-assistant-bubble-bg, rgb(var(--bubble-rgb) / var(--bubble-alpha)));
   color: var(--custom-assistant-bubble-text, var(--veil-ink));
   border: var(--custom-assistant-bubble-border, 1px solid var(--veil-rule));
-  border-radius: var(--custom-assistant-bubble-radius, 18px 18px 18px 5px);
+  border-bottom-left-radius: 6px;
   box-shadow: var(--custom-assistant-bubble-shadow, 0 2px 10px rgba(0, 0, 0, 0.03));
+}
+/* 气泡小脚脚（孤立消息或组尾左下角） */
+#log .msg.assistant:not(.sticker-msg):not(:has(+ .msg.assistant.grouped))::after {
+  content: "";
+  position: absolute;
+  left: -6px;
+  bottom: 0;
+  width: 12px;
+  height: 14px;
+  background: var(--custom-assistant-bubble-bg, rgb(var(--bubble-rgb) / var(--bubble-alpha)));
+  clip-path: path("M 12 0 L 12 14 C 6 14 2 11 0 13 C 3 9 5 5 5 0 Z");
+  pointer-events: none;
+}
+#log .msg.assistant:not(.grouped):has(+ .msg.assistant.grouped) {
+  border-radius: 20px 20px 20px 6px;
+}
+#log .msg.assistant.grouped {
+  border-radius: 6px 20px 20px 6px;
+}
+#log .msg.assistant.grouped:not(:has(+ .msg.assistant.grouped)) {
+  border-radius: 6px 20px 20px 18px;
 }
 
 #log .msg.user {
   background: var(--custom-user-bubble-bg, rgb(var(--user-rgb) / var(--bubble-alpha)));
   color: var(--custom-user-bubble-text, var(--veil-ink));
   border: var(--custom-user-bubble-border, 1px solid var(--veil-rule));
-  border-radius: var(--custom-user-bubble-radius, 18px 18px 5px 18px);
+  border-bottom-right-radius: 6px;
   box-shadow: var(--custom-user-bubble-shadow, 0 1px 6px rgba(0, 0, 0, 0.025));
 }
+#log .msg.user:not(.sticker-msg):not(:has(+ .msg.user.grouped))::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  bottom: 0;
+  width: 12px;
+  height: 14px;
+  background: var(--custom-user-bubble-bg, rgb(var(--user-rgb) / var(--bubble-alpha)));
+  clip-path: path("M 0 0 L 0 14 C 6 14 10 11 12 13 C 9 9 7 5 7 0 Z");
+  pointer-events: none;
+}
+#log .msg.user:not(.grouped):has(+ .msg.user.grouped) {
+  border-radius: 20px 20px 6px 20px;
+}
+#log .msg.user.grouped {
+  border-radius: 20px 6px 6px 20px;
+}
+#log .msg.user.grouped:not(:has(+ .msg.user.grouped)) {
+  border-radius: 20px 6px 18px 20px;
+}
 
-/* Peter 助手消息头像组（仅每轮首条非系统消息挂载） */
-#log .msg-assistant-row {
+/* 语音气泡播放三角形完美居中 */
+#log .voice-player {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  align-self: flex-start;
-  max-width: 100%;
 }
-#log .msg-assistant-row .msg-avatar-trigger {
-  width: var(--custom-avatar-size, 34px);
-  height: var(--custom-avatar-size, 34px);
+#log .voice-play {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
   flex: none;
-  padding: 0;
-  border: 1px solid var(--veil-rule-strong);
-  border-radius: var(--custom-avatar-radius, 12px);
-  overflow: hidden;
-  background: transparent;
-  cursor: pointer;
-  margin-top: 2px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
-  transition: transform 140ms ease;
+  display: grid !important;
+  place-items: center !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: var(--veil-accent) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.10) !important;
 }
-#log .msg-assistant-row .msg-avatar-trigger:hover { transform: scale(1.06); }
-#log .msg-assistant-row .msg-avatar-trigger img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+#log .voice-play svg {
+  width: 14px;
+  height: 14px;
   display: block;
+}
+#log .voice-transcript-toggle,
+#log .voice-retry {
+  min-height: 0 !important;
+  padding: 2px 6px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 /* 保持贴纸胶囊与纯贴纸边界（兼容 #418 测试） */

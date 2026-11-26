@@ -608,8 +608,8 @@ body:not(.detached-window) .topbar .top-actions {
   background: var(--veil-accent-soft) !important;
 }
 
-/* Unified Buttons & Controls Across ALL Pages */
-.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row) {
+/* Unified Buttons & Controls Across ALL Pages (excluding inline voice/msg buttons) */
+.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(.msg button):not(.voice-play):not(.voice-retry):not(.voice-transcript-toggle):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row) {
   min-height: 32px;
   padding: 0 14px;
   border-radius: 10px !important;
@@ -621,7 +621,7 @@ body:not(.detached-window) .topbar .top-actions {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   transition: background 140ms ease, border-color 140ms ease, transform 110ms ease;
 }
-.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row):hover:not(:disabled) {
+.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(.msg button):not(.voice-play):not(.voice-retry):not(.voice-transcript-toggle):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row):hover:not(:disabled) {
   border-color: var(--veil-accent) !important;
   background: var(--veil-accent-soft) !important;
 }
@@ -914,6 +914,93 @@ body:not(.detached-window) .page:not([data-page-view="chat"]):not([data-page-vie
 }
 .page button:active:not(:disabled) {
   transform: translateY(0.5px) scale(0.985);
+}
+
+/* Activity Page: Left MCP-style Switch Cards + Right Activity Feed Timeline */
+.workspace-activity-split {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(320px, 1.15fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 880px) {
+  .workspace-activity-split { grid-template-columns: 1fr; }
+}
+.workspace-activity-controls {
+  display: grid;
+  gap: 12px;
+}
+.activity-switch-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--veil-rule);
+  background: var(--glass-card);
+  backdrop-filter: blur(18px);
+}
+.activity-switch-card .activity-runtime {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 16px;
+  flex: 1;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.activity-switch-card .activity-runtime > div {
+  display: grid;
+  gap: 2px;
+}
+.activity-switch-card .activity-runtime > div .label {
+  font-size: 11.5px;
+  color: var(--veil-soft);
+}
+.activity-switch-card .activity-runtime > div strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--veil-ink);
+}
+.activity-runtime-native-btn {
+  display: none !important;
+}
+.activity-service-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--veil-rule);
+  background: var(--glass-card);
+}
+.activity-feed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.activity-feed-head .activity-overview {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px !important;
+  margin: 0 !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--veil-rule) !important;
+  background: var(--surface-muted) !important;
+  box-shadow: none !important;
+  font-size: 12px;
+}
+.activity-feed-head .activity-overview > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Reference-Style Right Rail & Curved Hairline Waiting Pill */

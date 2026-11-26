@@ -301,54 +301,68 @@
     const view = document.getElementById('activity-view');
     if (!view || activityLayoutBuilt) return;
     activityLayoutBuilt = true;
-    const overviewCards = [...view.querySelectorAll('.activity-overview')];
+    const overviewCard = view.querySelector('.activity-overview');
+    const runtimes = [...view.querySelectorAll('.activity-runtime')];
     const timeline = view.querySelector('.activity-timeline');
     const filters = view.querySelector('.activity-filters');
-    if (!overviewCards.length || !timeline) return;
+    const runtimeFooter = view.querySelector('.runtime-row');
+    if (!runtimes.length || !timeline) return;
 
-    const metricsGrid = el('div', 'workspace-activity-metrics');
-    for (const card of overviewCards) {
-      card.classList.add('workspace-activity-metric');
-      const toggleBtn = card.querySelector('button');
-      if (toggleBtn) {
-        toggleBtn.classList.add('workspace-switch');
-        toggleBtn.setAttribute('role', 'switch');
-        const syncChecked = () => {
-          const on = !/关|停|pause|off/i.test(toggleBtn.textContent || '') && !card.classList.contains('is-off');
-          toggleBtn.setAttribute('aria-checked', String(on));
+    const split = el('div', 'workspace-activity-split');
+    const leftControls = el('div', 'workspace-activity-controls');
+
+    for (const row of runtimes) {
+      const card = el('article', 'activity-switch-card');
+      const nativeBtn = row.querySelector('button');
+      row.parentNode?.removeChild(row);
+      card.append(row);
+
+      if (nativeBtn) {
+        nativeBtn.classList.add('activity-runtime-native-btn');
+        const labelWrap = el('label', 'mcp-switch');
+        const chk = document.createElement('input');
+        chk.type = 'checkbox';
+        chk.setAttribute('role', 'switch');
+        chk.setAttribute('aria-label', nativeBtn.textContent || '状态切换');
+        const track = el('span', 'mcp-switch-track');
+        track.setAttribute('aria-hidden', 'true');
+        labelWrap.append(chk, track);
+        card.append(labelWrap);
+
+        const syncFromBtn = () => {
+          const txt = (nativeBtn.textContent || '').trim();
+          chk.disabled = Boolean(nativeBtn.disabled);
+          chk.checked = /^(暂停|关闭|停用|退出)/.test(txt);
+          chk.title = txt;
         };
-        syncChecked();
-        const obs = new MutationObserver(syncChecked);
-        obs.observe(toggleBtn, { childList: true, characterData: true, subtree: true });
+        syncFromBtn();
+        const obs = new MutationObserver(syncFromBtn);
+        obs.observe(nativeBtn, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+        chk.addEventListener('change', () => {
+          nativeBtn.click();
+          setTimeout(syncFromBtn, 60);
+        });
       }
-      metricsGrid.append(card);
+      leftControls.append(card);
     }
 
-    const feedGrid = el('div', 'workspace-feed-grid');
-    const feedCard = el('article', 'surface workspace-feed');
-    feedCard.append(el('h3', '', '近期轨迹'));
+    if (runtimeFooter) {
+      runtimeFooter.className = 'activity-service-card';
+      leftControls.append(runtimeFooter);
+    }
+
+    const feedCard = el('article', 'veil-card workspace-feed');
+    const feedHead = el('div', 'activity-feed-head');
+    feedHead.append(el('h3', '', '近期轨迹'));
+    if (overviewCard) feedHead.append(overviewCard);
+    feedCard.append(feedHead);
     if (filters) feedCard.append(filters);
     feedCard.append(timeline);
 
-    const aside = el('aside', 'workspace-activity-aside');
-    const statusCard = el('article', 'surface workspace-activity-service');
-    statusCard.append(el('h3', '', '运行说明'));
-    statusCard.append(el('p', 'veil-soft-note', '自主活动开启时，Peter 会按节律唤醒整理经历、反思并与你轻声报平安。所有外部动作仍受安全与费用预算上限约束。'));
-    const btnRow = el('div', 'workspace-links');
-    const budgetShortcut = el('button', 'workspace-link', '查看今日预算');
-    budgetShortcut.type = 'button';
-    budgetShortcut.addEventListener('click', () => go('workspace-budget'));
-    const brainShortcut = el('button', 'workspace-link', '查看记忆健康');
-    brainShortcut.type = 'button';
-    brainShortcut.addEventListener('click', () => go('brain-health'));
-    btnRow.append(budgetShortcut, brainShortcut);
-    statusCard.append(btnRow);
-    aside.append(statusCard);
-
-    feedGrid.append(feedCard, aside);
-    const heading = view.querySelector('.page-head') || view.querySelector('h2')?.parentElement;
+    split.append(leftControls, feedCard);
+    const heading = view.querySelector('.activity-heading') || view.querySelector('.page-heading');
     if (heading) heading.classList.add('workspace-activity-heading');
-    view.append(metricsGrid, feedGrid);
+    view.append(split);
   }
 
   async function renderWorkspaceHome(host) {

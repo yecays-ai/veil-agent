@@ -474,6 +474,13 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#mcp-view").hidden && (document.querySelector("#mcp-view .mcp-master")?.getBoundingClientRect().width || 0) >= 500'), 'mcp master card collapsed narrow');
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=peter]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#peter-view").hidden && (document.querySelector("#peter-view .peter-card")?.getBoundingClientRect().width || 0) >= 500'), 'peter profile card collapsed narrow');
+  // Verify assistant turn avatar rendered on first bubble, voice play button centered cleanly, and activity 2-col switch layout
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=chat]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#log").hidden'), 'chat view did not reopen');
+  const chatUiDiag = await chat.webContents.executeJavaScript('(()=>{const img=document.querySelector("#log .msg-assistant-head .msg-avatar-trigger img");const vp=document.querySelector("#log .voice-play");return {hasHead:Boolean(document.querySelector("#log .msg-assistant-head")),hasImg:Boolean(img),complete:Boolean(img?.complete),natW:img?.naturalWidth||0,rectW:img?Math.round(img.getBoundingClientRect().width):0,vpPad:vp?getComputedStyle(vp).paddingLeft:null,src:img?.getAttribute("src")}})()');
+  assert.equal(chatUiDiag.hasImg && chatUiDiag.natW > 0 && chatUiDiag.rectW >= 30 && chatUiDiag.vpPad === '0px', true, 'assistant avatar or voice alignment failed: ' + JSON.stringify(chatUiDiag));
+  await chat.webContents.executeJavaScript('document.querySelector("[data-page=activity]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#activity-view").hidden && document.querySelectorAll("#activity-view .activity-switch-card").length===4 && document.querySelectorAll("#activity-view .workspace-activity-aside").length===0'), 'activity 2-col switch layout missing');
 
   assert.equal(await chat.webContents.executeJavaScript('window.veilDesktop.detachView("chat",{x:760,y:320})'), true, 'chat detach for pin test failed');
   let pinnedChat;
