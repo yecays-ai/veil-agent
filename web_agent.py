@@ -2098,6 +2098,11 @@ def make_handler(hub, token):
                 events = getattr(hub.memory_tools, 'events', None)
                 event_id = query.get('id', [''])[0]
                 detail = events.detail(event_id) if events is not None and event_id else None
+                if detail:
+                    mem_id = detail.get('memory_id')
+                    if mem_id and hasattr(hub.memory_tools, 'memory'):
+                        title = hub.memory_tools.memory.title_for(mem_id) or mem_id
+                        detail.setdefault('linked_memories', [{'memory_id': mem_id, 'title': title}])
                 self._send(200, detail) if detail else self._send(404, {'error': '没有这段经历。'})
                 return
             if url.path == '/api/memory/catalog':
@@ -2414,6 +2419,137 @@ def make_handler(hub, token):
                     headers['Content-Range'] = f'bytes {start}-{end}/{size}'
                 self._send(status, data, content_type, headers)
 
+        def _get_budget_summary(self, url):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if url.query:
+                self._send(400, {'error': '预算总览不接受查询参数。'})
+                return
+            budget = getattr(hub.chat, 'budget', None)
+            if budget is None:
+                self._send(503, {'error': '预算账本尚未就绪。'})
+                return
+            from ledger_recovery import is_unverified
+            try:
+                with budget.mutex:
+                    stamp = budget.clock()
+                    day, month, pending = budget.totals(stamp)
+                    daily_cap, monthly_cap = budget.daily_limit(), budget.monthly_limit()
+                    categories = []
+                    caps = {'autonomy': budget.autonomy_daily, 'glance': budget.glance_daily}
+                    for key in ('autonomy', 'glance', 'short_term_notes', 'delegate',
+                                'experience_memory', 'recall_judge', 'calendar_agreements'):
+                        used, reserved = budget.category_totals(stamp=stamp, category=key)
+                        categories.append({'id': key, 'spent_cny': str(used), 'pending_cny': str(reserved),
+                                           'limit_cny': str(caps[key]) if key in caps else None})
+                    models = budget.model_display(stamp)
+                    unverified = is_unverified(budget.store.root)
+            except (UserError, OSError, UnicodeError):
+                self._send(503, {'error': '暂时无法核对费用账本。'})
+                return
+            self._send(200, {
+                'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
+                'daily': {'spent_cny': str(day), 'limit_cny': str(daily_cap),
+                          'remaining_cny': str(daily_cap - day - pending)},
+                'monthly': {'spent_cny': str(month), 'limit_cny': str(monthly_cap),
+                            'remaining_cny': str(monthly_cap - month - pending)},
+                'pending_cny': str(pending), 'ledger_unverified': unverified,
+                'categories': categories, 'model_summary': models,
+            })
+
+        def _health_context(self):
+            chat = getattr(hub, 'chat', None)
+            cfg = getattr(chat, 'cfg', None)
+            store = getattr(chat, 'store', None)
+            if chat is None or cfg is None or store is None:
+                return None, None, None, None
+            data_root = getattr(hub, 'data_root', None) or Path(store.root)
+            memory = getattr(chat, 'memory', None)
+            auth = getattr(memory, 'brain_authority', None)
+            db_path = Path(auth.db_path) if auth is not None and getattr(auth, 'db_path', None) else Path(data_root) / cfg.id / 'brain.db'
+            return chat, data_root, cfg.id, db_path
+
+        def _get_brain_health(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from brain_health import load_health_settings, load_latest_report, load_snapshots
+            from_date = (query.get('from') or [''])[0]
+            to_date = (query.get('to') or [''])[0]
+            try:
+                settings = load_health_settings(data_root, role_id)
+                report = load_latest_report(data_root, role_id, from_date=from_date, to_date=to_date)
+                snapshots = load_snapshots(data_root, role_id, limit=30)
+            except ValueError:
+                self._send(400, {'error': '日期范围格式需为 YYYY-MM-DD。'})
+                return
+            self._send(200, {
+                'schema_version': 1,
+                'read_only': True,
+                'settings': settings,
+                'report': report,
+                'snapshots': snapshots,
+            })
+
+        def _get_brain_health_export(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from brain_health import export_report, load_latest_report
+            report = load_latest_report(data_root, role_id)
+            if report is None:
+                self._send(404, {'error': '尚未生成健康检查报告，请先执行一次只读检查。'})
+                return
+            fmt = 'json' if (query.get('format') or ['markdown'])[0] == 'json' else 'markdown'
+            self._send(200, {'schema_version': 1, 'format': fmt, 'text': export_report(report, fmt=fmt)})
+
+        def _post_brain_health_scan(self, body):
+            chat, data_root, role_id, db_path = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from brain_health import run_health_scan
+            from_date = str(body.get('from') or '')
+            to_date = str(body.get('to') or '')
+            experience = getattr(chat, 'experience', None)
+            judge = getattr(getattr(chat, 'memory', None), 'judge', None)
+            try:
+                report = run_health_scan(
+                    data_root, role_id, db_path,
+                    from_date=from_date, to_date=to_date,
+                    experience_status=experience.status() if experience else None,
+                    judge_status=judge.status() if judge else None,
+                )
+            except RuntimeError as exc:
+                if str(exc) == 'health_scan_in_progress':
+                    self._send(409, {'error': '只读健康检查正在进行中，请稍候。'})
+                    return
+                self._send(503, {'error': '健康检查执行失败。'})
+                return
+            except ValueError:
+                self._send(400, {'error': '日期参数无效，应为 YYYY-MM-DD。'})
+                return
+            self._send(200, {'schema_version': 1, 'read_only': True, 'report': report})
+
+        def _post_brain_health_settings(self, body):
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from brain_health import save_health_settings
+            try:
+                updated = save_health_settings(data_root, role_id, body)
+            except ValueError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            self._send(200, {'schema_version': 1, 'settings': updated})
+
         def do_GET(self):
             url = urlparse(self.path)
             query = parse_qs(url.query)
@@ -2424,6 +2560,28 @@ def make_handler(hub, token):
                 self._get_game(url)
             elif url.path == '/api/memory/panel':
                 self._get_memory_panel()
+            elif url.path == '/api/brain/overview':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': 'Brain 总览不接受查询参数。'})
+                    return
+                from brain_p4_api import overview as brain_overview
+                self._send(200, brain_overview(hub))
+            elif url.path == '/api/memory/library':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from brain_p4_api import library as brain_library
+                self._send(200, brain_library(hub, query))
+            elif url.path == '/api/brain/health':
+                self._get_brain_health(query)
+            elif url.path == '/api/brain/health/export':
+                self._get_brain_health_export(query)
+            elif url.path == '/api/peter-page/versions':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from brain_p4_api import learned_versions
+                self._send(200, {'items': learned_versions(hub)})
             elif url.path in ('/api/memory/catalog', '/api/memory/read',
                               '/api/memory/events', '/api/memory/event'):
                 # Ticket 425: the event timeline and one event's detail were handled by _get_memory
@@ -2461,6 +2619,31 @@ def make_handler(hub, token):
                     role_id=cfg.id, settings=settings,
                     background_model=hub.background_running,
                 ))
+            elif url.path == '/api/config/inventory':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': '审计清单不接受查询参数。'})
+                    return
+                import csv
+                columns = ('id', 'domain', 'module', 'item', 'key', 'source', 'storage',
+                           'default', 'effective', 'range', 'modify', 'precedence', 'timing',
+                           'persistence', 'risk', 'category', 'page', 'effective_class', 'effective_check')
+                try:
+                    report = ROOT / 'docs' / 'reports' / 'config-audit' / 'config-inventory.csv'
+                    with report.open(encoding='utf-8-sig', newline='') as handle:
+                        reader = csv.DictReader(handle, strict=True)
+                        if reader.fieldnames != list(columns):
+                            raise ValueError('invalid audit header')
+                        rows = list(reader)
+                    if not rows or any(None in row or any(row[key] is None for key in columns) for row in rows):
+                        raise ValueError('invalid audit rows')
+                except (OSError, UnicodeError, csv.Error, ValueError):
+                    self._send(503, {'error': '当前后端缺少可用的 #446 审计清单。'})
+                    return
+                self._send(200, {'schema_version': 1, 'audit': '#446', 'rows': rows})
+            elif url.path == '/api/budget/summary':
+                self._get_budget_summary(url)
             elif url.path == '/api/workbench':
                 self._get_workbench()
             elif url.path == '/api/windows-apps':
@@ -2580,6 +2763,17 @@ def make_handler(hub, token):
                 tools = hub.memory_tools
                 extra = {}
                 if url.path == '/api/memory/edit':
+                    expected_sha = body.get('expected_sha256')
+                    if isinstance(expected_sha, str) and expected_sha:
+                        from brain_p4_api import memory_sha256
+                        current_sha = memory_sha256(hub, body['id'])
+                        if current_sha and current_sha != expected_sha:
+                            self._send(409, {
+                                'error': '这段记忆在你编辑期间已被更新，请刷新核对后再保存（你的草稿仍保留）。',
+                                'conflict': True,
+                                'server_sha256': current_sha,
+                            })
+                            return
                     ok, message = tools.panel_edit(body['id'], body.get('changes') or {}
                                                    if isinstance(body.get('changes'), dict) else {})
                 elif url.path == '/api/memory/delete':
@@ -2587,7 +2781,15 @@ def make_handler(hub, token):
                 # Ticket 363: history, archive and lock on the memory page.
                 elif url.path == '/api/memory/versions':
                     versions = tools.panel_versions(body['id'])
-                    ok, message, extra = versions is not None, '这条记忆不存在或已经删除。', {'versions': versions or []}
+                    if versions is not None:
+                        from brain_p4_api import compute_line_diff, memory_sha256
+                        cur_body = tools.memory.content_for(body['id']) or '' if hasattr(tools, 'memory') else ''
+                        for v in versions:
+                            v['diff'] = compute_line_diff(v.get('body', ''), cur_body)
+                        extra = {'versions': versions, 'current_sha256': memory_sha256(hub, body['id'])}
+                    else:
+                        extra = {'versions': []}
+                    ok, message = versions is not None, '这条记忆不存在或已经删除。'
                 elif url.path == '/api/memory/restore-version':
                     index = body.get('index')
                     ok, message = (tools.panel_restore_version(body['id'], index) if type(index) is int
@@ -3464,6 +3666,10 @@ def make_handler(hub, token):
                 self._post_windows_apps(body)
             elif url.path == '/api/peter-page':
                 self._post_peter_page(body)
+            elif url.path == '/api/brain/health/scan':
+                self._post_brain_health_scan(body)
+            elif url.path == '/api/brain/health/settings':
+                self._post_brain_health_settings(body)
             elif url.path == '/api/pending-approvals':
                 try:
                     self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
@@ -3497,6 +3703,8 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
         background = chat.cfg.models.startup_choice('background')
         hub.background_running = background[0] if background else None
         hub.refresh_models()
+    from brain_health import start_health_scheduler
+    start_health_scheduler(hub)
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
     files = files or chat.tools

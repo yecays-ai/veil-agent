@@ -1,5 +1,11 @@
 # 当前状态
 
+## P4/P5 · VEIL Brain 管理中心与全局工作区迁移（`ticket/451-p4-p5-brain-workspace`，待验收）
+
+- **目标**：正式接入 P4/P5 六大 Brain 管理工作区、四套清透主题、两级 Nocturne 导航、独立伴随窗口（含位置/尺寸/置顶记忆）、Peter 头像持久化（`userData/avatar.*`）与三层自定义聊天 CSS（`userData/chat-custom.css`），完整保留 `#446`/`#448`/`#449` 现有交互与配置回归契约，并与并行 `P6-S2`（`#450`）核心写库文件解耦。
+- **现状**：已在隔离工作树完成后端只读引擎（`brain_p4_api.py` / `brain_health.py`）与 Electron/前端全部代码接入（见 [工单 451](docs/tickets/451-p4-p5-brain-workspace.md)）；待 Lan 运行 `打开-VEIL隔离预览.cmd` 视觉验收后合入 `main`。
+- **验证**：67 项 Python 后端测试全绿；37 项桌面 Node 单测全绿；Windows Electron `desktop/tests/smoke.cjs` 实测通过（exit 0）。
+
 ## P6-S0 · 基线同步与 P3-4 确定性清理补丁入库（`ticket/449-p6-s0-baseline-sync`）
 
 - **目标**：同步 P3-4 维护窗口已验证的 `scripts/p3_4_cleanup.py` 确定性排序补丁、P3-4 验收报告、P6-0/P6-4 审计与整合设计报告，并对齐 `main` 最新状态（`#446` + `#448` + P3-4 + P6-4）。

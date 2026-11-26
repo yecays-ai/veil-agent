@@ -139,6 +139,49 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       json(res,{...mcpState,revision:mcpRevision,services:mcpState.services.map(item=>({...item,status:mcpState.enabled&&item.enabled?'connected':'off',tools:mcpState.enabled&&item.enabled?['echo']:[],error:null}))});
     } else if (url.pathname === '/api/activity') {
       json(res, { enabled: false });
+    } else if (url.pathname === '/api/budget/summary') {
+      const totals = { spent_cny: '0.18', limit_cny: '30', remaining_cny: '29.82' };
+      json(res, { schema_version: 1, day, month: day.slice(0, 7), daily: totals, monthly: { ...totals, limit_cny: '800', remaining_cny: '799.82' }, pending_cny: '0.00', ledger_unverified: false, categories: [{ id: 'autonomy', spent_cny: '0.18', pending_cny: '0.00', limit_cny: '10' }], model_summary: 'Fictional model: ¥0.18' });
+    } else if (url.pathname === '/api/config/inventory') {
+      const fields = ['id','domain','module','item','key','source','storage','default','effective','range','modify','precedence','timing','persistence','risk','category','page','effective_class','effective_check'];
+      const fixture = Object.fromEntries(fields.map(k => [k, '']));
+      json(res, { schema_version: 1, audit: '#446', rows: [{ ...fixture, id: 'fixture-chat', item: 'fixture.chat', key: 'fixture.chat', domain: 'D', category: 'U', effective_class: 'source_default' }] });
+    } else if (url.pathname === '/api/brain/overview') {
+      json(res, {
+        schema_version: 1, source: 'brain.db',
+        counts: { active: 128, pinned: 14, archived: 9, tombstones: 2, pending_vector: 0, events_total: 18, events_pending_story: 1, events_pending_review: 0, week_added: 6, week_updated: 4 },
+        trends: { '7d': [{ label: 'Mon', added: 1, updated: 0 }, { label: '今天', added: 2, updated: 1 }], '30d': [{ label: '第1周', added: 4, updated: 2 }] },
+        layers: [{ id: 'core', name: 'Brain 核心存储', status_text: '已启用 · 就绪 · 运行中', tone: 'good', detail: 'brain.db 唯一读写权威' }],
+        activities: [{ time: new Date().toISOString(), kind: 'write', title: '整理回忆 · 书店约定', detail: '示例活动轨迹', memory_id: 'fictional-mem-1' }],
+        health_summary: { status: 'good', status_label: '系统健康，零异常', good_count: 9, warn_count: 0, error_count: 0 },
+        health_scanned_at: new Date().toISOString(),
+      });
+    } else if (url.pathname === '/api/memory/library') {
+      json(res, { total: 1, filtered: 1, offset: 0, limit: 30, source: 'brain.db', items: [{ memory_id: 'fictional-mem-1', title: '周末书店散步', updated_at: new Date().toISOString(), kind: 'memory', bucket: 'dynamic', pinned: true, recalled: 3, version_count: 1, sha256: 'abc123456789', why: '约定周六去旧书店', body: '周五晚上约定去松风旧书店买手绘地图。', event: { event_id: 'fictional-ev-1', title: '书店与雨天' } }] });
+    } else if (url.pathname === '/api/memory/events') {
+      json(res, { events: [{ event_id: 'fictional-ev-1', title: '书店与雨天', summary: '约定下雨天逛松风旧书店。', first_at: new Date().toISOString(), last_at: new Date().toISOString() }] });
+    } else if (url.pathname === '/api/memory/event') {
+      json(res, { event: { event_id: 'fictional-ev-1', title: '书店与雨天', story: '两人约定下雨天去松风旧书店买地图。', first_at: new Date().toISOString(), last_at: new Date().toISOString() }, linked_memories: [{ memory_id: 'fictional-mem-1', title: '周末书店散步' }], stages: [{ stage_title: '起因', summary: '聊到下雨天喜欢看老地图。' }] });
+    } else if (url.pathname === '/api/peter-page/versions') {
+      json(res, { versions: [{ time: new Date().toISOString(), reason: '确认周末出行偏好', diff: ['- 旧记录', '+ 新增旧书店偏好'] }] });
+    } else if (url.pathname === '/api/diagnostics/trace') {
+      json(res, { turns: [{ request_id: 'req-demo-1', model: 'fictional-model', time: new Date().toISOString(), retrieval_mode: 'hybrid', recall: { retrieval_mode: 'hybrid', relationship_base: ['关系底座'], opening: ['fictional-mem-1'], items: [{ memory_id: 'fictional-mem-1', title: '周末书店散步', score: 0.92 }] }, costs: { total_cost: '0.004' } }] });
+    } else if (url.pathname === '/api/brain/health' || url.pathname === '/api/brain/health/scan') {
+      json(res, {
+        settings: { enabled: true, schedule: 'daily_night', idle_only: true },
+        report: {
+          schema_version: 1, scanned_at: new Date().toISOString(), duration_ms: 18, read_only: true,
+          stats: { active_memories: 128, events_total: 18, vectors_total: 128 },
+          summary: { status: 'good', status_label: '系统健康，零异常', total_checks: 9, good_count: 9, warn_count: 0, error_count: 0 },
+          checks: [{ id: 'H-1', title: '结构规范与元数据完整性', severity: 'good', status_label: '全部规范', impact: '所有活跃记忆结构完整。', object: 'memories', basis: '确定性字段核对', source: 'brain.db (?mode=ro)', confidence: '高可信', evidences: [] }],
+        },
+      });
+    } else if (url.pathname === '/api/brain/health/settings') {
+      const body = await readBody(req);
+      json(res, { ok: true, settings: body });
+    } else if (url.pathname === '/api/brain/health/export') {
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.end('# VEIL Brain 只读健康报告（预览示例）\n');
     } else {
       json(res, { error: 'not found' }, 404);
     }
@@ -376,6 +419,36 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   assert.equal(await detachedMCP.webContents.executeJavaScript('!document.querySelector(".msg-voice audio[src], .msg-image[src], .msg-file-image[src], .msg-sticker[src]")'),true,'non-chat detached pages must not load hidden chat media');
   await detachedMCP.webContents.executeJavaScript('setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
   await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
+  // Stage 3 P4/P5 Brain, Themes, Detached Pin & Custom CSS E2E checks
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-home]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-home-view")?.hidden && document.querySelector("#brain-home-view .kpi-card") && !document.querySelector("#subnav-shell")?.hidden && document.querySelectorAll("#subnav-track .subnav-tab").length === 6'), 'brain-home or Nocturne 6-tab subnav did not render');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=brain-health]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-health-view")?.hidden && document.querySelector("#brain-health-view .health-summary-banner") && document.querySelector("#brain-health-view details.tech-evidence")'), 'brain-health did not render summary or collapsible evidence');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=workspace-events]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#workspace-events-view")?.hidden && document.querySelector("#workspace-events-view")?.textContent.includes("周末书店散步")'), 'workspace-events linked memories missing');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=workspace-budget]").click()');
+  await wait(() => chat.webContents.executeJavaScript('document.querySelector("#workspace-budget-view")?.textContent.includes("29.82")'), 'workspace-budget did not render');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-visual-theme-pick=gold]").click()');
+  await wait(() => chat.webContents.executeJavaScript('document.documentElement.dataset.visualTheme === "gold" && document.documentElement.dataset.theme === "light"'), 'visual theme gold failed');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-visual-theme-pick=night]").click()');
+  await wait(() => chat.webContents.executeJavaScript('document.documentElement.dataset.visualTheme === "night" && document.documentElement.dataset.theme === "dark"'), 'visual theme night failed');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-visual-theme-pick=rose]").click()');
+
+  assert.equal(await chat.webContents.executeJavaScript('window.veilDesktop.detachView("chat",{x:760,y:320})'), true, 'chat detach for pin test failed');
+  let pinnedChat;
+  await wait(() => { pinnedChat = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=chat')); return pinnedChat?.isVisible(); }, 'detached chat for pin check missing');
+  await wait(() => pinnedChat.webContents.executeJavaScript('!!document.querySelector("#detached-pin")'), 'detached pin button missing');
+  await pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").click()');
+  await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="true"'), 'detached pin toggle did not persist');
+  await pinnedChat.webContents.executeJavaScript('setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
+  await wait(() => pinnedChat.isDestroyed(), 'detached chat did not merge back');
+
+  if (process.env.VEIL_WORKSPACE_PREVIEW === '1') {
+    clearTimeout(failSafe);
+    console.log('PREVIEW READY: keeping isolated workspace preview open until closed.');
+    return;
+  }
+
   console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');
   clearTimeout(failSafe);
   server.close(); app.exit(0);

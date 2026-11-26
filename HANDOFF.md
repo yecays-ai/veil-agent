@@ -1,5 +1,16 @@
 # HANDOFF
 
+## Ticket #451 · P4/P5 VEIL Brain 管理中心与全局工作区（`ticket/451-p4-p5-brain-workspace`）
+
+- **基线**：基于 `origin/main`（`56abe3f`，含 `#446`、`#448`、`#449`）。未修改任何 `P6-S2`（`#450`）占用文件，也未接触正式 `VEIL/veil-agent` 实例与数据。
+- **本单交付**：
+  - `brain_p4_api.py`（`GET /api/brain/overview`、`GET /api/memory/library`、`GET /api/peter-page/versions`）、`brain_health.py`（严格 `?mode=ro` 的 P5 `H-1..H-9` 只读健康检查 + 脱敏导出 + 周期巡检调度）及 `web_agent.py`（含 `expected_sha256` HTTP `409` 编辑锁、事件关联记忆、`/api/budget/summary` 与 `/api/config/inventory`）。
+  - 统一桌面工作区：`desktop/workspace-shell.css`（四套主题与 Nocturne 二级导航岛）、`desktop/chat-theme.css`、`desktop/workspace-shell.js`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js`、`desktop/workspace-inventory.js`。
+  - 独立窗口与个性化升级：`desktop/main.cjs` / `desktop/desktop-preload.cjs` / `desktop/chat.js`（`userData/avatar.*` 头像持久化与裁剪、三层 `userData/chat-custom.css`、`view:set-pinned` 窗口置顶、MCP 开关卡片与折叠详情）。
+  - 工单与文档：`docs/tickets/451-p4-p5-brain-workspace.md` 与根目录 `打开-VEIL隔离预览.cmd`。
+- **预览方法**：关闭现有预览窗口后，直接运行隔离工作树根目录 `打开-VEIL隔离预览.cmd` 看真实 Electron 视觉效果（仅虚构后端数据）。
+- **待验收项**：等待 Lan 在隔离预览确认视觉风格、宽窄/独立伴随小窗体验及 P4/P5 六工作区功能；确认后方可发起 PR 合并。
+
 ## P6-S0 · `ticket/449-p6-s0-baseline-sync`（施工/验收交接）
 
 - **基线**：基于 `origin/main`（`2408bb6`，含 `#446` 全局配置审计与 `#448` 全局管理中心首批只读配置总览及桌面回归）。

@@ -8,22 +8,27 @@
   <link rel="stylesheet" href="chat.css">
   <link rel="stylesheet" href="desktop-redesign.css">
   <link rel="stylesheet" href="desktop-visual-system.css">
+  <link rel="stylesheet" href="workspace-shell.css">
+  <link rel="stylesheet" href="workspace-mcp.css">
+  <link rel="stylesheet" href="chat-theme.css">
   <link rel="stylesheet" href="glass.css">
   <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
   <div id="window-background" aria-hidden="true"></div>
-  <header id="detached-header" class="detached-header" hidden><div class="detached-person"><img class="peter-avatar" src="assets/pep.png" alt=""><span><strong id="detached-title">Peter</strong></span></div><button id="merge-view" type="button">收回主窗口</button></header>
+  <header id="detached-header" class="detached-header" hidden><div class="detached-person"><button type="button" id="detached-avatar-trigger" class="avatar-btn" title="更换头像"><img class="peter-avatar" src="assets/pep.png" alt=""></button><span><strong id="detached-title">Peter</strong></span></div><div class="detached-actions"><button id="detached-pin" type="button" aria-pressed="false" title="窗口始终置顶">置顶</button><button id="detached-css" type="button" title="打开聊天外观 CSS">样式</button><button id="detached-avatar" type="button" title="自定义 Peter 头像">头像</button><button id="merge-view" type="button">收回主窗口</button></div></header>
   <div id="ended">服务已退出</div>
   <div id="offline">本机服务断开<button id="reconnect" type="button">重新连接</button></div>
   <header class="topbar">
-    <div class="identity"><div><h1>Peter</h1><small id="header-model-name">正在连接</small><span id="title" hidden>Peter</span></div></div>
+    <div class="identity"><div><h1>Peter</h1><small id="header-model-name">正在连接</small><span id="topbar-crumb" class="topbar-crumb"></span><span id="title" hidden>Peter</span></div></div>
+    <div id="subnav-shell" class="curved-subnav-shell" hidden><nav class="subnav-island" aria-label="二级工作区导航"><div id="subnav-track" class="subnav-track"><div id="subnav-indicator" class="subnav-indicator" aria-hidden="true"></div></div></nav></div>
     <div class="header-status" aria-label="Peter 状态">
       <span class="header-status-item"><i id="autonomy-indicator" class="status-dot is-pending"></i><span>自主活动：<b id="header-autonomy-status">读取中</b></span></span>
       <span class="header-wake"><span data-lucide="clock" data-size="14"></span><span>下次唤醒</span><b id="header-next-wake">读取中…</b></span>
       <label class="header-model" title="下一句生效"><span data-lucide="cpu" data-size="14"></span><select id="model-switch" aria-label="Peter 用的模型" disabled><option>读取中…</option></select></label>
+      <div class="theme-pills" role="group" aria-label="主题色板"><button type="button" class="theme-pill-btn t-rose" data-visual-theme-pick="rose" aria-pressed="true" title="烟粉珍珠白">粉</button><button type="button" class="theme-pill-btn t-gold" data-visual-theme-pick="gold" aria-pressed="false" title="香槟奶油白">金</button><button type="button" class="theme-pill-btn t-blue" data-visual-theme-pick="blue" aria-pressed="false" title="雾蓝银灰">蓝</button><button type="button" class="theme-pill-btn t-night" data-visual-theme-pick="night" aria-pressed="false" title="深色夜幕">夜</button></div>
     </div>
-    <div class="top-actions"><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="rail-toggle" type="button" aria-label="显示今日与 Peter 的活动" aria-pressed="false" title="显示今日与 Peter 的活动"><span data-lucide="panel-right-open"></span></button><button id="expand" aria-label="铺满桌面，再点恢复小窗" title="铺满桌面，再点恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
+    <div class="top-actions"><button id="detach-current-btn" class="detach-action-btn" type="button" aria-label="作为独立小窗弹出" title="弹出为独立窗口">独立小窗</button><button id="favorites-filter" type="button" aria-pressed="false" aria-label="只看收藏的消息" title="只看收藏的消息"><span data-lucide="star"></span></button><button id="rail-toggle" type="button" aria-label="显示今日与 Peter 的活动" aria-pressed="false" title="显示今日与 Peter 的活动"><span data-lucide="panel-right-open"></span></button><button id="expand" aria-label="铺满桌面，再点恢复小窗" title="铺满桌面，再点恢复小窗"><span data-lucide="maximize-2"></span></button><button id="collapse" aria-label="收起聊天窗口" title="收起"><span data-lucide="minimize-2"></span></button></div>
   </header>
   <nav class="navigation" aria-label="主要页面">
     <div class="sidebar-person"><button id="avatar-change" class="avatar-btn" type="button" aria-label="更换头像" title="点击更换头像"><img class="peter-avatar" src="assets/pep.png" alt=""></button><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><span><b>Peter</b></span><button id="sidebar-toggle" type="button" aria-label="展开侧栏" title="展开侧栏"><span data-lucide="panel-left-open"></span></button></div>
@@ -136,10 +141,9 @@
     <div class="life-shell"><aside class="life-nav surface"><div class="life-brand"><span>✦</span><div><b>生活记录中心</b><small>Peter &amp; Lan</small></div></div><div class="life-filter" role="group" aria-label="只看谁写的"><button data-life-owner="all" aria-pressed="true" title="两个人写的都显示">全部</button><button data-life-owner="Peter" aria-pressed="false" title="只看 Peter 写的">Peter</button><button data-life-owner="Lan" aria-pressed="false" title="只看你写的">Lan</button></div><div class="life-section" role="group" aria-label="记录视图"><small>记录</small><button data-life-kind="all" class="active">总览</button><button data-life-kind="event">日程</button><button data-life-kind="note">待办</button><button data-life-kind="plan">计划</button><button data-life-kind="completed">已完成</button></div><label class="life-date" hidden>查看日期<input id="life-day" type="date"></label></aside><section class="life-main"><header class="life-header"><div><h2 id="life-heading">生活记录</h2><p>把日子留在这里</p></div><button class="life-add" id="life-new">新建记录</button></header><div class="life-toolbar"><span>日程和待办</span><span id="life-count">读取记录中…</span></div><div id="life-records" class="life-records"></div></section><aside class="life-detail surface" id="life-detail"><div class="detail-empty"><span>✧</span><h3>留一点空间给今天</h3><p>选一条，或写一条</p><button id="life-detail-new">写一条记录　＋</button></div></aside></div>
   </section>
   <section id="mcp-view" class="page" data-page-view="mcp" hidden>
-    <div class="page-heading"><div><h2>MCP</h2></div><button id="mcp-refresh" type="button">刷新</button></div>
-    <article class="surface"><label class="check-row"><input id="mcp-enabled" type="checkbox">启用 MCP</label><p id="mcp-status" role="status"></p></article>
+    <div class="page-heading"><div><h2>MCP 与工具权限</h2></div><div class="tool-row"><button id="mcp-refresh" type="button">刷新</button><button id="mcp-add" type="button">添加服务</button></div></div>
+    <article class="surface mcp-master"><label class="mcp-switch-row"><input id="mcp-enabled" type="checkbox" role="switch"><span class="mcp-switch-track" aria-hidden="true"></span><span>启用 MCP 服务</span></label><p id="mcp-status" role="status"></p></article>
     <div id="mcp-list" class="mcp-list" aria-live="polite"></div>
-    <button id="mcp-add" type="button">添加服务</button>
     <form id="mcp-form" class="surface model-form" hidden>
       <h3 id="mcp-form-heading">添加本地服务</h3>
       <label>服务 ID<input id="mcp-id" required pattern="(?!.*__)[a-z](?:[a-z0-9_]*[a-z0-9])?" maxlength="32" title="小写开头，a-z 0-9 _，不以 _ 结尾" placeholder="例如 local_tools"></label>
@@ -257,8 +261,8 @@
       <div class="background-settings"><div class="section-heading"><div><h3>背景图片</h3><p id="background-name">还没选图片</p></div><div><button id="choose-background" type="button">上传图片</button><button id="clear-background" type="button" disabled>移除</button></div></div>
         <label class="setting-row range-row" for="background-opacity"><span>图片透明度</span><input id="background-opacity" type="range" min="0" max="100" step="1"><output id="background-opacity-value"></output></label>
       </div>
-      <label class="custom-css-label" for="custom-css">自定义 CSS</label><textarea id="custom-css" spellcheck="false" placeholder="/* 例如：修改界面圆角或文字颜色 */&#10;.surface { border-radius: 18px; }" maxlength="20000"></textarea>
-      <div class="custom-css-actions"><button id="apply-css" type="button">应用 CSS</button></div>
+      <label class="custom-css-label" for="custom-css">自定义 CSS（实时同步到 userData/chat-custom.css）</label><textarea id="custom-css" spellcheck="false" placeholder="/* 例如：修改聊天气泡圆角、字体或背景 */&#10;.surface { border-radius: 18px; }" maxlength="20000"></textarea>
+      <div class="custom-css-actions"><button id="apply-css" type="button">保存并应用 CSS</button><button id="open-custom-css-file" type="button">打开文件</button><button id="reload-custom-css" type="button">重载</button><button id="open-avatar-modal" type="button">自定义头像</button></div>
       <label class="setting-row range-row" for="pet-size"><span>Peter 大小</span><input id="pet-size" type="range" min="160" max="720" step="1"><output id="pet-size-value"></output></label>
       <p class="setting-hint">拖四角可调大小</p>
     </article>
@@ -307,6 +311,12 @@
       <footer><button type="submit" id="virtual-card-submit"></button></footer>
     </form>
   </dialog>
+  <div id="veil-modal-backdrop" class="veil-modal-backdrop" hidden>
+    <div id="veil-modal-card" class="veil-modal-card" role="dialog" aria-modal="true" aria-labelledby="veil-modal-title">
+      <div class="section-heading"><h3 id="veil-modal-title">设置</h3><button id="veil-modal-close" type="button" class="quiet-button" aria-label="关闭">×</button></div>
+      <div id="veil-modal-body"></div>
+    </div>
+  </div>
   <aside id="desktop-rail" class="desktop-rail" aria-label="今天与 Peter">
     <header class="rail-date"><strong id="rail-date-label"></strong><span id="rail-weekday"></span></header>
     <section class="rail-section rail-today"><div class="rail-heading"><h2>今天</h2><button type="button" data-rail-page="life">全部记录</button></div><button class="rail-row" type="button" data-rail-page="life"><span class="rail-dot warm"></span><span><b>生活记录</b><small id="rail-life-count">打开今天的记录</small></span><span data-lucide="chevron-right"></span></button></section>
@@ -320,5 +330,9 @@
   <script src="peter-page.js"></script>
   <script src="diagnostics-page.js"></script>
   <script src="fold-settings.js"></script>
+  <script src="workspace-inventory.js"></script>
+  <script src="workspace-budget.js"></script>
+  <script src="workspace-brain.js"></script>
+  <script src="workspace-shell.js"></script>
 </body>
 </html>
