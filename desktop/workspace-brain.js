@@ -87,10 +87,13 @@
   // 1. P4 Memory Overview (brain-home)
   // =========================================================================
   async function renderBrainHome(host, req) {
-    host.replaceChildren(el('p', '', '正在汇总 VEIL Brain 概览数据…'));
-    const { ok, data } = await reqJson(req, '/api/brain/overview');
+    host.replaceChildren(el('p', '', '正在汇总 VEIL Brain 记忆监控数据…'));
+    const [{ ok, data }, { ok: gOk, data: gData }] = await Promise.all([
+      reqJson(req, '/api/brain/overview'),
+      reqJson(req, '/api/brain/growth?range=7d'),
+    ]);
     if (!ok || !data || !data.counts) {
-      host.replaceChildren(renderEmptyState('暂时无法读取记忆概览', '请确认当前角色目录与后端服务正常。'));
+      host.replaceChildren(renderEmptyState('暂时无法读取记忆监控数据', '请确认当前角色目录与后端服务正常。'));
       return;
     }
 
@@ -98,126 +101,373 @@
     const hSum = data.health_summary;
     healthWarnFlag = Boolean(hSum && (hSum.warn_count || hSum.error_count));
 
+    // 1. Top KPI row
     const kpiGrid = el('div', 'kpi-grid');
     const kpiDefs = [
       { label: '活跃记忆', val: c.active ?? 0, sub: `置顶 ${c.pinned ?? 0} · 归档 ${c.archived ?? 0}`, page: 'memory' },
-      { label: '共同经历', val: c.events_total ?? 0, sub: `待重整 ${c.events_pending_story ?? 0} · 待复核 ${c.events_pending_review ?? 0}`, page: 'workspace-events' },
-      { label: '本周动态', val: `+${c.week_added ?? 0} / 改${c.week_updated ?? 0}`, sub: `待补向量 ${c.pending_vector ?? 0} · 墓碑 ${c.tombstones ?? 0}`, page: 'brain-recall' },
-      {
-        label: '健康巡检',
-        val: hSum ? (hSum.error_count ? `异常 ${hSum.error_count}` : (hSum.warn_count ? `关注 ${hSum.warn_count}` : '良好')) : '待首次检查',
-        sub: data.health_scanned_at ? `最近 ${formatTime(data.health_scanned_at)}` : '点击进入只读巡检',
-        page: 'brain-health',
-      },
+      { label: '共同经历', val: c.events_total ?? 0, sub: `待重整 ${c.events_pending_story ?? 0} · 待复核 ${c.events_pending_review ?? 0}`, page: 'memory' },
+      { label: '本周新增', val: `+${c.week_added ?? 0}`, sub: `待补向量 ${c.pending_vector ?? 0} · 墓碑 ${c.tombstones ?? 0}` },
+      { label: '本周修订', val: `${c.week_updated ?? 0}`, sub: `最后更新 ${formatTime((gData && gData.summary && gData.summary.last_updated_at) || new Date().toISOString())}` },
     ];
     for (const k of kpiDefs) {
       const card = el('article', 'veil-card kpi-card');
       const top = el('div', 'kpi-top');
-      top.append(el('span', '', k.label), el('span', 'kpi-arrow', '→'));
+      top.append(el('span', '', k.label), k.page ? el('span', 'kpi-arrow', '→') : el('span', '', ''));
       card.append(top, el('div', 'kpi-val', k.val), el('div', 'kpi-sub', k.sub));
-      card.addEventListener('click', () => window.veilWorkspace?.go(k.page));
+      if (k.page) card.addEventListener('click', () => window.veilWorkspace?.go(k.page));
       kpiGrid.append(card);
     }
 
-    const overviewGrid = el('div', 'overview-grid');
+    // 2. Six-Layer Memory System (Top-level status & real toggles)
+    const layerCard = el('article', 'veil-card');
+    const layerHead = el('div', 'veil-card-head');
+    layerHead.append(el('h3', '', '六层记忆系统'), el('span', 'muted', '运行状态与控制'));
+    const layerGrid = el('div', 'layer-list');
+    for (const layer of data.layers || []) {
+      const item = el('div', 'layer-item');
+      const top = el('div', 'layer-item-top');
+      top.append(el('strong', '', layer.name));
+      if (layer.toggle_key && !layer.protected) {
+        const sw = el('button', 'workspace-switch');
+        sw.type = 'button';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', String(Boolean(layer.enabled)));
+        sw.title = layer.enabled ? '点击关闭' : '点击启用';
+        sw.append(el('span', 'workspace-switch-thumb'));
+        sw.addEventListener('click', async () => {
+          const nextVal = !Boolean(layer.enabled);
+          sw.disabled = true;
+          const res = await reqJson(req, '/api/brain/layer-toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layer_id: layer.id, enabled: nextVal }),
+          });
+          sw.disabled = false;
+          if (!res.ok || !res.data?.ok) {
+            alert(res.data?.error || '切换失败，已恢复原状态');
+            return;
+          }
+          layer.enabled = Boolean(res.data.enabled);
+          sw.setAttribute('aria-checked', String(layer.enabled));
+          renderBrainHome(host, req);
+        });
+        top.append(sw);
+      } else {
+        top.append(pill(layer.status_text || '受保护', layer.tone || 'good'));
+      }
+      item.append(top, el('small', '', layer.detail || ''));
+      if (layer.protected && layer.protected_reason) {
+        item.append(el('small', 'muted', layer.protected_reason));
+      }
+      if (layer.id === 'cognition' && typeof layer.budget_max === 'number') {
+        const meter = el('div', 'budget-meter');
+        const fill = el('div');
+        const pct = Math.min(100, Math.round(((layer.budget_used || 0) / Math.max(1, layer.budget_max)) * 100));
+        fill.style.width = `${pct}%`;
+        fill.style.background = pct > 90 ? 'var(--bad, #c0392b)' : 'var(--veil-accent)';
+        meter.append(fill);
+        item.append(meter);
+      }
+      layerGrid.append(item);
+    }
+    layerCard.append(layerHead, layerGrid);
 
-    // Left: Dual-stack trend chart + 6 layers
-    const leftCol = el('div', 'workspace-content');
+    // 3. Memory Growth Analysis & One-Click Report
     const chartCard = el('article', 'veil-card');
     const chartHead = el('div', 'veil-card-head');
-    chartHead.append(el('h3', '', '记忆增长与修订趋势'));
-    const seg = el('div', 'seg-tabs');
-    const btn7d = el('button', '', '近 7 天');
-    const btn30d = el('button', '', '近 4 周');
-    btn7d.type = btn30d.type = 'button';
-    seg.append(btn7d, btn30d);
-    chartHead.append(seg);
+    chartHead.append(el('h3', '', '记忆增长分析'));
+    const rangeSeg = el('div', 'seg-tabs');
+    const rangeBtns = [
+      { key: 'today', label: '今日' },
+      { key: '7d', label: '近 7 天' },
+      { key: '30d', label: '近 30 天' },
+      { key: 'custom', label: '自定义' },
+    ];
+    let currentRange = '7d';
+    let currentView = 'added_updated';
+    let currentGrowth = gData || { summary: {}, days: [] };
 
-    const legend = el('div', 'chart-legend');
-    const l1 = el('span');
-    l1.append(el('i', 'legend-dot new'), '新增记忆');
-    const l2 = el('span');
-    l2.append(el('i', 'legend-dot revised'), '修订更新');
-    legend.append(l1, l2);
+    const customWrap = el('div', 'inline-controls');
+    customWrap.hidden = true;
+    const fromInp = el('input', 'veil-input');
+    fromInp.type = 'date';
+    const toInp = el('input', 'veil-input');
+    toInp.type = 'date';
+    const applyCustom = btn('应用', 'sm');
+    customWrap.append(fromInp, el('span', '', '至'), toInp, applyCustom);
+
+    const viewSeg = el('div', 'seg-tabs');
+    const viewDefs = [
+      { key: 'added_updated', label: '新增与修订' },
+      { key: 'cumulative', label: '累计与净增长' },
+      { key: 'events', label: '事件新建与更新' },
+      { key: 'types', label: '类型分布' },
+    ];
 
     const barsWrap = el('div', 'growth-bars-wrap');
     const axisX = el('div', 'growth-axis-x');
-    const drawTrend = mode => {
-      btn7d.setAttribute('aria-pressed', String(mode === '7d'));
-      btn30d.setAttribute('aria-pressed', String(mode === '30d'));
-      const series = (data.trends && data.trends[mode]) || [];
-      const maxVal = Math.max(1, ...series.map(pt => (pt.added || 0) + (pt.updated || 0)));
+    const dayDrillBox = el('div', 'veil-subpanel');
+    dayDrillBox.hidden = true;
+
+    const loadDayChanges = async dateStr => {
+      dayDrillBox.hidden = false;
+      dayDrillBox.replaceChildren(el('p', 'muted', `正在加载 ${dateStr} 的实际记忆变更…`));
+      const res = await reqJson(req, `/api/brain/day-changes?date=${encodeURIComponent(dateStr)}`);
+      if (!res.ok || !res.data) {
+        dayDrillBox.replaceChildren(el('p', 'muted', '无法加载当日变更明细。'));
+        return;
+      }
+      const head = el('div', 'veil-card-head');
+      head.append(el('strong', '', `${dateStr} 实际变更明细（${res.data.changes.length} 条）`));
+      const closeBtn = btn('收起', 'sm');
+      closeBtn.addEventListener('click', () => { dayDrillBox.hidden = true; });
+      head.append(closeBtn);
+      const list = el('div', 'stack-sm');
+      if (!res.data.changes.length) {
+        list.append(el('p', 'muted', '当天无实际记忆或事件内容变更。'));
+      } else {
+        for (const ch of res.data.changes.slice(0, 20)) {
+          const row = el('div', 'layer-item');
+          row.append(el('strong', '', `[${ch.kind_label}] ${ch.title || ch.memory_id}`), el('small', '', ch.summary || ''));
+          list.append(row);
+        }
+      }
+      if (res.data.maintenance_logs && res.data.maintenance_logs.length) {
+        const det = el('details');
+        det.append(el('summary', '', `已折叠 ${res.data.maintenance_logs.length} 条无内容变更的系统维护日志`));
+        for (const m of res.data.maintenance_logs) {
+          det.append(el('div', 'muted', `${m.time} · ${m.operation} (${m.status})`));
+        }
+        list.append(det);
+      }
+      dayDrillBox.replaceChildren(head, list);
+    };
+
+    const drawGrowthChart = () => {
+      const days = currentGrowth.days || [];
       barsWrap.replaceChildren();
       axisX.replaceChildren();
-      for (const pt of series) {
+      if (currentView === 'types') {
+        const byType = (currentGrowth.summary && currentGrowth.summary.by_type) || {};
+        const entries = Object.entries(byType);
+        if (!entries.length) {
+          barsWrap.append(el('p', 'muted', '暂无记忆类型分布数据'));
+          return;
+        }
+        const maxT = Math.max(1, ...entries.map(([, v]) => v));
+        for (const [k, v] of entries) {
+          const col = el('div', 'growth-col');
+          const segNew = el('div', 'bar-seg-new');
+          segNew.style.height = `${Math.round((v / maxT) * 116)}px`;
+          segNew.title = `${k}: ${v}`;
+          col.append(segNew);
+          barsWrap.append(col);
+          axisX.append(el('span', '', `${k}(${v})`));
+        }
+        return;
+      }
+
+      const maxVal = Math.max(
+        1,
+        ...days.map(pt => {
+          if (currentView === 'cumulative') return pt.cumulative || 0;
+          if (currentView === 'events') return (pt.events_created || 0) + (pt.events_updated || 0);
+          return (pt.added || 0) + (pt.updated || 0);
+        }),
+      );
+
+      for (const pt of days) {
         const col = el('div', 'growth-col');
+        col.style.cursor = 'pointer';
+        col.title = `点击查看 ${pt.date} 变更明细`;
+        col.addEventListener('click', () => loadDayChanges(pt.date));
         const stack = el('div', 'bar-stack');
-        const hAdded = Math.round(((pt.added || 0) / maxVal) * 116);
-        const hUpd = Math.round(((pt.updated || 0) / maxVal) * 116);
-        const segNew = el('div', 'bar-seg-new');
-        segNew.style.height = `${hAdded}px`;
-        segNew.title = `${pt.label} 新增 ${pt.added || 0}`;
-        const segRev = el('div', 'bar-seg-revised');
-        segRev.style.height = `${hUpd}px`;
-        segRev.title = `${pt.label} 修订 ${pt.updated || 0}`;
-        stack.append(segNew, segRev);
+        if (currentView === 'cumulative') {
+          const hCum = Math.round(((pt.cumulative || 0) / maxVal) * 116);
+          const segNew = el('div', 'bar-seg-new');
+          segNew.style.height = `${hCum}px`;
+          segNew.title = `${pt.date} 累计 ${pt.cumulative || 0}（净增长 ${pt.net_growth >= 0 ? '+' : ''}${pt.net_growth || 0}）`;
+          stack.append(segNew);
+        } else if (currentView === 'events') {
+          const hEc = Math.round(((pt.events_created || 0) / maxVal) * 116);
+          const hEu = Math.round(((pt.events_updated || 0) / maxVal) * 116);
+          const segNew = el('div', 'bar-seg-new');
+          segNew.style.height = `${hEc}px`;
+          segNew.title = `${pt.date} 新建事件 ${pt.events_created || 0}`;
+          const segRev = el('div', 'bar-seg-revised');
+          segRev.style.height = `${hEu}px`;
+          segRev.title = `${pt.date} 更新事件 ${pt.events_updated || 0}`;
+          stack.append(segNew, segRev);
+        } else {
+          const hAdded = Math.round(((pt.added || 0) / maxVal) * 116);
+          const hUpd = Math.round(((pt.updated || 0) / maxVal) * 116);
+          const segNew = el('div', 'bar-seg-new');
+          segNew.style.height = `${hAdded}px`;
+          segNew.title = `${pt.date} 新增 ${pt.added || 0}`;
+          const segRev = el('div', 'bar-seg-revised');
+          segRev.style.height = `${hUpd}px`;
+          segRev.title = `${pt.date} 修订 ${pt.updated || 0}`;
+          stack.append(segNew, segRev);
+        }
         col.append(stack);
         barsWrap.append(col);
         axisX.append(el('span', '', pt.label));
       }
     };
-    btn7d.addEventListener('click', () => drawTrend('7d'));
-    btn30d.addEventListener('click', () => drawTrend('30d'));
-    drawTrend('7d');
-    chartCard.append(chartHead, legend, barsWrap, axisX);
 
-    // 6-layer statuses
-    const layerCard = el('article', 'veil-card');
-    const layerHead = el('div', 'veil-card-head');
-    layerHead.append(el('h3', '', '六层记忆系统运行态'), pill('实时状态'));
-    const layerGrid = el('div', 'layer-list');
-    for (const layer of data.layers || []) {
-      const item = el('div', 'layer-item');
-      const top = el('div', 'layer-item-top');
-      top.append(el('strong', '', layer.name), pill(layer.status_text || '未知', layer.tone || ''));
-      item.append(top, el('small', '', layer.detail || ''));
-      layerGrid.append(item);
+    const reloadGrowth = async (rangeKey, fDate = '', tDate = '') => {
+      currentRange = rangeKey;
+      for (const b of rangeSeg.children) {
+        b.setAttribute('aria-pressed', String(b.dataset.range === rangeKey));
+      }
+      customWrap.hidden = rangeKey !== 'custom';
+      const qs = new URLSearchParams({ range: rangeKey });
+      if (fDate) qs.set('from_date', fDate);
+      if (tDate) qs.set('to_date', tDate);
+      const res = await reqJson(req, `/api/brain/growth?${qs.toString()}`);
+      if (res.ok && res.data) {
+        currentGrowth = res.data;
+        drawGrowthChart();
+      }
+    };
+
+    for (const rb of rangeBtns) {
+      const b = el('button', '', rb.label);
+      b.type = 'button';
+      b.dataset.range = rb.key;
+      b.setAttribute('aria-pressed', String(rb.key === currentRange));
+      b.addEventListener('click', () => {
+        if (rb.key === 'custom') {
+          currentRange = 'custom';
+          customWrap.hidden = false;
+          for (const ch of rangeSeg.children) ch.setAttribute('aria-pressed', String(ch.dataset.range === 'custom'));
+        } else {
+          reloadGrowth(rb.key);
+        }
+      });
+      rangeSeg.append(b);
     }
-    layerCard.append(layerHead, layerGrid);
-    leftCol.append(chartCard, layerCard);
+    applyCustom.addEventListener('click', () => reloadGrowth('custom', fromInp.value, toInp.value));
+    chartHead.append(rangeSeg);
 
-    // Right: Recent Brain timeline
-    const rightCol = el('article', 'veil-card');
+    for (const vd of viewDefs) {
+      const b = el('button', '', vd.label);
+      b.type = 'button';
+      b.dataset.view = vd.key;
+      b.setAttribute('aria-pressed', String(vd.key === currentView));
+      b.addEventListener('click', () => {
+        currentView = vd.key;
+        for (const ch of viewSeg.children) ch.setAttribute('aria-pressed', String(ch.dataset.view === currentView));
+        drawGrowthChart();
+      });
+      viewSeg.append(b);
+    }
+
+    // One-click Growth & Change Report controls
+    const reportBar = el('div', 'inline-controls');
+    const chkContent = el('input');
+    chkContent.type = 'checkbox';
+    chkContent.checked = true;
+    const lblContent = el('label', 'inline-check');
+    lblContent.append(chkContent, '包含记忆正文');
+    const chkHealth = el('input');
+    chkHealth.type = 'checkbox';
+    const lblHealth = el('label', 'inline-check');
+    lblHealth.append(chkHealth, '合并健康巡检');
+
+    const copySummaryBtn = btn('复制摘要报告', 'sm');
+    const copyFullBtn = btn('复制完整开发诊断报告', 'primary sm');
+    const exportBtn = btn('导出报告', 'sm');
+    const reportStatus = el('span', 'muted');
+
+    const fetchAndCopyReport = async (fmt, download = false) => {
+      const s = currentGrowth.summary || {};
+      const qs = new URLSearchParams({
+        from_date: s.from_date || '',
+        to_date: s.to_date || '',
+        include_content: chkContent.checked ? '1' : '0',
+        include_health: chkHealth.checked ? '1' : '0',
+        format: fmt,
+      });
+      reportStatus.textContent = '生成中…';
+      const res = await reqJson(req, `/api/brain/growth-report?${qs.toString()}`);
+      if (!res.ok || !res.data?.markdown) {
+        reportStatus.textContent = '生成失败';
+        return;
+      }
+      if (download) {
+        const blob = new Blob([res.data.markdown], { type: 'text/markdown;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `veil-brain-growth-${s.from_date || 'report'}.md`;
+        a.click();
+        reportStatus.textContent = '已导出';
+      } else {
+        await navigator.clipboard?.writeText(res.data.markdown);
+        reportStatus.textContent = fmt === 'summary' ? '已复制摘要报告' : '已复制完整开发诊断报告';
+      }
+    };
+    copySummaryBtn.addEventListener('click', () => fetchAndCopyReport('summary', false));
+    copyFullBtn.addEventListener('click', () => fetchAndCopyReport('full', false));
+    exportBtn.addEventListener('click', () => fetchAndCopyReport('full', true));
+    reportBar.append(lblContent, lblHealth, copySummaryBtn, copyFullBtn, exportBtn, reportStatus);
+
+    drawGrowthChart();
+    chartCard.append(chartHead, customWrap, viewSeg, barsWrap, axisX, dayDrillBox, reportBar);
+
+    // 4. Embedded Health Check Summary + Expandable Full Panel
+    const healthCard = el('article', 'veil-card');
+    const healthHead = el('div', 'veil-card-head');
+    healthHead.append(el('h3', '', '健康巡检'));
+    const healthActions = el('div', 'inline-controls');
+    const expandHealthBtn = btn('展开完整巡检', 'sm');
+    const healthPanelHost = el('div');
+    healthPanelHost.hidden = true;
+    expandHealthBtn.addEventListener('click', async () => {
+      healthPanelHost.hidden = !healthPanelHost.hidden;
+      expandHealthBtn.textContent = healthPanelHost.hidden ? '展开完整巡检' : '收起巡检面板';
+      if (!healthPanelHost.hidden && !healthPanelHost.childElementCount) {
+        await renderHealthWorkspace(healthPanelHost, req);
+      }
+    });
+    healthActions.append(expandHealthBtn);
+    healthHead.append(healthActions);
+    const hSummaryText = hSum
+      ? `最近巡检：${formatTime(data.health_scanned_at)} · 状态：${hSum.status || '完成'} · 异常 ${hSum.error_count || 0} / 关注 ${hSum.warn_count || 0}`
+      : '尚未进行首次检查（点击“展开完整巡检”可执行只读巡检、查看历史报告与配置定期检查）';
+    healthCard.append(healthHead, el('p', 'muted', hSummaryText), healthPanelHost);
+
+    // 5. Recent Activities (Expandable & Collapsible Maintenance Logs)
+    const actCard = el('article', 'veil-card');
     const tlHead = el('div', 'veil-card-head');
-    tlHead.append(el('h3', '', '最近记忆与事件轨迹'));
-    const tlBtn = btn('打开记忆库', 'sm');
+    tlHead.append(el('h3', '', '近期记忆与事件轨迹'));
+    const tlBtn = btn('打开记忆档案', 'sm');
     tlBtn.addEventListener('click', () => window.veilWorkspace?.go('memory'));
     tlHead.append(tlBtn);
-    rightCol.append(tlHead);
-    const tl = el('ul', 'veil-timeline');
+    actCard.append(tlHead);
     const acts = data.activities || [];
     if (!acts.length) {
-      rightCol.append(renderEmptyState('近期暂无写入动态', '新的对话整理和事件记录会按时间出现在这里。'));
+      actCard.append(renderEmptyState('近期暂无写入动态', '新的对话整理和事件记录会按时间出现在这里。'));
     } else {
+      const list = el('div', 'stack-sm');
       for (const act of acts) {
-        const li = el('li', 'tl-item');
-        li.append(el('span', act.kind === 'event' ? 'tl-dot gold' : 'tl-dot'));
-        const card = el('button', 'tl-card');
-        card.type = 'button';
-        card.append(el('div', 'tl-title', act.title || act.kind), el('div', 'tl-meta', act.meta || formatTime(act.time)));
-        if (act.detail) card.append(el('div', 'tl-detail', act.detail));
-        card.addEventListener('click', () => {
+        const det = el('details', 'layer-item');
+        const sum = el('summary');
+        sum.append(el('strong', '', act.title || act.kind), el('small', 'muted', ` · ${act.meta || formatTime(act.time)}`));
+        det.append(sum);
+        if (act.detail) det.append(el('p', 'muted', act.detail));
+        const jumpBtn = btn('定位到记忆档案', 'sm');
+        jumpBtn.addEventListener('click', () => {
           if (act.event_id) window.veilWorkspace?.openEvent(act.event_id);
           else if (act.memory_id) window.veilWorkspace?.openMemory(act.memory_id);
         });
-        li.append(card);
-        tl.append(li);
+        det.append(jumpBtn);
+        list.append(det);
       }
-      rightCol.append(tl);
+      actCard.append(list);
     }
 
-    overviewGrid.append(leftCol, rightCol);
-    host.replaceChildren(kpiGrid, overviewGrid);
+    host.replaceChildren(kpiGrid, layerCard, chartCard, healthCard, actCard);
   }
 
   // =========================================================================
@@ -669,36 +919,123 @@
       reqJson(req, '/api/peter-page/versions'),
     ]);
     const page = pageRes.data || {};
+    const learned = page.learned || {};
     const versions = verRes.data?.items || verRes.data?.versions || [];
 
-    const grid = el('div', 'overview-grid');
-    const relCard = el('article', 'veil-card');
-    relCard.append(el('h3', '', '关系阶段与核心羁绊'));
-    const relText = page.relationship || page.relationship_base || page.summary || '（暂无关系描述）';
-    relCard.append(el('div', 'reader-prose', typeof relText === 'string' ? relText : JSON.stringify(relText, null, 2)));
-    const fullProfileBtn = btn('打开完整 Peter 档案页', 'sm');
+    const utf8Bytes = str => new Blob([String(str || '')]).size;
+    const relItems = (learned.relationship && learned.relationship.items) || [];
+    const ongoingItems = (learned.ongoing && learned.ongoing.items) || [];
+    const factsText = (learned.sections && learned.sections.facts && learned.sections.facts.text) || '';
+    const growthText = (learned.sections && learned.sections.growth && learned.sections.growth.text) || '';
+
+    const activeRel = relItems.filter(it => !it.stale && it.status !== 'outdated');
+    const staleRel = relItems.filter(it => it.stale || it.status === 'outdated');
+    const openOngoing = ongoingItems.filter(it => !['done', 'closed', 'archived'].includes(it.status || 'active'));
+    const closedOngoing = ongoingItems.filter(it => ['done', 'closed', 'archived'].includes(it.status || 'active'));
+
+    const usedBytes =
+      utf8Bytes(growthText) +
+      utf8Bytes(factsText) +
+      openOngoing.reduce((s, it) => s + utf8Bytes(it.text), 0) +
+      activeRel.reduce((s, it) => s + utf8Bytes(it.text), 0);
+    const maxBytes = learned.max_bytes || 4000;
+    const pct = Math.min(100, Math.round((usedBytes / Math.max(1, maxBytes)) * 100));
+
+    // Shared budget summary card
+    const budgetCard = el('article', 'veil-card');
+    const bHead = el('div', 'veil-card-head');
+    bHead.append(el('h3', '', '关系底座与习得认知 · 共享预算'), pill(`${usedBytes} / ${maxBytes} B (${pct}%)`, pct > 90 ? 'warn' : 'good'));
+    const meter = el('div', 'budget-meter');
+    const fill = el('div');
+    fill.style.width = `${pct}%`;
+    fill.style.background = pct > 90 ? 'var(--bad, #c0392b)' : 'var(--veil-accent)';
+    meter.append(fill);
+    const bMeta = el('div', 'inline-controls');
+    const fullProfileBtn = btn('在 Peter 档案中编辑', 'sm');
     fullProfileBtn.addEventListener('click', () => window.veilWorkspace?.go('peter'));
-    relCard.append(fullProfileBtn);
+    bMeta.append(el('span', 'muted', `最后更新：${formatTime(learned.updated_at || (learned.relationship && learned.relationship.updated_at)) || '未知'}`), fullProfileBtn);
+    budgetCard.append(bHead, meter, bMeta);
 
-    const learnedCard = el('article', 'veil-card');
-    learnedCard.append(el('h3', '', '习得偏好与约定记忆'));
-    const learnedText = page.learned_context || page.learned || '';
-    learnedCard.append(el('div', 'reader-prose', typeof learnedText === 'string' ? learnedText : JSON.stringify(learnedText, null, 2)));
+    const grid = el('div', 'overview-grid');
 
-    if (versions.length) {
-      const verTitle = el('h4', '', `近期认知版本历史 (${versions.length})`);
-      learnedCard.append(verTitle);
-      for (const v of versions.slice(0, 6)) {
-        const box = el('div', 'layer-item');
-        box.style.marginBottom = '8px';
-        box.append(el('strong', '', `${formatTime(v.time)} · ${v.reason || v.action || '自动更新'}`));
-        if (v.diff) box.append(buildLineDiffNode(v.diff));
-        learnedCard.append(box);
+    // Relationship Base
+    const relCard = el('article', 'veil-card');
+    relCard.append(el('div', 'veil-card-head'));
+    relCard.firstChild.append(el('h3', '', 'Relationship Base · 关系底座'), pill(`${activeRel.length} 条有效`));
+    if (!activeRel.length) {
+      relCard.append(el('p', 'muted', '暂无有效关系底座记录。'));
+    } else {
+      const list = el('div', 'stack-sm');
+      for (const it of activeRel) {
+        const row = el('div', 'layer-item');
+        row.append(el('div', 'reader-prose', it.text || ''));
+        if (it.updated_at || it.source) {
+          row.append(el('small', 'muted', `${formatTime(it.updated_at)} ${it.source ? '· ' + it.source : ''}`.trim()));
+        }
+        list.append(row);
       }
+      relCard.append(list);
+    }
+    if (staleRel.length) {
+      const det = el('details');
+      det.append(el('summary', '', `历史/过时关系记录 (${staleRel.length})`));
+      for (const it of staleRel) det.append(el('p', 'muted', it.text || ''));
+      relCard.append(det);
     }
 
-    grid.append(relCard, learnedCard);
-    host.replaceChildren(grid);
+    // Learned Context (Facts)
+    const factsCard = el('article', 'veil-card');
+    factsCard.append(el('div', 'veil-card-head'));
+    factsCard.firstChild.append(el('h3', '', 'Learned Context · 习得认知'), pill(`${utf8Bytes(factsText)} B`));
+    factsCard.append(el('div', 'reader-prose', factsText.trim() || '暂无习得认知记录。'));
+
+    // Ongoing
+    const ongoingCard = el('article', 'veil-card');
+    ongoingCard.append(el('div', 'veil-card-head'));
+    ongoingCard.firstChild.append(el('h3', '', 'Ongoing · 进行中事项'), pill(`${openOngoing.length} 项`));
+    if (!openOngoing.length) {
+      ongoingCard.append(el('p', 'muted', '暂无进行中事项。'));
+    } else {
+      const list = el('div', 'stack-sm');
+      for (const it of openOngoing) {
+        const row = el('div', 'layer-item');
+        row.append(el('div', 'reader-prose', it.text || ''));
+        list.append(row);
+      }
+      ongoingCard.append(list);
+    }
+    if (closedOngoing.length) {
+      const det = el('details');
+      det.append(el('summary', '', `已结束事项 (${closedOngoing.length})`));
+      for (const it of closedOngoing) det.append(el('p', 'muted', it.text || ''));
+      ongoingCard.append(det);
+    }
+
+    // Growth
+    const growthCard = el('article', 'veil-card');
+    growthCard.append(el('div', 'veil-card-head'));
+    growthCard.firstChild.append(el('h3', '', 'Growth · 成长记录'), pill(`${utf8Bytes(growthText)} B`));
+    growthCard.append(el('div', 'reader-prose', growthText.trim() || '暂无成长记录。'));
+
+    grid.append(relCard, factsCard, ongoingCard, growthCard);
+
+    // Versions & Technical Details (collapsed)
+    const techCard = el('article', 'veil-card');
+    const techDet = el('details');
+    techDet.append(el('summary', '', `认知版本历史 (${versions.length}) 与技术结构`));
+    if (versions.length) {
+      for (const v of versions.slice(0, 8)) {
+        const box = el('div', 'layer-item');
+        box.append(el('strong', '', `${formatTime(v.time)} · ${v.reason || v.action || '自动更新'}`));
+        if (v.diff) box.append(buildLineDiffNode(v.diff));
+        techDet.append(box);
+      }
+    } else {
+      techDet.append(el('p', 'muted', '暂无认知版本变更记录。'));
+    }
+    techCard.append(techDet);
+
+    host.replaceChildren(budgetCard, grid, techCard);
   }
 
   // =========================================================================
@@ -707,19 +1044,160 @@
   async function renderRecallWorkspace(host, req, focusTurnId = null) {
     const renderSeq = ++recallRenderSeq;
     host.replaceChildren(el('p', '', '正在读取记忆召回链路与开销快照…'));
-    const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
-    if (renderSeq !== recallRenderSeq) return;  // a newer navigation already owns the view
-    const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
 
-    if (!combined.length) {
-      host.replaceChildren(renderEmptyState('暂无召回追踪记录', '完成一轮聊天后，这里会展示每一层的 Token 预算、命中的记忆与成本。'));
-      return;
+    let page = 1;
+    let filterDate = '';
+    let filterPurpose = '';
+    let filterModel = '';
+
+    const filterBar = el('div', 'inline-controls');
+    const dateInp = el('input', 'veil-input');
+    dateInp.type = 'date';
+    const purpSel = el('select', 'veil-input');
+    for (const opt of [['', '全部用途'], ['chat', '日常对话'], ['experience', '经历整理'], ['judge', '想起判官']]) {
+      const o = el('option', '', opt[1]);
+      o.value = opt[0];
+      purpSel.append(o);
     }
+    const modelInp = el('input', 'veil-input');
+    modelInp.placeholder = '筛选模型…';
+    const searchBtn = btn('筛选', 'sm');
+    filterBar.append(dateInp, purpSel, modelInp, searchBtn);
 
+    const trendCard = el('article', 'veil-card');
     const split = el('div', 'split-reader');
     const listPane = el('div', 'index-pane');
     const detailPane = el('article', 'veil-card reader-pane');
-    let selectedId = focusTurnId || combined[0].request_id || combined[0].id || '';
+    const pager = el('div', 'inline-controls');
+    let selectedId = focusTurnId || '';
+    let detailSeq = 0;
+
+    async function loadTurns() {
+      const qs = new URLSearchParams({ page: String(page), limit: '20' });
+      if (filterDate) qs.set('date', filterDate);
+      if (filterPurpose) qs.set('purpose', filterPurpose);
+      if (filterModel) qs.set('model', filterModel);
+      const res = await reqJson(req, `/api/brain/recall-turns?${qs.toString()}`);
+      if (renderSeq !== recallRenderSeq) return;
+      const items = res.data?.items || [];
+      const total = res.data?.total || 0;
+      const trends = res.data?.trends || [];
+
+      if (trends.length) {
+        const lastT = trends[trends.length - 1];
+        trendCard.replaceChildren(
+          el('div', 'veil-card-head'),
+          el('p', 'muted', `近 ${trends.length} 天累计 ${trends.reduce((s, t) => s + t.turns, 0)} 轮 · 最近一日(${lastT.date}) 关系底座命中 ${lastT.base_hits} 次 · 自然联想命中 ${lastT.assoc_hits} 次`)
+        );
+        trendCard.firstChild.append(el('h3', '', '历史召回与注入趋势'));
+      } else {
+        trendCard.replaceChildren(el('h3', '', '历史召回与注入趋势'), el('p', 'muted', '暂无足够历史轮次数据'));
+      }
+
+      listPane.replaceChildren();
+      if (!items.length) {
+        listPane.append(renderEmptyState('暂无匹配的召回轮次', '调整筛选条件或完成一轮对话后查看。'));
+        detailPane.replaceChildren();
+        return;
+      }
+
+      if (!selectedId || !items.some(it => it.request_id === selectedId)) {
+        selectedId = items[0].request_id;
+      }
+      for (const it of items) {
+        const row = el('button', 'index-item');
+        row.type = 'button';
+        row.dataset.turnId = it.request_id;
+        row.setAttribute('aria-current', String(it.request_id === selectedId));
+        row.append(
+          el('div', 'index-title', it.summary || '对话轮次'),
+          el('div', 'index-meta', `${formatTime(it.time)} · ${it.model} · ${it.purpose}`)
+        );
+        row.addEventListener('click', () => showTurn(it));
+        listPane.append(row);
+      }
+
+      pager.replaceChildren();
+      const prevBtn = btn('上一页', 'sm');
+      prevBtn.disabled = page <= 1;
+      prevBtn.addEventListener('click', () => { page = Math.max(1, page - 1); loadTurns(); });
+      const nextBtn = btn('下一页', 'sm');
+      nextBtn.disabled = page * 20 >= total;
+      nextBtn.addEventListener('click', () => { page += 1; loadTurns(); });
+      pager.append(prevBtn, el('span', 'muted', `第 ${page} 页 / 共 ${total} 轮`), nextBtn);
+
+      const activeItem = items.find(it => it.request_id === selectedId) || items[0];
+      if (activeItem) await showTurn(activeItem);
+    }
+
+    searchBtn.addEventListener('click', () => {
+      page = 1;
+      filterDate = dateInp.value;
+      filterPurpose = purpSel.value;
+      filterModel = modelInp.value.trim();
+      loadTurns();
+    });
+
+    async function showTurn(item) {
+      const tid = String(item.request_id || item.id || '');
+      selectedId = tid;
+      const seq = ++detailSeq;
+      for (const n of listPane.querySelectorAll('.index-item')) {
+        n.setAttribute('aria-current', String(n.dataset.turnId === tid));
+      }
+      detailPane.replaceChildren(el('p', '', '正在加载该轮召回层级详情…'));
+
+      const tk = item.tokens || {};
+      const head = el('div', 'veil-card-head');
+      head.append(el('h3', '', item.summary || '单轮召回与注入分析'));
+      const copyBtn = btn('复制单轮诊断报告', 'sm');
+      copyBtn.addEventListener('click', async () => {
+        const rep = await reqJson(req, `/api/brain/recall-report?request_id=${encodeURIComponent(tid)}`);
+        if (rep.ok && rep.data?.markdown) {
+          await navigator.clipboard?.writeText(rep.data.markdown);
+          copyBtn.textContent = '已复制';
+          setTimeout(() => { copyBtn.textContent = '复制单轮诊断报告'; }, 1500);
+        }
+      });
+      head.append(copyBtn);
+
+      const meta = el('p', 'muted', `${formatTime(item.time)} · ${item.model} · ${item.purpose} · Request ID: ${tid}`);
+      const tokenGrid = el('div', 'kpi-grid');
+      const tCards = [
+        ['快照预估 Token', tk.estimated != null ? String(tk.estimated) : '未记录'],
+        ['实际输入 / 输出', tk.actual_input != null ? `${tk.actual_input} / ${tk.actual_output ?? '-'}` : '未计量（仅本地估算）'],
+        ['记忆注入 Token', tk.memory_tokens != null ? String(tk.memory_tokens) : '待核实'],
+        ['结算费用', item.cost_cny != null ? `¥${item.cost_cny}` : '暂无结算'],
+      ];
+      for (const [lbl, val] of tCards) {
+        const c = el('div', 'layer-item');
+        c.append(el('small', 'muted', lbl), el('strong', '', val));
+        tokenGrid.append(c);
+      }
+
+      const det = el('details');
+      det.append(el('summary', '', '技术证据与原始追踪'));
+      det.append(el('pre', 'diff-box', JSON.stringify(item, null, 2)));
+
+      if (seq !== detailSeq) return;
+      detailPane.replaceChildren(head, meta, tokenGrid, det);
+    }
+
+    split.append(listPane, detailPane);
+    host.replaceChildren(filterBar, trendCard, split, pager);
+    await loadTurns();
+    return;
+  }
+
+  async function _legacyRenderRecallUnused(host, req, focusTurnId = null) {
+    const renderSeq = ++recallRenderSeq;
+    const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
+    if (renderSeq !== recallRenderSeq) return;
+    const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
+    const split = el('div', 'split-reader');
+    const listPane = el('div', 'index-pane');
+    const detailPane = el('article', 'veil-card reader-pane');
+    let selectedId = focusTurnId || (combined[0] && (combined[0].request_id || combined[0].id)) || '';
     let detailSeq = 0;
 
     async function showTurn(item) {

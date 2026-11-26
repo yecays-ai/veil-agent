@@ -127,6 +127,9 @@
    ========================================================================== */
 
 body:not(.detached-window) .topbar {
+  position: relative;
+  z-index: 30;
+  background: var(--panel);
   min-height: 64px;
   height: auto;
   display: flex;
@@ -135,6 +138,20 @@ body:not(.detached-window) .topbar {
   gap: 10px 14px;
   padding: 8px 18px;
   -webkit-app-region: drag;
+}
+
+.page.active {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+.bento-grid,
+.grid-2,
+.grid-3 {
+  align-items: start;
 }
 
 .curved-subnav-shell {

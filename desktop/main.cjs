@@ -489,6 +489,21 @@ function allowedChatRequest(pathname, method) {
         (url.searchParams.get('limit') === null || /^\d{1,3}$/.test(url.searchParams.get('limit') || '')) &&
         (url.searchParams.get('offset') === null || /^\d{1,6}$/.test(url.searchParams.get('offset') || ''));
     }
+    if (url.pathname === '/api/brain/growth') {
+      return keys.every(key => ['range', 'from_date', 'to_date'].includes(key));
+    }
+    if (url.pathname === '/api/brain/day-changes') {
+      return keys.every(key => key === 'date');
+    }
+    if (url.pathname === '/api/brain/growth-report') {
+      return keys.every(key => ['from_date', 'to_date', 'include_content', 'include_health', 'format'].includes(key));
+    }
+    if (url.pathname === '/api/brain/recall-turns') {
+      return keys.every(key => ['page', 'limit', 'date', 'purpose', 'model', 'status'].includes(key));
+    }
+    if (url.pathname === '/api/brain/recall-report') {
+      return keys.every(key => key === 'request_id');
+    }
     if (url.pathname === '/api/brain/health') {
       return keys.every(key => ['from', 'to'].includes(key)) &&
         keys.every(key => {
@@ -548,7 +563,7 @@ function allowedChatRequest(pathname, method) {
     '/api/transcribe', '/api/approve', '/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/exit',
     '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
-    '/api/brain/health/scan', '/api/brain/health/settings',
+    '/api/brain/health/scan', '/api/brain/health/settings', '/api/brain/layer-toggle',
     '/api/voice-style', '/api/peter-page', '/api/pending-approvals', '/api/instructions'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
