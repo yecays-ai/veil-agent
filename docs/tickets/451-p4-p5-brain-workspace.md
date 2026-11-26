@@ -89,3 +89,9 @@
 - 巡检设置保存省略 `idle_only`；保存成功后同步当前开关/周期控件；`daily_night` 调度仅在 `idle_only=true` 且忙碌时跳过。
 - 预算输入允许后端支持的正小数（`min=0.01`、`step=any`）。
 
+## 第三轮 CodeRabbit 复查修复（2026-11-27）
+
+- **编辑旧版完整性（major）**：带哈希的原子编辑现在向 BrainWriter 传 `archive_raw=True`，在同一 `BEGIN IMMEDIATE` 事务里归档完整 `raw_markdown`（含旧标题）；页面旧版本改为写入成功后再落 `memory-versions.jsonl`，冲突不留孤儿版本。
+- **详情选择竞态**：`openMemoryById` 与卡片选择共用 `detailSeq`，选中其他记忆会立即使旧的按 ID 请求失效，不再覆盖新详情。
+- **巡检保存乱序**：新增 `healthSaveSeq`，只应用最近一次保存的响应与控件状态，旧响应不会把表单改回旧值。
+

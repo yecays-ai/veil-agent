@@ -16,7 +16,7 @@ test('memory library sends panel_edit changes, keeps drafts and archives through
   assert.match(brain, /drafts\.get\(item\.memory_id\)/);
   assert.match(brain, /\/api\/memory\/archive'/);
   assert.match(brain, /seq !== state\.listSeq/);
-  assert.match(brain, /seq !== state\.byIdSeq/);
+  assert.match(brain, /seq !== state\.detailSeq/);
   assert.match(chat, /expected_sha256:item\.sha256/);
   assert.match(brain, /seq !== detailSeq/);
 });
@@ -58,7 +58,8 @@ test('draft, request-sequence and form-state races stay fixed', () => {
   assert.match(brain, /drafts\.get\(item\.memory_id\) === submittedDraft/);
   assert.match(brain, /JSON\.stringify\(\{ enabled: enabledChk\.checked, schedule: schedSel\.value \}\)/);
   assert.match(brain, /listSeq/);
-  assert.match(brain, /byIdSeq/);
+  assert.match(brain, /detailSeq/);
+  assert.match(brain, /healthSaveSeq/);
   assert.match(brain, /healthControls = \{ enabledChk, schedSel \}/);
   assert.match(brain, /eventsRenderSeq/);
   assert.match(brain, /recallRenderSeq/);

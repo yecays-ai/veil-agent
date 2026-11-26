@@ -947,6 +947,7 @@ class NativeMemoryTools:
         # BrainWriter can compare the hash inside the same write transaction; the Ombre path cannot.
         brain_atomic = bool(expected_sha) and getattr(self.memory, 'brain_authority', None) is not None
         operation_id = None
+        version_warning = ''
         try:
             safe_args = {key: value for key, value in args.items()
                          if key not in (*banned, 'edit_reason', 'delete', 'expected_sha256')}
@@ -954,6 +955,9 @@ class NativeMemoryTools:
             safe_args['delete'] = False
             if brain_atomic:
                 safe_args['expected_sha256'] = expected_sha
+                # Keep the exact raw Markdown (title included) so Brain's restore_version
+                # can restore the old title too, in the same BEGIN IMMEDIATE transaction.
+                safe_args['archive_raw'] = True
             operation_id, duplicate_operation = self.memory.begin_write(safe_args)
             if duplicate_operation is not None:
                 return ('This memory update is still unconfirmed after its earlier connection failure. '
@@ -962,6 +966,8 @@ class NativeMemoryTools:
                 self.memory.finish_write(operation_id, 'not_submitted')
                 return 'The previous version could not be archived safely, so this change was not made.', '出错', summary
             result = self.memory.call('trace', safe_args, write_operation=operation_id)
+            if brain_atomic and not self._save_version(memory_id, args, old):
+                version_warning = '（页面旧版本未能写入历史，请稍后核对。）'
         except WriteConflict:
             if operation_id:
                 self.memory.finish_write(operation_id, 'not_submitted')
@@ -985,7 +991,7 @@ class NativeMemoryTools:
                 self.sidecar.peter_changed(memory_id)
         except Exception:
             pass
-        feedback = (f'{result}\nComplete memory before the change (including metadata) has been saved. '
+        feedback = (f'{result}{version_warning}\nComplete memory before the change (including metadata) has been saved. '
                     f'Reason for this operation: {edit_reason.strip() or "not provided"}. '
                     'The content field and meaning_append/meaning_replace metadata are separate fields.')
         return self._bounded(feedback), '成功', f'{summary}（旧版本已留档）'

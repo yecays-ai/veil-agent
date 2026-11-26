@@ -278,7 +278,7 @@
     addon.append(head, filterBar, split, pager);
     view.append(addon);
 
-    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0, listSeq: 0, byIdSeq: 0 };
+    let state = { offset: 0, limit: 30, selectedId: null, items: [], filtered: 0, listSeq: 0, detailSeq: 0 };
     const drafts = new Map();
 
     function openDetail(item) {
@@ -439,6 +439,7 @@
         });
         if (res.ok) {
           if (state.selectedId === item.memory_id) {
+            state.detailSeq += 1;
             state.selectedId = null;
             readerPane.replaceChildren(renderEmptyState('在左侧选择一条记忆', '这条记忆已提交删除，详情不再可编辑。'));
           }
@@ -502,7 +503,7 @@
         if (item.pinned) tags.append(pill('置顶', 'gold'));
         if (item.recalled) tags.append(pill(`召回 ${item.recalled}`));
         card.append(top, el('div', 'index-preview', item.body || item.why || ''), tags);
-        card.addEventListener('click', () => openDetail(item));
+        card.addEventListener('click', () => { state.detailSeq += 1; openDetail(item); });
         listPane.append(card);
         if (state.selectedId === item.memory_id) openDetail(item);
       }
@@ -511,11 +512,11 @@
     async function openMemoryById(memId) {
       if (!memId) return;
       // Opening one memory must not invalidate the list load that mounted this add-on.
-      const seq = ++state.byIdSeq;
+      const seq = ++state.detailSeq;
       const qs = new URLSearchParams({ q: String(memId), status: 'all', kind: 'all',
                                        sort: 'updated', offset: '0', limit: '30' });
       const { ok, data } = await reqJson(lastReq, `/api/memory/library?${qs}`);
-      if (seq !== state.byIdSeq || !ok || !data) return;
+      if (seq !== state.detailSeq || !ok || !data) return;
       const item = (data.items || []).find(row => row.memory_id === memId);
       if (!item) return;
       state.selectedId = memId;
@@ -843,6 +844,7 @@
     host.replaceChildren(el('p', '', '正在加载只读健康报告与巡检设置…'));
     let healthSettings = null;
     let healthControls = null;
+    let healthSaveSeq = 0;
 
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
@@ -915,6 +917,7 @@
       const saveSchedBtn = btn('保存巡检设置', 'sm');
       const schedMsg = el('small', '', '');
       saveSchedBtn.addEventListener('click', async () => {
+        const saveSeq = ++healthSaveSeq;
         saveSchedBtn.disabled = true;
         try {
           const res = await reqJson(req, '/api/brain/health/settings', {
@@ -923,6 +926,7 @@
             // idle_only is not editable here; omitting it keeps whatever the backend has saved.
             body: JSON.stringify({ enabled: enabledChk.checked, schedule: schedSel.value }),
           });
+          if (saveSeq !== healthSaveSeq) return;  // a newer save owns the form
           if (res.ok && res.data?.settings) {
             healthSettings = res.data.settings;
             // A concurrent manual scan may have rebuilt the form from the old cache; update the
@@ -938,7 +942,7 @@
         } catch (err) {
           schedMsg.textContent = err?.message || '保存失败';
         } finally {
-          saveSchedBtn.disabled = false;
+          if (saveSeq === healthSaveSeq) saveSchedBtn.disabled = false;
         }
       });
       controls.append(chkLabel, schedSel, saveSchedBtn, schedMsg);

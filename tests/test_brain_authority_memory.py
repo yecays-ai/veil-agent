@@ -123,6 +123,28 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertTrue(ok, message)
         self.assertEqual('new body', self.memory.content_for(memory_id))
 
+    def test_atomic_edit_archives_the_raw_markdown_for_title_restore(self):
+        from memory_native import NativeMemoryTools
+        text = self.memory.call('hold', {'content': 'old body', 'title': 'Old Title'})
+        memory_id = text.split('→')[1]
+        tools = NativeMemoryTools(self.memory)
+        entry = next(item for item in tools.panel_entries()['items']
+                     if item['memory_id'] == memory_id)
+        ok, message = tools.panel_edit(memory_id, {'content': 'new body', 'title': 'New Title'},
+                                       expected_sha256=entry['sha256'])
+        self.assertTrue(ok, message)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            archived = connection.execute(
+                'SELECT old_content FROM versions WHERE memory_id=? ORDER BY seq DESC LIMIT 1',
+                (memory_id,)).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertIn('Old Title', archived)
+        self.assertIn('old body', archived)
+        pages = tools.panel_versions(memory_id)
+        self.assertEqual('Old Title', pages[0]['title'])
+
     def test_panel_entries_expose_the_same_sha_as_the_edit_lock(self):
         from brain_p4_api import memory_sha256
         from memory_native import NativeMemoryTools
