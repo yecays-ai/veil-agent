@@ -538,3 +538,241 @@ body.sidebar-collapsed .workspace-nav-group{border-bottom:1px solid var(--line);
 .workspace-content>article.surface{margin:0}
 .workspace-view .setting-row{gap:10px}
 @media(max-width:520px){.workspace-brand,.workspace-nav-title{display:none}.workspace-nav-group{margin:4px 0;border-bottom:1px solid var(--line);padding-bottom:7px}.workspace-view .workspace-hero{padding:14px}.workspace-heading{margin-bottom:15px}}
+
+/* ==========================================================================
+   Global Unified Controls, Non-Overlapping Topbar, Bento Grids & Rail Feed
+   ========================================================================== */
+
+body:not(.detached-window) .topbar {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px 14px !important;
+  min-height: 56px !important;
+  height: auto !important;
+  padding: 8px 18px !important;
+}
+body:not(.detached-window) .topbar .identity {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 170px;
+}
+body:not(.detached-window) .topbar .curved-subnav-shell {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  order: 2;
+}
+body:not(.detached-window) .topbar .header-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  order: 3;
+}
+body:not(.detached-window) .topbar .header-wake { display: none !important; }
+body:not(.detached-window) .topbar .top-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  order: 4;
+}
+@media (max-width: 1260px) {
+  body:not(.detached-window) .topbar .curved-subnav-shell {
+    order: 5;
+    flex: 1 0 100%;
+    justify-content: flex-start;
+  }
+}
+.theme-pills { gap: 3px !important; padding: 2px 4px !important; }
+.theme-pill-btn {
+  width: 20px !important;
+  height: 20px !important;
+  min-width: 20px !important;
+  font-size: 10px !important;
+}
+.top-actions button {
+  height: 30px !important;
+  min-height: 30px !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--veil-rule) !important;
+  background: var(--glass-card-strong) !important;
+  color: var(--veil-ink) !important;
+  font-size: 12px !important;
+}
+.top-actions button:hover {
+  border-color: var(--veil-accent) !important;
+  background: var(--veil-accent-soft) !important;
+}
+
+/* Unified Buttons & Controls Across ALL Pages */
+.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row) {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 10px !important;
+  border: 1px solid var(--veil-rule-strong) !important;
+  background: var(--glass-card-strong) !important;
+  color: var(--veil-ink) !important;
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: background 140ms ease, border-color 140ms ease, transform 110ms ease;
+}
+.page button:not(.nav-item):not(.subnav-tab):not(.index-item):not(.tl-card):not(.kpi-card):not(.theme-pill-btn):not(.msg-avatar-trigger):not(.avatar-btn):not(.mcp-switch):not(.workspace-switch):not(.composer button):not(#life-records button):not(.life-calendar-days button):not(.veil-select-trigger):not(.veil-select-option):not(.chat-action-item):not(.rail-row):hover:not(:disabled) {
+  border-color: var(--veil-accent) !important;
+  background: var(--veil-accent-soft) !important;
+}
+.page button.primary,
+.page button[type="submit"],
+.page #save-limits,
+.page #apply-css,
+.page #life-new,
+.page #mcp-add,
+.page #add-endpoint,
+.page #add-model,
+.page #workbench-add {
+  background: var(--veil-accent) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+.page button.primary:hover:not(:disabled),
+.page button[type="submit"]:hover:not(:disabled),
+.page #save-limits:hover:not(:disabled),
+.page #apply-css:hover:not(:disabled),
+.page #life-new:hover:not(:disabled),
+.page #mcp-add:hover:not(:disabled) {
+  background: var(--accent-hover, var(--veil-accent)) !important;
+}
+
+.page .segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--surface-muted);
+  border: 1px solid var(--veil-rule);
+}
+.page .segmented button {
+  min-height: 26px !important;
+  height: 26px !important;
+  padding: 0 12px !important;
+  border-radius: 8px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--veil-soft) !important;
+  box-shadow: none !important;
+}
+.page .segmented button[aria-pressed="true"] {
+  background: var(--veil-paper) !important;
+  color: var(--veil-accent) !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08) !important;
+}
+
+.page input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+.page textarea {
+  border-radius: 10px !important;
+  border: 1px solid var(--veil-rule-strong) !important;
+  background: var(--glass-card-strong) !important;
+  color: var(--veil-ink) !important;
+  padding: 7px 12px !important;
+}
+
+/* Memory View: One Unified P4 Library Surface */
+#memory-view.p4-unified .memory-toolbar,
+#memory-view.p4-unified .memory-layout,
+#memory-view.p4-unified > .memory-footer {
+  display: none !important;
+}
+
+/* Brain Home: Balanced 4 KPIs + Full-Height Bento Grid */
+@media (min-width: 960px) {
+  .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.overview-grid { align-items: stretch; }
+.overview-grid > .veil-card { height: 100%; display: flex; flex-direction: column; }
+.overview-grid > .veil-card .veil-timeline { flex: 1; align-content: start; }
+
+/* Activity, Diagnostics & Settings Unified Cards */
+#more-view, #diagnostics-view, #context-view, #instructions-view, #mcp-view {
+  padding: 20px 24px 48px !important;
+}
+#diagnostics-view > .diagnostics-sections,
+#diagnostics-view > div:not(.page-heading) {
+  max-width: 1160px;
+  margin-inline: auto;
+}
+#diagnostics-view .diag-system,
+#diagnostics-view .surface {
+  border-radius: 16px !important;
+  background: var(--glass-card) !important;
+  border: 1px solid var(--veil-rule) !important;
+  padding: 16px 20px !important;
+  margin-bottom: 12px;
+}
+#more-view > *, #mcp-view > *, #instructions-view > *, #context-view > * {
+  max-width: 1080px;
+  margin-inline: auto;
+}
+#more-view details.settings-section {
+  border-radius: 16px !important;
+  background: var(--glass-card) !important;
+  border: 1px solid var(--veil-rule) !important;
+  padding: 6px 18px !important;
+  margin-bottom: 12px !important;
+  backdrop-filter: blur(18px);
+}
+#more-view details.settings-section summary {
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  padding: 10px 4px !important;
+  cursor: pointer;
+}
+#more-view details.settings-section .surface {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 0 12px !important;
+}
+
+/* Reference-Style Right Rail & Curved Hairline Waiting Pill */
+#desktop-rail {
+  padding: 16px 14px !important;
+  gap: 12px !important;
+}
+#desktop-rail .rail-section {
+  background: var(--glass-card) !important;
+  border: 1px solid var(--veil-rule) !important;
+  border-radius: 16px !important;
+  padding: 14px !important;
+}
+#desktop-rail .rail-row {
+  border: 0 !important;
+  background: var(--surface-muted) !important;
+  border-radius: 999px !important;
+  padding: 8px 12px !important;
+}
+#desktop-rail .rail-wake {
+  border-top: 1px solid var(--veil-rule) !important;
+  margin-top: 10px;
+  padding-top: 8px;
+}
+#activity-view .workspace-feed .activity-timeline {
+  border-left: 1px solid var(--veil-rule-strong) !important;
+  padding-left: 20px !important;
+  display: grid;
+  gap: 12px;
+}
+#activity-view .workspace-feed .activity-timeline > div,
+#activity-view .workspace-feed .activity-timeline > article,
+#activity-view .workspace-feed .activity-timeline > li {
+  border: 0 !important;
+  border-bottom: 1px solid var(--veil-rule) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  padding: 6px 0 12px !important;
+  box-shadow: none !important;
+}

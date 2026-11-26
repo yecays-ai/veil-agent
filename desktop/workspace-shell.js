@@ -33,10 +33,10 @@
 
   const CONFIG_TABS = [
     { page: 'more', label: '运行与外观' },
-    { page: 'context', label: '上下文注入' },
-    { page: 'instructions', label: '指令集与角色' },
+    { page: 'instructions', label: '指令与角色' },
+    { page: 'context', label: '实时上下文' },
     { page: 'workspace-inventory', label: '全量配置清单' },
-    { page: 'diagnostics', label: '原始诊断' },
+    { page: 'diagnostics', label: '系统诊断' },
   ];
 
   const PAGE_META = {
@@ -236,12 +236,19 @@
     const gBrain = makeGroup('VEIL BRAIN');
     const gAdmin = makeGroup('管理');
 
-    const take = (key, newLabel) => {
+    const take = (key, newLabel, newIcon) => {
       const node = existing.get(key);
       if (!node) return null;
       if (newLabel) {
         const lbl = node.querySelector('.nav-label') || node.querySelector('span:last-child');
         if (lbl) lbl.textContent = newLabel;
+      }
+      if (newIcon && typeof window.veilIcon === 'function') {
+        const iconHolder = node.querySelector('[data-lucide]') || node.querySelector('.nav-icon') || node.firstElementChild;
+        if (iconHolder) {
+          iconHolder.dataset.lucide = newIcon;
+          iconHolder.innerHTML = window.veilIcon(newIcon, 17);
+        }
       }
       return node;
     };
@@ -258,27 +265,31 @@
 
     // Group 2: VEIL BRAIN
     for (const item of [
-      createExtNavButton('brain-home', 'brain', '记忆概览'),
-      take('memory', '记忆库'),
+      createExtNavButton('brain-home', 'radar', '记忆概览'),
+      take('memory', '记忆库', 'book-open'),
       createExtNavButton('workspace-events', 'calendar', '事件故事'),
       createExtNavButton('brain-cognition', 'sparkles', '关系成长'),
-      createExtNavButton('brain-recall', 'stethoscope', '召回诊断'),
+      createExtNavButton('brain-recall', 'stethoscope', '召回与快照'),
       createExtNavButton('brain-health', 'shield', '健康检查'),
-      take('peter', 'Peter 档案'),
+      take('peter', 'Peter 档案', 'user'),
     ]) {
       if (item) gBrain.append(item);
     }
 
-    // Group 3: 管理
+    // Group 3: 管理 (context / diagnostics remain in DOM for tests & accessible via Unified Config tabs, hidden from sidebar clutter)
+    const ctxBtn = take('context', '上下文层');
+    const diagBtn = take('diagnostics', '原始诊断');
+    if (ctxBtn) ctxBtn.hidden = true;
+    if (diagBtn) diagBtn.hidden = true;
     for (const item of [
-      createExtNavButton('workspace-work', 'briefcase', '工作区'),
+      createExtNavButton('workspace-work', 'briefcase', '开发工作区'),
       createExtNavButton('workspace-budget', 'wallet', '账本预算'),
       take('mcp', '工具与 MCP'),
-      take('context', '上下文层'),
-      take('instructions', '指令集'),
+      take('instructions', '指令集', 'list-tree'),
       createExtNavButton('workspace-inventory', 'clipboard-list', '配置清单'),
-      take('more', '统一配置'),
-      take('diagnostics', '原始诊断'),
+      take('more', '统一配置', 'sliders-horizontal'),
+      ctxBtn,
+      diagBtn,
     ]) {
       if (item) gAdmin.append(item);
     }
@@ -380,28 +391,148 @@
     host.append(hero, grid);
   }
 
-  async function renderWorkspaceWork(host) {
-    host.replaceChildren();
-    const intro = el('article', 'surface workspace-card');
-    intro.append(
-      el('h3', '', '工作区与代码协作边界'),
-      el('p', '', '查看 Peter 当前可用的工具权限、GitHub 协作开关、上下文文件与共享约束。'),
-    );
-    const bar = el('div', 'workspace-links');
+  async function renderWorkspaceWork(host, req) {
+    host.replaceChildren(el('p', '', '正在加载开发工作区与系统权限配置…'));
+
+    const grid = el('div', 'overview-grid');
+
+    // Card 1: Workbench toggle & project folders
+    const wbCard = el('article', 'veil-card');
+    const wbHead = el('div', 'veil-card-head');
+    wbHead.append(el('h3', '', '开发工作区与本地项目目录'));
+    const toggleWrap = el('div', 'segmented');
+    const onBtn = el('button', '', '开启工作区');
+    const offBtn = el('button', '', '关闭');
+    onBtn.type = offBtn.type = 'button';
+    toggleWrap.append(onBtn, offBtn);
+    wbHead.append(toggleWrap);
+
+    const folderList = el('div', 'workspace-content');
+    folderList.style.marginBottom = '12px';
+    const wbActions = el('div', 'workspace-links');
+    const addFolderBtn = el('button', 'veil-btn primary sm', '+ 添加项目文件夹');
+    addFolderBtn.type = 'button';
+    const wbStatus = el('small', '', '');
+    wbActions.append(addFolderBtn, wbStatus);
+    wbCard.append(wbHead, el('p', '', '允许 Peter 在指定项目目录中读写代码、查看差异并执行测试。'), folderList, wbActions);
+
+    // Card 2: Allowed GitHub / Web Hosts + Quick Capabilities
+    const rightCol = el('div', 'workspace-content');
+    const hostCard = el('article', 'veil-card');
+    hostCard.append(el('h3', '', 'GitHub 与网站访问白名单'));
+    const hostList = el('div', 'workspace-links');
+    const hostForm = el('form', 'filter-bar');
+    const hostInput = document.createElement('input');
+    hostInput.type = 'text';
+    hostInput.placeholder = '例如 github.com 或 api.github.com';
+    hostInput.style.flex = '1';
+    const addHostBtn = el('button', 'veil-btn sm', '添加网站');
+    addHostBtn.type = 'submit';
+    hostForm.append(hostInput, addHostBtn);
+    hostCard.append(hostList, hostForm);
+
+    const appsCard = el('article', 'veil-card');
+    appsCard.append(el('h3', '', '系统工具、软件与边界联动'));
+    const appsList = el('div', 'workspace-links');
+    const navShortcuts = el('div', 'workspace-links');
     for (const [label, target] of [
-      ['MCP 与工具管理', 'mcp'],
-      ['上下文注入文件', 'context'],
-      ['系统指令与角色准则', 'instructions'],
-      ['安全边界核对', 'workspace-access'],
+      ['MCP 与工具权限', 'mcp'],
+      ['指令与角色准则', 'instructions'],
+      ['安全边界矩阵', 'workspace-access'],
       ['#446 完整清单', 'workspace-inventory'],
     ]) {
-      const btn = el('button', 'workspace-link', label);
+      const btn = el('button', 'veil-btn sm', label);
       btn.type = 'button';
       btn.addEventListener('click', () => go(target));
-      bar.append(btn);
+      navShortcuts.append(btn);
     }
-    intro.append(bar);
-    host.append(intro);
+    appsCard.append(appsList, navShortcuts);
+    rightCol.append(hostCard, appsCard);
+    grid.append(wbCard, rightCol);
+    host.replaceChildren(grid);
+
+    async function refreshWork() {
+      const [wbRes, appRes] = await Promise.all([
+        req('/api/workbench').catch(() => null),
+        req('/api/windows-apps').catch(() => null),
+      ]);
+      const wb = wbRes && wbRes.ok ? (await wbRes.json())?.state || {} : { enabled: false, project_roots: [], allowed_hosts: [] };
+      const enabled = Boolean(wb.enabled);
+      onBtn.setAttribute('aria-pressed', String(enabled));
+      offBtn.setAttribute('aria-pressed', String(!enabled));
+
+      folderList.replaceChildren();
+      const roots = Array.isArray(wb.project_roots) ? wb.project_roots : [];
+      if (!roots.length) {
+        folderList.append(el('small', '', '当前尚未授权任何本地项目目录。'));
+      } else {
+        for (const folder of roots) {
+          const row = el('div', 'layer-item-top');
+          row.style.padding = '8px 10px';
+          row.style.borderRadius = '10px';
+          row.style.background = 'var(--surface-muted)';
+          row.append(el('span', '', folder));
+          const rm = el('button', 'veil-btn sm danger', '移除');
+          rm.type = 'button';
+          rm.addEventListener('click', async () => {
+            await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remove: folder }) });
+            await refreshWork();
+          });
+          row.append(rm);
+          folderList.append(row);
+        }
+      }
+
+      hostList.replaceChildren();
+      const hosts = Array.isArray(wb.allowed_hosts) ? wb.allowed_hosts : [];
+      if (!hosts.length) hostList.append(el('small', '', '暂无网站白名单。'));
+      for (const h of hosts) {
+        const chip = el('span', 'veil-pill', h);
+        const x = el('button', 'veil-btn sm ghost', '×');
+        x.type = 'button';
+        x.addEventListener('click', async () => {
+          await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remove_host: h }) });
+          await refreshWork();
+        });
+        chip.append(x);
+        hostList.append(chip);
+      }
+
+      appsList.replaceChildren();
+      const appsData = appRes && appRes.ok ? await appRes.json() : null;
+      const apps = appsData?.apps || [];
+      appsList.append(el('small', '', apps.length ? `已授权桌面软件 ${apps.length} 个` : '当前未配置额外桌面软件（支持先启动软件再在设置添加）。'));
+    }
+
+    onBtn.addEventListener('click', async () => {
+      await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) });
+      await refreshWork();
+    });
+    offBtn.addEventListener('click', async () => {
+      await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
+      await refreshWork();
+    });
+    addFolderBtn.addEventListener('click', async () => {
+      try {
+        const folder = await window.veilDesktop?.chooseFolder?.();
+        if (folder) {
+          await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ add: folder }) });
+          await refreshWork();
+        }
+      } catch {
+        wbStatus.textContent = '未能选取目录';
+      }
+    });
+    hostForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const val = hostInput.value.trim();
+      if (!val) return;
+      await req('/api/workbench', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ add_host: val }) });
+      hostInput.value = '';
+      await refreshWork();
+    });
+
+    await refreshWork();
   }
 
   async function renderWorkspaceAccess(host, req) {
@@ -435,7 +566,7 @@
     if (page === 'workspace-home') {
       await renderWorkspaceHome(entry.host);
     } else if (page === 'workspace-work') {
-      await renderWorkspaceWork(entry.host);
+      await renderWorkspaceWork(entry.host, req);
     } else if (page === 'workspace-budget' && typeof window.renderWorkspaceBudget === 'function') {
       await window.renderWorkspaceBudget(entry.host, req);
     } else if (page === 'workspace-inventory' && typeof window.renderWorkspaceInventory === 'function') {
@@ -478,10 +609,18 @@
         return;
       }
       const overflow = box.scrollHeight - box.clientHeight > 120;
+      const distBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+      if (currentPage === 'chat') {
+        jumpRoot.hidden = distBottom <= 140;
+        jumpRoot.classList.add('workspace-chat-jump');
+        jumpUp.hidden = true;
+        jumpDown.hidden = distBottom <= 140;
+        return;
+      }
       jumpRoot.hidden = !overflow;
-      jumpRoot.classList.toggle('workspace-chat-jump', currentPage === 'chat');
+      jumpRoot.classList.remove('workspace-chat-jump');
       jumpUp.hidden = box.scrollTop <= 36;
-      jumpDown.hidden = box.scrollTop + box.clientHeight >= box.scrollHeight - 36;
+      jumpDown.hidden = distBottom <= 36;
     };
     jumpUp.addEventListener('click', () => {
       const box = activeScroller();

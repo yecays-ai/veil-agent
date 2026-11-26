@@ -29,6 +29,7 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let nextId = 3, pending = null, sends = 0, approvals = 0, images = 0, imageSendAttempts = 0, voices = 0, failVoiceUploadOnce = false, quotedSendStarted = false;
   const requests = [], approvalBodies = [];
   let mcpState = {enabled:false,services:[]};
+  let previewWorkbench = { enabled: true, project_roots: ['E:/Peter-Agent/VEIL'], allowed_hosts: ['github.com'] };
   let mcpRevision = 0;
   const media = new Map();
   const voiceFixture=wavFixture();
@@ -182,6 +183,31 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     } else if (url.pathname === '/api/brain/health/export') {
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.end('# VEIL Brain 只读健康报告（预览示例）\n');
+    } else if (url.pathname === '/api/workbench') {
+      if (req.method === 'POST') {
+        const b = await readBody(req);
+        if (typeof b.enabled === 'boolean') previewWorkbench.enabled = b.enabled;
+        if (b.add && !previewWorkbench.project_roots.includes(b.add)) previewWorkbench.project_roots.push(b.add);
+        if (b.remove) previewWorkbench.project_roots = previewWorkbench.project_roots.filter(x => x !== b.remove);
+        if (b.add_host && !previewWorkbench.allowed_hosts.includes(b.add_host)) previewWorkbench.allowed_hosts.push(b.add_host);
+        if (b.remove_host) previewWorkbench.allowed_hosts = previewWorkbench.allowed_hosts.filter(x => x !== b.remove_host);
+      }
+      json(res, { state: previewWorkbench });
+    } else if (url.pathname === '/api/windows-apps') {
+      json(res, { apps: [], candidates: [] });
+    } else if (url.pathname === '/api/models') {
+      json(res, { ok: true, limits: { daily_cny: 30, monthly_cny: 800 }, endpoints: [], models: [] });
+    } else if (url.pathname === '/api/diagnostics/overview') {
+      json(res, {
+        schema_version: 1,
+        generated_at: new Date().toISOString(),
+        runtime: { status: 'ready', version: 'P4-P5 Preview', mode: 'isolated' },
+        modules: { brain: 'ok', mcp: 'ok', memory: 'ok', scheduler: 'ok' },
+        config_checks: [],
+        issues: [],
+      });
+    } else if (url.pathname === '/api/diagnostics/links') {
+      json(res, { links: [] });
     } else {
       json(res, { error: 'not found' }, 404);
     }

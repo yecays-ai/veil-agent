@@ -226,6 +226,7 @@
     const view = document.getElementById('memory-view');
     if (!view || memoryAddonMounted) return;
     memoryAddonMounted = true;
+    view.classList.add('p4-unified');
 
     const addon = el('section', 'veil-card');
     addon.id = 'brain-library-addon';

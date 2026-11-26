@@ -8,10 +8,10 @@
   <link rel="stylesheet" href="chat.css">
   <link rel="stylesheet" href="desktop-redesign.css">
   <link rel="stylesheet" href="desktop-visual-system.css">
+  <link rel="stylesheet" href="glass.css">
   <link rel="stylesheet" href="workspace-shell.css">
   <link rel="stylesheet" href="workspace-mcp.css">
   <link rel="stylesheet" href="chat-theme.css">
-  <link rel="stylesheet" href="glass.css">
   <style id="custom-style" nonce="veil-custom-css"></style>
 </head>
 <body>
@@ -142,7 +142,7 @@
   </section>
   <section id="mcp-view" class="page" data-page-view="mcp" hidden>
     <div class="page-heading"><div><h2>MCP 与工具权限</h2></div><div class="tool-row"><button id="mcp-refresh" type="button">刷新</button><button id="mcp-add" type="button">添加服务</button></div></div>
-    <article class="surface mcp-master"><label class="mcp-switch-row"><input id="mcp-enabled" type="checkbox" role="switch"><span class="mcp-switch-track" aria-hidden="true"></span><span>启用 MCP 服务</span></label><p id="mcp-status" role="status"></p></article>
+    <article class="surface mcp-master"><div class="mcp-master-left"><strong>启用 MCP 服务</strong><p id="mcp-status" role="status"></p></div><label class="mcp-switch"><input id="mcp-enabled" type="checkbox" role="switch" aria-label="启用 MCP 服务"><span class="mcp-switch-track" aria-hidden="true"></span></label></article>
     <div id="mcp-list" class="mcp-list" aria-live="polite"></div>
     <form id="mcp-form" class="surface model-form" hidden>
       <h3 id="mcp-form-heading">添加本地服务</h3>

@@ -86,15 +86,35 @@
   padding: 2px 0 !important;
 }
 
-/* 轻量浮动底部输入栏 */
+/* 轻量浮动底部单框输入栏（去掉多余内部框线） */
 body:not(.detached-window) #composer-footer {
   background: var(--custom-composer-area-bg, rgb(var(--veil-canvas-rgb) / var(--window-alpha)));
   border-top: 1px solid var(--veil-rule);
 }
 #composer {
-  background: var(--custom-composer-bg, var(--glass-card-strong));
-  border: var(--custom-composer-border, 1px solid var(--veil-rule-strong));
-  border-radius: var(--custom-composer-radius, 16px);
+  background: var(--custom-composer-bg, var(--glass-card-strong)) !important;
+  border: var(--custom-composer-border, 1px solid var(--veil-rule-strong)) !important;
+  border-radius: var(--custom-composer-radius, 24px) !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04) !important;
+  padding: 5px 7px !important;
+}
+#composer .chat-input-shell {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 2px !important;
+}
+#composer #box {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+#composer #send {
+  background: var(--veil-accent) !important;
+  color: #fff !important;
+  border-radius: 999px !important;
+  border: 0 !important;
 }
 
 /* ==========================================================================
