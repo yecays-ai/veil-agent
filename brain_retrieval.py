@@ -180,6 +180,14 @@ class BrainIndex:
         channel with a diagnostic instead of mixing incompatible vectors; (c) date_from/date_to
         filter by created day, inclusive, and report how many rows were filtered.
         """
+        start_date = created_date(date_from) if date_from else ''
+        end_date = created_date(date_to) if date_to else ''
+        if date_from and not start_date:
+            raise ValueError('invalid date_from')
+        if date_to and not end_date:
+            raise ValueError('invalid date_to')
+        if start_date and end_date and start_date > end_date:
+            raise ValueError('date_from is later than date_to')
         self.refresh()
         with self.lock:
             all_rows = list(self.rows)
@@ -197,12 +205,6 @@ class BrainIndex:
         diag.update({'model_mismatch': False, 'skipped_dim': 0, 'skipped_created': 0,
                      'date_filtered': 0, 'embedding_model': embedding_model,
                      'keyword_only': False})
-        start_date = created_date(date_from) if date_from else ''
-        end_date = created_date(date_to) if date_to else ''
-        if date_from and not start_date:
-            raise ValueError('invalid date_from')
-        if date_to and not end_date:
-            raise ValueError('invalid date_to')
         if start_date or end_date:
             kept = []
             for row in rows:

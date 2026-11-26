@@ -273,6 +273,42 @@ class Baseline:
                    refused['vector_state'] == 'pending', refused.get('vector_rejected'))
         self.check('vector: pending vectors still recover', recovered['saved'] >= 1, recovered)
 
+    # 4b. embedding-model switch: no paid retry, explicit reindex restores recovery ------------
+    def model_switch(self):
+        """After a deliberate embedding-model change the old vectors are incompatible.
+
+        The baseline locks in: pending retries make no paid call and write nothing while the
+        recorded model differs, and the explicit reindex restores the normal pending recovery.
+        """
+        created = self.create('切换模型前的记忆', '切换',
+                              embedder=CountingEmbedder([0.2] * 1024, 'baseline-fake-embedding').embed)
+        connection = sqlite3.connect(str(self.db))
+        try:
+            connection.execute("UPDATE memories SET vector_state='pending' WHERE id=?",
+                               (created['memory_id'],))
+            connection.execute('DELETE FROM vectors')
+            connection.commit()
+            new_model = CountingEmbedder([0.2] * 1024, 'new-baseline-model')
+            blocked = brain_writer.retry_pending_vectors(connection, new_model.embed)
+            reindex = brain_writer.prepare_embedding_reindex(connection, 'new-baseline-model')
+            recovered = brain_writer.retry_pending_vectors(connection, new_model.embed)
+        finally:
+            connection.close()
+        self.results['model_switch'] = {
+            'blocked': blocked,
+            'embedder_calls_before_reindex': new_model.calls - recovered['saved'],
+            'reindex': reindex,
+            'recovered': recovered,
+            'audit_reference': 'P6-S1 post-merge review: the first S1 write stored the model identity '
+                               'but retried pending vectors before checking it, so a model switch '
+                               'could pay for rejected embeddings on every retry',
+        }
+        self.check('model switch: a paid retry is blocked before the explicit reindex',
+                   blocked.get('blocked') == 'embedding_model_mismatch' and blocked['saved'] == 0,
+                   blocked)
+        self.check('model switch: the explicit reindex restores pending recovery',
+                   reindex['memories_marked_pending'] >= 1 and recovered['saved'] >= 1, recovered)
+
     # 5. judge diagnostics ---------------------------------------------------
     def judge_diagnostics(self):
         def run(judge_model, judge_embedder=None, wake=False, timeout=0.2):
@@ -361,7 +397,8 @@ class Baseline:
 
     def run(self):
         for name in ('card_completeness', 'embedding_calls', 'active_search',
-                     'vector_compatibility', 'judge_diagnostics', 'continuity'):
+                     'vector_compatibility', 'judge_diagnostics', 'continuity',
+                     'model_switch'):
             getattr(self, name)()
         try:
             commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT,

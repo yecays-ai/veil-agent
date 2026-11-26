@@ -539,6 +539,15 @@ def retry_pending_vectors(connection, embedder):
                               "AND is_deleted=0 AND is_tombstone=0").fetchall()
     saved = 0
     model = embedding_model_of(embedder)
+    stored_model = _meta_model(connection)
+    if rows and stored_model and model and stored_model != model:
+        # P6-S1 post-merge review: after an embedding-model switch the stored vectors (and the
+        # recorded model) are incompatible. Embedding every pending body before the compatibility
+        # check would pay for vectors that can never be stored, on every retry, forever. Wait for
+        # the explicit operator reindex instead; no request, no write, no lock held.
+        return {'retried': 0, 'saved': 0, 'pending': len(rows),
+                'blocked': 'embedding_model_mismatch',
+                'stored_model': stored_model, 'current_model': model}
     for memory_id, body in rows:
         try:
             values = _valid_vector(embedder(body))
@@ -581,6 +590,43 @@ def retry_pending_vectors(connection, embedder):
             continue
         saved += 1
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}
+
+
+def prepare_embedding_reindex(connection, model):
+    """Explicit operator step after deliberately changing the embedding model.
+
+    Every stored vector belongs to the old model. This clears them, marks the live memories
+    vector_state='pending' (so retry_pending_vectors re-embeds them with the new model) and removes
+    the recorded model identity, in ONE transaction with a journal row and a fresh digest. It is
+    never called automatically: switching models is an operator decision, and silently re-embedding
+    the whole library would be a paid action nobody asked for.
+    """
+    ensure_schema(connection)
+    model = str(model or '').strip()
+    if not model:
+        raise ValueError('the new embedding model name is required')
+    live = connection.execute(
+        "SELECT COUNT(*) FROM memories WHERE is_deleted=0 AND is_tombstone=0").fetchone()[0]
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        cleared = connection.execute('SELECT COUNT(*) FROM vectors').fetchone()[0]
+        connection.execute('DELETE FROM vectors')
+        connection.execute("UPDATE memories SET vector_state='pending' "
+                           "WHERE is_deleted=0 AND is_tombstone=0")
+        try:
+            connection.execute("DELETE FROM meta WHERE key=?", (EMBEDDING_MODEL_META,))
+        except sqlite3.OperationalError:
+            pass
+        detail = {'model': model, 'vectors_cleared': int(cleared),
+                  'memories_marked_pending': int(live)}
+        _journal(connection, 'reindex-vectors', '', detail, 'saved')
+        apply_digest(connection)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    return {'model': model, 'vectors_cleared': int(cleared),
+            'memories_marked_pending': int(live)}
 
 
 def get_memory(connection, memory_id):
