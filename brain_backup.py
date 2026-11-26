@@ -477,18 +477,19 @@ def _merge_new_rows(current_db, target_db):
                            (', '.join(names), ', '.join('?' for _ in names)), values)
             copied += 1
         counts['event_ledger'] = copied
-        sidecar_columns = [name for name in _table_columns(target, 'sidecar_events') if name != 'seq']
-        existing_sidecar = {tuple(row) for row in target.execute(
-            'SELECT %s FROM main.sidecar_events' % ', '.join(sidecar_columns))}
-        for row in target.execute('SELECT %s FROM old.sidecar_events' % ', '.join(sidecar_columns)):
-            values = tuple(row)
-            if values in existing_sidecar:
-                continue
-            target.execute(
-                'INSERT INTO main.sidecar_events(%s) VALUES(%s)' %
-                (', '.join(sidecar_columns), ', '.join('?' for _ in sidecar_columns)), values)
-            existing_sidecar.add(values)
-            counts['sidecar_events'] = counts.get('sidecar_events', 0) + 1
+        if _copyable(target, 'sidecar_events'):
+            sidecar_columns = [name for name in _table_columns(target, 'sidecar_events') if name != 'seq']
+            existing_sidecar = {tuple(row) for row in target.execute(
+                'SELECT %s FROM main.sidecar_events' % ', '.join(sidecar_columns))}
+            for row in target.execute('SELECT %s FROM old.sidecar_events' % ', '.join(sidecar_columns)):
+                values = tuple(row)
+                if values in existing_sidecar:
+                    continue
+                target.execute(
+                    'INSERT INTO main.sidecar_events(%s) VALUES(%s)' %
+                    (', '.join(sidecar_columns), ', '.join('?' for _ in sidecar_columns)), values)
+                existing_sidecar.add(values)
+                counts['sidecar_events'] = counts.get('sidecar_events', 0) + 1
         journal_columns = [name for name in _table_columns(target, 'write_journal') if name != 'seq']
         existing_journal = {tuple(row) for row in target.execute(
             'SELECT %s FROM main.write_journal' % ', '.join(journal_columns))}

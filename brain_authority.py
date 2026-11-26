@@ -182,7 +182,8 @@ class BrainAuthority:
         if changes:
             result = brain_writer.update_memory(connection, memory_id, changes, embedder=embedder,
                                                 operation_reason=args.get('edit_reason') or 'trace',
-                                                why_remembered=args.get('why_remembered') or '')
+                                                why_remembered=args.get('why_remembered') or '',
+                                                archive_raw=bool(args.get('archive_raw')))
             status = result['status']
         if args.get('archive') in (1, True):
             brain_writer.set_state(connection, memory_id, archived=True)

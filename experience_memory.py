@@ -126,6 +126,7 @@ class ExperienceMemory:
             self.events = EventMemory(memory, event_settings, model=model, sidecar=self.sidecar,
                                       budget=budget, cost_category=COST_CATEGORY,
                                       daily_cap=self.settings.get('daily_budget_cny', DEFAULTS['daily_budget_cny']))
+            self.events.locked = self.sidecar.locked
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
@@ -849,8 +850,10 @@ class ExperienceMemory:
         if source_key and any(row.get('kind') == 'update' and row.get('source_key') == source_key
                               and row.get('memory_id') == memory_id for row in self._events()):
             return True
-        if not self._alive(memory_id) or self.sidecar.locked(memory_id):
+        if not self._alive(memory_id):
             return False
+        if self.sidecar.locked(memory_id):
+            return 'locked'
         status = self._event_status(memory_id)
         if status in ('merged', 'closed'):
             # Ticket 421 review: revise() refuses a closed experience. Do not raise (that would keep the

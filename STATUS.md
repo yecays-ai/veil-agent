@@ -1,13 +1,13 @@
 # 当前状态
 
-> 更新时间：2026-11-26T02:51:00Z（P6-S2 审查修复收尾）
+> 更新时间：2026-11-26T03:58:00Z（P6-S2 二轮审查修复完成）
 
 ## P6-S2 · 统一写入事务、防丢稿、证据链与协同恢复
 
 - **当前目标**：让事件记忆在写入中断、经历整理失败和备份恢复后仍保持正文、故事、阶段、版本与用户原话证据一致，且可幂等恢复历史丢稿。
-- **现状**：分支 `ticket/450-p6-s2-write-contract-and-recovery` 已完成 CodeRabbit 审查 29 项定点修复（对应 34 条审查意见，含 5 组同源重复）及全面回归比对，已推送更新至 PR #450 等待 CI 与审查。主事件 `record/revise/retry_pending` 统一走 `commit_event_bundle()` 单事务与 `seen_projection` 并发复核；日期年份与数字边界校验从严；锁定事件不污染可读缓存；`brain_backup` 与 `scripts/p6_s2_recover_history.py` 补齐清单校验、物理行 JSONL 读写、失败回滚及写锁幂等审计。
-- **隔离验收**：`tests/test_p6_s2_review_fixes.py`（30 项）+ `tests/test_p6_s2_write_and_recovery.py`（19 项）共 49 项全过；全量 134 个测试文件与 `dd9a1da` 基线对照，120 个文件全过，其余 14 个沙盒/环境类失败与基线完全一致、零新增回归。
-- **下一步**：等待 PR #450 最新 CI 与代码审查；不得自行合并 PR，也不得对正式 `data/peter` 执行恢复，必须另开维护窗口并由 Lan 确认 dry-run 预览。
+- **现状**：分支 `ticket/450-p6-s2-write-contract-and-recovery` 已完成 CodeRabbit 首轮 29 项与二轮全部 14 项审查修复并推送更新至 PR #450。二轮补齐：缺失 `sidecar_events` 兼容、`ensure_schema` DDL 与 `apply_digest` 单事务提交、`retry_pending_vectors` 同事务更新摘要、`record()` 生成故事前采集基线且 `locked` 不推进 `last_story_at`、`revise()` 无新标题时不覆盖面板标题、`retry_pending()` 首创投影同步写入 `quotes`、`facts()`/`_missing_facts()` 统一中文含年份日期与严格年份归属、`timeline()` 模型可见证据脱敏、`hold` 重写由单条 Brain 版本保存完整旧 Markdown、`scripts/p6_s2_recover_history.py` 末行完整性保护，以及 `ExperienceMemory` 常驻锁绑定与 `'locked'` 状态区分。
+- **隔离验收**：P6-S2 专项、审查回归、事件、经历、Brain（writer/read/native_hold/backup/store/export）及 P3-4 等 15 个核心测试套件共 **291/291 全部通过**。
+- **下一步**：等待 PR #450 最新 CI 与复审确认；不得自行合并 PR，也不得对正式 `data/peter` 执行恢复，必须另开维护窗口并由 Lan 确认 dry-run 预览。
 - **验收步骤**：维护窗口创建协同 bundle；先 dry-run 核对 58 条目标消息和追加预览；确认后 apply，并在记忆详情/时间线检查 11 月 25 日经历连续且无重复；相同命令二次执行须返回 `already_recovered`。
 
 ## P6 路线

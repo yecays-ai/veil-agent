@@ -16,15 +16,13 @@ SCHEMA_ADDITIONS = (
     "ALTER TABLE memories ADD COLUMN vector_state TEXT NOT NULL DEFAULT 'ready'",
 )
 TABLE_NAMES = ('tombstones', 'delete_requests', 'write_journal', 'experience_recoveries')
-TABLES = """
-CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT);
-CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT);
-CREATE TABLE IF NOT EXISTS write_journal(seq INTEGER PRIMARY KEY, time TEXT, operation TEXT,
-    memory_id TEXT, detail_json TEXT, status TEXT);
-CREATE TABLE IF NOT EXISTS experience_recoveries(
-    source_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, event_id TEXT NOT NULL,
-    stage_id TEXT NOT NULL, created_at TEXT NOT NULL);
-"""
+TABLE_DDLS = (
+    'CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT)',
+    'CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT)',
+    'CREATE TABLE IF NOT EXISTS write_journal(seq INTEGER PRIMARY KEY, time TEXT, operation TEXT, memory_id TEXT, detail_json TEXT, status TEXT)',
+    'CREATE TABLE IF NOT EXISTS experience_recoveries(source_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, event_id TEXT NOT NULL, stage_id TEXT NOT NULL, created_at TEXT NOT NULL)',
+)
+TABLES = ';\n'.join(TABLE_DDLS) + ';\n'
 
 
 def _sha(value):
@@ -38,26 +36,36 @@ def now():
 
 def ensure_schema(connection):
     columns = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
-    schema_changed = 'vector_state' not in columns
-    if schema_changed:
-        connection.execute(SCHEMA_ADDITIONS[0])
+    need_vector_state = 'vector_state' not in columns
     present = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
-    if any(name not in present for name in TABLE_NAMES):
-        schema_changed = True
-    connection.executescript(TABLES)
-    if schema_changed:
-        # P6-S2 review: canonical_digest() covers experience_recoveries, so a newly created empty
-        # table changes the digest. Refresh it in the same committed step as the schema change;
-        # otherwise a business transaction that rolls back afterwards leaves meta.digest stale and
-        # check_db() reports a corrupt database even though no memory data was touched.
+    missing_tables = any(name not in present for name in TABLE_NAMES)
+    if not need_vector_state and not missing_tables:
+        if connection.in_transaction:
+            connection.commit()
+        return
+    # P6-S2 review: run schema DDL and apply_digest() in ONE transaction (avoid executescript(),
+    # which breaks transaction boundaries). Otherwise creating empty experience_recoveries before
+    # apply_digest() leaves meta.digest stale across crashes.
+    if connection.in_transaction:
+        connection.commit()
+    connection.execute('BEGIN IMMEDIATE')
+    try:
+        if need_vector_state:
+            connection.execute(SCHEMA_ADDITIONS[0])
+        for ddl in TABLE_DDLS:
+            connection.execute(ddl)
         try:
             apply_digest(connection)
         except sqlite3.Error:
             # A database without meta/canonical tables must still open for repair; the first real
             # write or import stores the digest.
             pass
-    connection.commit()
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
 
 
 def apply_digest(connection):
@@ -196,7 +204,7 @@ def apply_create_memory(connection, record, *, vector=None, state='pending'):
 
 
 def apply_update_memory(connection, memory_id, changes, *, vector=None, state=None,
-                        operation_reason='', why_remembered=''):
+                        operation_reason='', why_remembered='', archive_raw=False):
     """Update a memory + archive single version inside an already-open transaction."""
     row = connection.execute('SELECT body,raw_markdown,file_rel,vector_state FROM memories WHERE id=? AND '
                              'is_deleted=0 AND is_tombstone=0', (memory_id,)).fetchone()
@@ -215,10 +223,11 @@ def apply_update_memory(connection, memory_id, changes, *, vector=None, state=No
         return {'status': 'saved' if old_state == 'ready' else 'saved_index_pending',
                 'memory_id': memory_id, 'vector_state': old_state, 'changed': False}
     fields = sorted(changes)
+    archived_old = old_raw if (archive_raw and isinstance(old_raw, str) and old_raw) else old_body
     connection.execute('INSERT INTO versions(memory_id,time,operation_reason,why_remembered,'
                        'fields_json,old_content,old_sha256) VALUES(?,?,?,?,?,?,?)',
                        (memory_id, now(), operation_reason[:500], why_remembered[:500],
-                        json.dumps(fields), old_body, _sha(old_body)))
+                        json.dumps(fields), archived_old, _sha(archived_old)))
     raw = changes.get('raw_markdown', old_raw.replace(old_body, body, 1))
     raw = _with_metadata(raw, {'title': changes.get('title'),
                                'importance': changes.get('importance'),
@@ -266,8 +275,8 @@ def _vector_blob(values):
 
 
 def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
-                  operation_reason='', why_remembered=''):
-    """Rewrite a memory, archiving the old body first, in one transaction."""
+                  operation_reason='', why_remembered='', archive_raw=False):
+    """Rewrite a memory, archiving the old version first, in one transaction."""
     ensure_schema(connection)
     body_changed = 'body' in changes
     body = changes.get('body') if body_changed else None
@@ -281,7 +290,8 @@ def update_memory(connection, memory_id, changes, *, vector=None, embedder=None,
         connection.execute('BEGIN IMMEDIATE')
         result = apply_update_memory(
             connection, memory_id, changes, vector=vector, state=state,
-            operation_reason=operation_reason, why_remembered=why_remembered)
+            operation_reason=operation_reason, why_remembered=why_remembered,
+            archive_raw=archive_raw)
         apply_digest(connection)
         connection.commit()
     except Exception:
@@ -390,7 +400,17 @@ def restore_version(connection, memory_id, seq, *, vector=None, embedder=None):
                              (memory_id, seq)).fetchone()
     if row is None:
         raise KeyError('version')
-    return update_memory(connection, memory_id, {'body': row[0]}, vector=vector,
+    old_content = row[0] or ''
+    changes = {'body': old_content}
+    if isinstance(old_content, str) and old_content.startswith('---\n'):
+        from memory_agent import parse_frontmatter
+        meta, body = parse_frontmatter(old_content)
+        if body.strip():
+            changes = {'body': body.strip()}
+            title = meta.get('title') or meta.get('name')
+            if isinstance(title, str) and title.strip():
+                changes['title'] = title.strip()[:100]
+    return update_memory(connection, memory_id, changes, vector=vector,
                          embedder=embedder, operation_reason='restore version %s' % seq)
 
 
@@ -452,6 +472,7 @@ def retry_pending_vectors(connection, embedder):
                                (memory_id, len(values), blob, _sha(blob), now(), _sha(body)))
             connection.execute("UPDATE memories SET vector_state='ready' "
                                "WHERE id=? AND body=? AND vector_state='pending'", (memory_id, body))
+            apply_digest(connection)
             connection.commit()
         except Exception:
             try:
@@ -460,8 +481,6 @@ def retry_pending_vectors(connection, embedder):
                 pass
             continue
         saved += 1
-    if saved:
-        refresh_digest(connection)
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}
 
 

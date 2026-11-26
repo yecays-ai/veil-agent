@@ -98,9 +98,63 @@ def entities(text):
     return found
 
 
+_NATURAL_API_KEY = re.compile(
+    r'(?i)(api[_ -]?key)(\s+is\s+)(?:bearer\s+)?[^\s,;]{4,}'
+    r'(?:\s+(?!password\b|passwd\b|secret\b|access[_ -]?token\b|authorization\b|'
+    r'bearer\b|api[_ -]?key\b)[^\s,;]{4,})*')
+_SENSITIVE_KV = re.compile(
+    r'(?i)(api[_ -]?key|password|passwd|secret|access[_ -]?token|authorization|bearer|密码|密钥)'
+    r'(\s*[:=：]\s*(?:bearer\s+)?|(?<=\bbearer)\s+)'
+    r'[^\s,;]{4,}')
+_OPAQUE_SECRET = re.compile(
+    r'\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9_-]{12,})\b')
+
+
+def _redact_evidence_text(text):
+    """Mask API keys/tokens on model-visible evidence output boundaries without mutating chat logs."""
+    if not text:
+        return ''
+    text = _NATURAL_API_KEY.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
+    text = _SENSITIVE_KV.sub(lambda m: m.group(1) + m.group(2) + '[已隐藏]', text)
+    return _OPAQUE_SECRET.sub('[已隐藏的凭据]', text)
+
+
+def _extract_date_parts(text):
+    """(month, day, year_or_None, span) for every date expression in text.
+
+    Digit boundaries keep a longer number such as ``11-250`` from being read as November 25
+    (P6-S2 review); a year written with the date is returned so it can participate in matching.
+    """
+    text = text or ''
+    found = []
+    pattern = re.compile(r'(?:(?P<year>\d{4})\s*[-/年]\s*)?'
+                         r'(?P<month>\d{1,2})\s*[-/月]\s*(?P<day>\d{1,2})\s*日?')
+    for match in pattern.finditer(text):
+        start, end = match.span()
+        if start and text[start - 1].isdigit():
+            continue
+        if end < len(text) and text[end].isdigit():
+            continue
+        month, day = int(match.group('month')), int(match.group('day'))
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        year = int(match.group('year')) if match.group('year') else None
+        found.append((month, day, year, (start, end)))
+    months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+              'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+    for match in re.finditer(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})\b',
+                             text, re.I):
+        month = months.get(match.group(1).lower()[:3])
+        day = int(match.group(2))
+        if month and 1 <= day <= 31:
+            found.append((month, day, None, match.span()))
+    return found
+
+
 def facts(text):
     text = text or ''
-    return {'dates': sorted(set(_DATE.findall(text))),
+    dates = [text[start:end].strip() for _m, _d, _y, (start, end) in _extract_date_parts(text)]
+    return {'dates': sorted(set(d for d in dates if d)),
             'numbers': sorted(set(_NUMBER.findall(text))),
             'files': sorted(set(match.group(0).strip() for match in _FILE.finditer(text)))}
 
@@ -371,7 +425,8 @@ class EventMemory:
                 lines.append(f"  facts: {', '.join((extra.get('files') or []) + (extra.get('numbers') or []))[:300]}")
             if include_evidence:
                 for proof in self._evidence_for(stage.get('stage_id')):
-                    lines.append(f"  evidence ({proof.get('kind')}): {str(proof.get('text') or '')[:300]}")
+                    safe_text = _redact_evidence_text(str(proof.get('text') or ''))
+                    lines.append(f"  evidence ({proof.get('kind')}): {safe_text[:300]}")
         next_offset = offset + len(chunk) if offset + len(chunk) < len(stages) else None
         lines.append('' if next_offset is None else f"… 下一段从 offset={next_offset} 继续")
         return '\n'.join(lines), next_offset, len(stages)
@@ -509,6 +564,10 @@ class EventMemory:
             # a refused or failed retry must leave the original pending stage recoverable.
             self._supersede_pending(source_key, stage_id)
         old_story = event.get('story')
+        memory_id = event.get('memory_id')
+        # P6-S2 review: capture the committed projection baseline before calling the story model so
+        # any panel edit committed while the model runs is detected inside the write transaction.
+        old_projection = self.memory.content_for(memory_id, refresh=True) if memory_id else None
         story, story_source, through, story_pending = self._write_story(
             self.stages(event['event_id']) + [stage], self._story(event['event_id'], extra=stage), event)
         if story_pending:
@@ -533,7 +592,6 @@ class EventMemory:
         authority = getattr(self.memory, 'brain_authority', None)
         changed, locked = False, False
         memory_id = event.get('memory_id')
-        old_projection = self.memory.content_for(memory_id, refresh=True) if memory_id else None
         if authority is None:
             try:
                 memory_id, changed, locked = self._write_projection(
@@ -568,7 +626,7 @@ class EventMemory:
             stage['source'] = source_seen
 
         reviewed = {key: event.get(key) for key in
-                    ('story_source', 'story_through', 'story_through_id', 'story_coverage')}
+                    ('story_source', 'story_through', 'story_through_id', 'story_coverage', 'last_story_at')}
         event.update({
             'memory_id': memory_id or event.get('memory_id'),
             'last_at': occurred.isoformat() if occurred else event.get('last_at'),
@@ -586,7 +644,8 @@ class EventMemory:
             'related_to': sorted(set(event.get('related_to') or []) | set(self._related_events(event['event_id']))),
             'confidence': confidence,
             'dirty': story_pending or (not changed and not locked),
-            'last_story_at': datetime.now().astimezone().isoformat(),
+            'last_story_at': (reviewed['last_story_at'] if locked
+                              else datetime.now().astimezone().isoformat()),
             'revision': int(event.get('revision') or 0) + 1,
         })
         if 'first_at_known' not in event:
@@ -599,6 +658,7 @@ class EventMemory:
                           'story_through': reviewed['story_through'],
                           'story_through_id': reviewed['story_through_id'],
                           'story_coverage': reviewed['story_coverage'] or [],
+                          'last_story_at': reviewed['last_story_at'],
                           'story_pending': True, 'dirty': True,
                           'pending_review': True})
             story_pending = True
@@ -716,13 +776,14 @@ class EventMemory:
         revision_id = 'r-' + uuid.uuid4().hex[:12]
         stamp = datetime.now().astimezone().isoformat()
         projection = self._projection(text)
+        explicit_title = title.strip()[:100] if isinstance(title, str) and title.strip() else ''
         authority = getattr(self.memory, 'brain_authority', None)
         if authority is not None:
             updated_event = dict(event)
             updated_event.update({
                 'story': text, 'dirty': False, 'last_story_at': stamp,
                 'story_source': 'tidy', 'revision_id': revision_id,
-                'title': (title or event.get('title'))[:100],
+                'title': (explicit_title or event.get('title') or '')[:100],
             })
             embedder = None
             try:
@@ -733,7 +794,7 @@ class EventMemory:
                 authority.commit_event_bundle(
                     event=updated_event,
                     projection=projection if memory_id else None,
-                    title=(title or event.get('title') or ''),
+                    title=explicit_title,
                     embedder=embedder,
                     old_story=old_story,
                     operation_reason='事件故事修订',
@@ -860,11 +921,21 @@ class EventMemory:
                 clean, event_id, collected, explicit_quotes, stamp)
             authority = getattr(self.memory, 'brain_authority', None)
             if authority is not None:
+                need_projection = not event.get('memory_id')
+                embedder = None
+                if need_projection:
+                    try:
+                        embedder = self.memory.embedder()
+                    except Exception:
+                        embedder = None
                 try:
+                    bundle_event = {**event, 'dirty': False} if need_projection else event
                     authority.commit_event_bundle(
-                        event=event, stage={**clean, 'state': 'committed'},
-                        projection=None, title=event.get('title') or 'Event',
-                        embedder=None, old_story='', operation_reason='待提交阶段恢复',
+                        event=bundle_event, stage={**clean, 'state': 'committed'},
+                        projection=(self._projection(event['story']) if need_projection else None),
+                        title=(event.get('title') or 'Event') if need_projection else '',
+                        importance=event.get('importance'), pinned=event.get('pinned'),
+                        embedder=embedder, old_story='', operation_reason='待提交阶段恢复',
                         ledger_rows=ledger_rows, quotes=quote_rows)
                     fixed += 1
                 except Exception:
@@ -1312,35 +1383,7 @@ class EventMemory:
 
     @staticmethod
     def _date_parts(text):
-        """(month, day, year_or_None, span) for every date expression in text.
-
-        Digit boundaries keep a longer number such as ``11-250`` from being read as November 25
-        (P6-S2 review); a year written with the date is returned so it can participate in matching.
-        """
-        text = text or ''
-        found = []
-        pattern = re.compile(r'(?:(?P<year>\d{4})\s*[-/年]\s*)?'
-                             r'(?P<month>\d{1,2})\s*[-/月]\s*(?P<day>\d{1,2})\s*日?')
-        for match in pattern.finditer(text):
-            start, end = match.span()
-            if start and text[start - 1].isdigit():
-                continue
-            if end < len(text) and text[end].isdigit():
-                continue
-            month, day = int(match.group('month')), int(match.group('day'))
-            if not (1 <= month <= 12 and 1 <= day <= 31):
-                continue
-            year = int(match.group('year')) if match.group('year') else None
-            found.append((month, day, year, (start, end)))
-        months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-                  'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
-        for match in re.finditer(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})\b',
-                                 text, re.I):
-            month = months.get(match.group(1).lower()[:3])
-            day = int(match.group(2))
-            if month and 1 <= day <= 31:
-                found.append((month, day, None, match.span()))
-        return found
+        return _extract_date_parts(text)
 
     @classmethod
     def _independent_numbers(cls, text):
@@ -1380,7 +1423,7 @@ class EventMemory:
                 parts = cls._date_parts(sval)
                 matched = [part for part in parts
                            if any(part[0] == smonth and part[1] == sday
-                                  and (part[2] is None or syear is None or part[2] == syear)
+                                  and (part[2] is None or syear == part[2])
                                   for smonth, sday, syear, _span in story_dates)]
                 if not parts or len(matched) != len(parts):
                     missing.append(sval)

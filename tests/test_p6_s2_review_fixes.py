@@ -86,7 +86,7 @@ class TestDateAndNumberFacts(unittest.TestCase):
 
     def test_year_survives_a_format_change(self):
         self.assertEqual(_facts_missing('2026-11-25', 'we went out on 2026-11-25'), [])
-        self.assertEqual(_facts_missing('2026-11-25', 'we went out on 11-25'), ['2026'])
+        self.assertEqual(_facts_missing('2026-11-25', 'we went out on 11-25'), ['2026-11-25'])
 
     def test_yearless_forms_stay_equivalent(self):
         self.assertEqual(_facts_missing('11-25', '11月25日的下午去了电影院'), [])
@@ -672,6 +672,228 @@ class TestNativeHoldKeepsOldTitle(unittest.TestCase):
         titles = [row['title'] for row in versions]
         self.assertIn('Old title', titles,
                       'the old title must be recoverable from the archived version')
+
+
+class P6S2SecondReviewFixesTests(unittest.TestCase):
+    """Regression coverage for each finding in the second CodeRabbit review."""
+
+    def test_1_restore_merge_skips_missing_sidecar_events(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            db_backup = root / 'backup.db'
+            db_live = root / 'live.db'
+            c1 = _init_db(db_backup)
+            _seed_memory(c1, 'mem-1', 'old body')
+            c1.close()
+            # Current/safety DB lacks optional sidecar_events table while backup has it
+            c2 = _init_db(db_live)
+            _seed_memory(c2, 'mem-2', 'newer body')
+            c2.execute('DROP TABLE sidecar_events')
+            c2.commit()
+            c2.close()
+            counts = brain_backup._merge_new_rows(db_live, db_backup)
+            self.assertEqual(counts['memories'], 1)
+            self.assertNotIn('sidecar_events', counts)
+
+    def test_2_ensure_schema_rolls_back_ddl_if_digest_fails(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db_fail = Path(tmp) / 'rollback.db'
+            c1 = _init_db(db_fail)
+            c1.execute('DROP TABLE experience_recoveries')
+            c1.commit()
+            with patch.object(brain_writer, 'apply_digest', side_effect=RuntimeError('crash')):
+                with self.assertRaises(RuntimeError):
+                    brain_writer.ensure_schema(c1)
+            present = {r[0] for r in c1.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            c1.close()
+            self.assertNotIn('experience_recoveries', present, 'DDL must roll back with failed digest update')
+
+            db_ok = Path(tmp) / 'real.db'
+            c2 = _init_db(db_ok)
+            c2.execute('DROP TABLE experience_recoveries')
+            c2.commit()
+            brain_writer.ensure_schema(c2)
+            c2.close()
+            snap = brain_backup.snapshot(db_ok)
+            self.assertTrue(snap['digest_ok'])
+
+    def test_3_retry_pending_vectors_updates_digest_in_same_tx(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Path(tmp) / 'vec.db'
+            conn = _init_db(db)
+            conn.execute('BEGIN IMMEDIATE')
+            res = brain_writer.apply_create_memory(
+                conn, {'id': 'm-vec', 'body': 'hello vector', 'title': 'Vec'},
+                vector=None, state='pending')
+            brain_writer.apply_digest(conn)
+            conn.commit()
+            out = brain_writer.retry_pending_vectors(conn, lambda _b: [0.25] * 1024)
+            self.assertEqual(out['saved'], 1)
+            conn.close()
+            snap = brain_backup.snapshot(db)
+            self.assertTrue(snap['digest_ok'])
+
+    def test_4_and_5_record_baseline_conflict_and_locked_preserves_last_story_at(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            em = EventMemory(memory, {'enabled': True, 'min_chars': 1}, model=Mock(),
+                             sidecar=SimpleNamespace(all=lambda: {memory_id: {'lan_edited': '2026-11-26T12:00:00+08:00'}}),
+                             budget=memory.budget)
+            created = em.record('initial stage', 'Trip')
+            memory_id = created['memory_id']
+            ev_before = em.events()[created['event_id']]
+            orig_story_at = ev_before['last_story_at']
+            # #5 locked branch preserves last_story_at
+            em.sidecar = SimpleNamespace(all=lambda: {memory_id: {'lan_edited': '2099-01-01T00:00:00+08:00'}})
+            em.record('later stage', 'Trip', event_id=created['event_id'])
+            ev_locked = em.events()[created['event_id']]
+            self.assertEqual(ev_locked['last_story_at'], orig_story_at)
+
+            # #4 concurrent panel edit during _write_story triggers ProjectionConflict
+            em.sidecar = SimpleNamespace(all=lambda: {})
+            orig_write_story = em._write_story
+            def sneaky_edit(*args, **kwargs):
+                memory.brain_authority.call('trace', {'bucket_id': memory_id, 'content': 'Lan manual edit'})
+                return orig_write_story(*args, **kwargs)
+            with patch.object(em, '_write_story', side_effect=sneaky_edit):
+                res = em.record('third stage', 'Trip', event_id=created['event_id'])
+            self.assertTrue(res.get('version_conflict'))
+            self.assertEqual(memory.content_for(memory_id, refresh=True).strip(), 'Lan manual edit')
+
+    def test_6_revise_without_title_keeps_panel_edited_title(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            em = EventMemory(memory, {'enabled': True}, model=Mock(), budget=memory.budget)
+            rec = em.record('2026-11-25 went hiking', 'Old Event Title')
+            mid = rec['memory_id']
+            memory.brain_authority.call('trace', {'bucket_id': mid, 'title': 'Panel Edited Title'})
+            memory.bucket_details_cache.pop(mid, None)
+            ok = em.revise(rec['event_id'], '2026-11-25 went hiking with tea', title='')
+            self.assertTrue(ok)
+            memory.bucket_details_cache.pop(mid, None)
+            self.assertEqual(memory.title_for(mid), 'Panel Edited Title')
+            ok2 = em.revise(rec['event_id'], '2026-11-25 went hiking with tea and cake', title='Explicit Title')
+            self.assertTrue(ok2)
+            memory.bucket_details_cache.pop(mid, None)
+            self.assertEqual(memory.title_for(mid), 'Explicit Title')
+
+    def test_7_retry_pending_creates_projection_and_quotes_together(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            memory.store.append('fake/chat.jsonl', {
+                'id': 'm-q1', 'message_id': 'm-q1', 'role': 'user',
+                'content': 'Exact user quote to preserve',
+                'time': '2026-11-25T10:00:00+08:00',
+            })
+            em = EventMemory(memory, {'enabled': True}, model=Mock(), budget=memory.budget)
+            with patch.object(memory.brain_authority, 'commit_event_bundle', side_effect=RuntimeError('transient')):
+                res = em.record('First stage', 'New Event', at='2026-11-25T10:05:00+08:00',
+                                source={'kind': 'chat', 'message_ids': ['m-q1']})
+            self.assertTrue(res.get('pending'))
+            self.assertIsNone(res.get('memory_id'))
+            fixed = em.retry_pending()
+            self.assertEqual(fixed, 1)
+            ev = next(iter(em.events().values()))
+            self.assertTrue(ev.get('memory_id'))
+            conn = sqlite3.connect(str(memory.brain_authority.db_path))
+            try:
+                quotes = conn.execute('SELECT text FROM quotes WHERE memory_id=?', (ev['memory_id'],)).fetchall()
+            finally:
+                conn.close()
+            self.assertTrue(any('Exact user quote' in q[0] for q in quotes))
+
+    def test_8_and_9_chinese_year_date_facts_and_strict_year_match(self):
+        extracted = facts('我们在2026年11月25日出发')
+        self.assertTrue(any('2026' in d and '11' in d and '25' in d for d in extracted['dates']))
+        # #9 year must belong to the matched date, not an independent order/ticket number
+        missing = _facts_missing('阶段日期 2026-11-25', '11-25 出发，编号 2026')
+        self.assertTrue(missing, '11-25 + unrelated number 2026 must NOT satisfy 2026-11-25')
+
+    def test_10_timeline_redacts_api_keys_in_evidence(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            secret = 'sk-testsecretkey1234567890'
+            memory.store.append('fake/chat.jsonl', {
+                'id': 'm-sec', 'message_id': 'm-sec', 'role': 'user',
+                'content': f'Here is my key {secret}',
+                'time': '2026-11-25T10:00:00+08:00',
+            })
+            em = EventMemory(memory, {'enabled': True}, model=Mock(), budget=memory.budget)
+            rec = em.record('Discussed setup', 'Setup', at='2026-11-25T10:05:00+08:00',
+                            source={'kind': 'chat', 'message_ids': ['m-sec']})
+            rendered, _next, _total = em.timeline(rec['event_id'])
+            self.assertNotIn(secret, rendered)
+            # Raw chat.jsonl stays untouched
+            raw_chat = (memory.store.root / 'fake/chat.jsonl').read_text(encoding='utf-8')
+            self.assertIn(secret, raw_chat)
+
+    def test_11_hold_body_only_rewrite_keeps_single_raw_version(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            writer = sqlite3.connect(str(memory.brain_authority.db_path))
+            try:
+                target = brain_writer.create_memory(
+                    writer, {'body': 'first body', 'title': 'Stable Title'},
+                    embedder=lambda _t: [0.5] * 1024)['memory_id']
+            finally:
+                writer.close()
+            tools = NativeMemoryTools(memory)
+            tools.search_results = {target: 'first body'}
+            res = tools._hold({'content': 'second body', 'target_id': target})
+            self.assertIn(res[1], ('成功', '新建', '已更新'))
+            versions = tools.panel_versions(target)
+            self.assertEqual(len(versions), 1, 'no duplicate version rows on body-only Brain hold rewrite')
+            self.assertEqual(versions[0]['title'], 'Stable Title')
+
+    def test_12_recovery_marker_handles_missing_newline_and_corrupted_tail(self):
+        import p6_s2_recover_history as rec_mod
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            role = Path(tmp) / 'role'
+            role.mkdir(parents=True)
+            exp = role / 'experience-memory.jsonl'
+            exp.write_text(json.dumps({'kind': 'note', 'id': '1'}), encoding='utf-8')  # no trailing \n
+            rec_mod._ensure_external_marker(role, {'kind': 'p6-s2-recovery', 'source_key': 'sk-1'})
+            lines = [json.loads(ln) for ln in exp.read_text(encoding='utf-8').splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 2)
+            # Corrupted trailing line must refuse append
+            exp.write_text('{"broken": ', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                rec_mod._ensure_external_marker(role, {'kind': 'p6-s2-recovery', 'source_key': 'sk-2'})
+
+    def test_13_and_14_experience_binds_locked_and_returns_locked_string(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            memory = _brain_memory(root)
+            self.addCleanup(memory.__exit__, None, None, None)
+            from dataclasses import replace as dc_replace
+            memory.cfg = dc_replace(memory.cfg, memory={**memory.cfg.memory, 'events': {'enabled': True}})
+            settings = {'enabled': True, 'min_chars': 200, 'floor_chars': 50,
+                        'idle_minutes': 30, 'day_end': '23:30', 'day_end_idle_minutes': 10,
+                        'daily_budget_cny': 1, 'recent_days': 3, 'recent_chars': 1500}
+            exp = ExperienceMemory(memory.cfg, memory.store, memory.budget, Mock(),
+                                   'fake/chat.jsonl', memory, settings)
+            self.assertIsNotNone(exp.events)
+            self.assertIsNotNone(exp.events.locked)
+            # Locked memory -> _save_update returns 'locked', not False
+            writer = sqlite3.connect(str(memory.brain_authority.db_path))
+            try:
+                mid = brain_writer.create_memory(
+                    writer, {'body': 'body text', 'title': 'T'}, embedder=lambda _t: [0.5] * 1024)['memory_id']
+                brain_writer.set_state(writer, mid, locked=True)
+            finally:
+                writer.close()
+            exp.sidecar = SimpleNamespace(locked=lambda m: m == mid, all=lambda: {})
+            self.assertEqual(exp._save_update({'id': mid, 'text': 'updated text'}), 'locked')
 
 
 if __name__ == '__main__':

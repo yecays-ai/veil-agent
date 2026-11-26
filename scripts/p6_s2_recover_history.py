@@ -337,17 +337,16 @@ def _legacy_recover_slice(
         conn2.close()
 
     exp_path = role / 'experience-memory.jsonl'
-    with exp_path.open('a', encoding='utf-8') as f:
-        f.write(json.dumps({
-            'ts': now,
-            'kind': 'p6-s2-recovery',
-            'memory_id': memory_id,
-            'event_id': ev['id'],
-            'stage_id': stage_id,
-            'source_key': source_key,
-            'covers': [from_time, to_time],
-            'message_count': len(messages),
-        }, ensure_ascii=False) + '\n')
+    _append_jsonl_checked(exp_path, {
+        'ts': now,
+        'kind': 'p6-s2-recovery',
+        'memory_id': memory_id,
+        'event_id': ev['id'],
+        'stage_id': stage_id,
+        'source_key': source_key,
+        'covers': [from_time, to_time],
+        'message_count': len(messages),
+    })
 
     return {
         'status': 'recovered',
@@ -359,6 +358,24 @@ def _legacy_recover_slice(
     }
 
 
+def _append_jsonl_checked(path: Path, row: dict[str, Any]) -> None:
+    """Append one JSONL record while preserving line boundaries and refusing torn tails."""
+    newline_prefix = b''
+    if path.exists() and path.stat().st_size:
+        raw = path.read_bytes()
+        if raw.strip():
+            lines = [ln for ln in raw.splitlines() if ln.strip()]
+            try:
+                json.loads(lines[-1].decode('utf-8'))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise ValueError(f'corrupted trailing JSONL record in {path}') from exc
+            if not raw.endswith(b'\n'):
+                newline_prefix = b'\n'
+    payload = newline_prefix + (json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8')
+    with path.open('ab') as handle:
+        handle.write(payload)
+
+
 def _ensure_external_marker(role: Path, row: dict[str, Any]) -> None:
     path = role / 'experience-memory.jsonl'
     existing = _read_jsonl(path)
@@ -366,8 +383,7 @@ def _ensure_external_marker(role: Path, row: dict[str, Any]) -> None:
     if any(item.get('kind') == 'p6-s2-recovery' and item.get('source_key') == source_key
            for item in existing):
         return
-    with path.open('a', encoding='utf-8', newline='\n') as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+    _append_jsonl_checked(path, row)
 
 
 
