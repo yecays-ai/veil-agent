@@ -22,7 +22,7 @@ from decimal import Decimal
 
 import prompts
 import brain_events
-from brain_authority import ProjectionConflict
+from brain_authority import ProjectionConflict, ProjectionLocked
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -432,6 +432,22 @@ class EventMemory:
         return '\n'.join(lines), next_offset, len(stages)
 
     # --- write side ------------------------------------------------------------------------
+    @staticmethod
+    def _locked_story_view(event, reviewed, old_story):
+        """Reviewed-story view committed when the target is or just became locked (ticket 453)."""
+        view = dict(event)
+        view.update({
+            'story': old_story or event.get('story') or '',
+            'story_source': reviewed['story_source'],
+            'story_through': reviewed['story_through'],
+            'story_through_id': reviewed['story_through_id'],
+            'story_coverage': reviewed['story_coverage'] or [],
+            'last_story_at': reviewed['last_story_at'],
+            'story_pending': True, 'dirty': True,
+            'pending_review': True,
+        })
+        return view
+
     @_serialized
     def record(self, text, title, *, why='', at=None, importance=None, pinned=None,
                interpretation='', event_id=None, source=None, source_key=''):
@@ -652,19 +668,21 @@ class EventMemory:
             event['first_at_known'] = stage['at_known'] if not updated else event.get('first_at_known', True)
         event['last_at_known'] = stage['at_known']
         ledger_rows = []
+        locked_review_row = ('event-review', {
+            'at': saved_at.isoformat(), 'event_id': event['event_id'],
+            'reason': 'locked event got a new stage; reviewed story waits for unlock'})
+        locked_event = None
+        locked_ledger_rows = []
         if locked:
-            event.update({'story': old_story or event.get('story') or '',
-                          'story_source': reviewed['story_source'],
-                          'story_through': reviewed['story_through'],
-                          'story_through_id': reviewed['story_through_id'],
-                          'story_coverage': reviewed['story_coverage'] or [],
-                          'last_story_at': reviewed['last_story_at'],
-                          'story_pending': True, 'dirty': True,
-                          'pending_review': True})
+            event = self._locked_story_view(event, reviewed, old_story)
             story_pending = True
-            ledger_rows.append(('event-review', {
-                'at': saved_at.isoformat(), 'event_id': event['event_id'],
-                'reason': 'locked event got a new stage; reviewed story waits for unlock'}))
+            ledger_rows.append(locked_review_row)
+        elif memory_id and authority is not None:
+            # Ticket 453: the panel can take the lock between the check above and the bundle's write
+            # transaction. Keep a reviewed-story view ready so the bundle re-check inside its
+            # transaction commits it instead of the candidate story, never touching the locked body.
+            locked_event = self._locked_story_view(dict(event), reviewed, old_story)
+            locked_ledger_rows = [locked_review_row]
         if event.get('status') == 'uncertain':
             ledger_rows.append(('event-review', {
                 'at': saved_at.isoformat(), 'event_id': event['event_id'],
@@ -683,9 +701,17 @@ class EventMemory:
                     embedder=self.memory.embedder(), old_story=old_story or '',
                     operation_reason='事件故事更新', ledger_rows=ledger_rows,
                     quotes=quote_rows,
-                    seen_projection=old_projection)
+                    seen_projection=old_projection,
+                    locked_event=locked_event, locked_ledger_rows=locked_ledger_rows)
                 memory_id = result['memory_id']
                 event['memory_id'] = memory_id
+                if result.get('locked'):
+                    # Ticket 453: the lock was taken after the check above; the bundle committed the
+                    # reviewed-story view instead of the candidate projection.
+                    locked = True
+                    story_pending = True
+                    if locked_event is not None:
+                        event = dict(locked_event, memory_id=memory_id)
                 changed = result['changed'] or locked
                 self._last_projection_pending = result['index_pending']
                 self.memory.bucket_details_cache.pop(memory_id, None)
@@ -808,6 +834,10 @@ class EventMemory:
                                       'why': why, 'before': old_story[:500], 'after': text[:500]}),
                     ),
                 )
+            except ProjectionLocked:
+                # Ticket 453: the panel took the lock after the check above; refuse the whole revision.
+                self.last_revise_status = 'locked'
+                return False
             except ProjectionConflict:
                 self.last_revise_status = 'conflict'
                 return False
@@ -936,7 +966,7 @@ class EventMemory:
                         title=(event.get('title') or 'Event') if need_projection else '',
                         importance=event.get('importance'), pinned=event.get('pinned'),
                         embedder=embedder, old_story='', operation_reason='待提交阶段恢复',
-                        ledger_rows=ledger_rows, quotes=quote_rows)
+                        ledger_rows=ledger_rows, quotes=quote_rows, abort_on_locked=True)
                     fixed += 1
                 except Exception:
                     continue
@@ -1619,6 +1649,16 @@ class EventMemory:
         for event in list(self.events().values()):
             if not event.get('dirty') or fixed >= limit:
                 continue
+            memory_id = event.get('memory_id')
+            if memory_id and callable(self.locked):
+                try:
+                    if self.locked(memory_id):
+                        # Ticket 453: keep the reviewed story and its pending flags for the unlock.
+                        # Rebuilding here would pay for a story that must not be persisted and would
+                        # clear `dirty`, so the stage could never be projected after Lan unlocks.
+                        continue
+                except Exception:
+                    continue
             try:
                 story = event.get('story') or self._story(event['event_id'])
                 if event.get('story_pending'):
@@ -1640,6 +1680,10 @@ class EventMemory:
                                   'belief_history': self._belief_history(event['event_id'])})
                 memory_id, changed, locked = self._write_projection(
                     event, self._projection(story), event.get('title') or 'Event')
+                if locked and memory_id and callable(self.locked) and self.locked(memory_id):
+                    # Ticket 453: a lock taken between the check above and the write must keep the
+                    # reviewed story and pending flags; retry this event after the unlock.
+                    continue
                 if changed or locked:
                     event['memory_id'] = memory_id or event.get('memory_id')
                     event['dirty'] = bool(event.get('story_pending'))
