@@ -485,8 +485,12 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   let pinnedChat;
   await wait(() => { pinnedChat = BrowserWindow.getAllWindows().find(w => w !== pet && w !== chat && w.webContents.getURL().includes('view=chat')); return pinnedChat?.isVisible(); }, 'detached chat for pin check missing');
   await wait(() => pinnedChat.webContents.executeJavaScript('!!document.querySelector("#detached-pin")'), 'detached pin button missing');
+  // Detached windows start pinned (settings default), so the first click unpins and the second re-pins.
+  await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="true"'), 'detached pin should start pinned');
   await pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").click()');
-  await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="true"'), 'detached pin toggle did not persist');
+  await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="false"'), 'detached pin did not turn off');
+  await pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").click()');
+  await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="true"'), 'detached pin did not persist back on');
   await pinnedChat.webContents.executeJavaScript('setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
   await wait(() => pinnedChat.isDestroyed(), 'detached chat did not merge back');
 
