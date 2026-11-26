@@ -1301,6 +1301,16 @@ class NativeMemoryTools:
             if not self._save_version(target_id, {'content': content, 'why_remembered': why},
                                       old_document, operation_reason='hold(target_id) 重写'):
                 return 'The complete previous version could not be safely archived, so nothing was changed.', '出错', summary
+        elif isinstance(title, str) and title.strip():
+            # P6-S2 review: the Brain writer's version row keeps only the previous body, so a title
+            # change would leave the old title unrecoverable from the memory page. When this rewrite
+            # really changes the title, archive the complete previous Markdown (front matter included).
+            wanted_title = title.strip()[:TITLE_LIMIT]
+            if wanted_title != (self.memory.title_for(target_id) or ''):
+                if not self._save_version(target_id, {'content': content, 'title': wanted_title,
+                                                      'why_remembered': why},
+                                          old_document, operation_reason='hold(target_id) 重写（标题变更）'):
+                    return 'The complete previous version could not be safely archived, so nothing was changed.', '出错', summary
         trace_args = {'bucket_id': target_id, 'content': content, 'edit_reason': 'hold(target_id) 重写'}
         if isinstance(title, str) and title.strip():
             trace_args['title'] = title.strip()[:TITLE_LIMIT]

@@ -16,6 +16,10 @@ import brain_writer
 from brain_authority_init import BrainDatabaseProblem, prepare as prepare_brain_database
 
 
+class ProjectionConflict(RuntimeError):
+    """The committed body changed between the caller's read and the bundle transaction."""
+
+
 class BrainAuthority:
     def __init__(self, cfg, store):
         self.cfg = cfg
@@ -88,13 +92,18 @@ class BrainAuthority:
         if self._last_pending_retry and now - self._last_pending_retry < self._pending_retry_seconds:
             return
         self._last_pending_retry = now
-        connection = self._connect()
+        connection = None
         try:
+            connection = self._connect()
             brain_writer.retry_pending_vectors(connection, embed)
         except Exception:
+            # P6-S2 review: callers invoke this after their bundle already committed. A reconnect or
+            # schema failure here must not turn a committed write into a reported failure; the memory
+            # simply stays vector_state='pending' for the next retry.
             pass
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def _hold(self, connection, args, embedder):
         content = args.get('content') or ''
@@ -235,7 +244,7 @@ class BrainAuthority:
                             'SELECT body FROM memories WHERE id=? AND is_deleted=0 AND is_tombstone=0',
                             (memory_id,)).fetchone()
                         if current is None or current[0].strip() != str(seen_projection).strip():
-                            raise RuntimeError('event projection changed concurrently')
+                            raise ProjectionConflict('event projection changed concurrently')
                     if projection is not None and str(projection).strip():
                         if memory_id:
                             changes = {'body': projection}
@@ -290,6 +299,10 @@ class BrainAuthority:
                 finally:
                     connection.close()
         if embed is not None:
+            # Runs after this bundle committed, outside the role write lock (embedding is a network
+            # call). retry_pending_vectors re-checks body and vector_state inside its own write
+            # transaction, so a concurrent rewrite can never be indexed with a stale vector, and it
+            # never raises: a retry failure must not turn a committed write into a reported failure.
             self._retry_pending(embed)
         return {
             'memory_id': (result or {}).get('memory_id') or event.get('memory_id'),

@@ -33,6 +33,92 @@ def _tables(connection):
         "SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _has_table(connection, table, schema='main'):
+    return connection.execute(
+        "SELECT 1 FROM %s.sqlite_master WHERE type='table' AND name=?" % schema,
+        (table,)).fetchone() is not None
+
+
+def _copyable(target, table):
+    """True when both the candidate and the attached safety database have this child table."""
+    return _has_table(target, table) and _has_table(target, table, schema='old')
+
+
+def _read_jsonl_lines(text):
+    """Physical lines of a JSONL document.
+
+    A JSON string may legally contain U+2028; str.splitlines() would split it and corrupt both the
+    merge and the reread of the file (P6-S2 review). Only '\n' separates records.
+    """
+    return [line.rstrip('\r') for line in (text or '').split('\n')]
+
+
+def _parse_jsonl_lines(text):
+    rows = []
+    for line in _read_jsonl_lines(text):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception:
+            item = None
+        rows.append((line, item if isinstance(item, dict) else None))
+    return rows
+
+
+def _jsonl_identity(item):
+    """Stable identity of one experience-memory row, or None when the row has none."""
+    if not isinstance(item, dict):
+        return None
+    kind = item.get('kind')
+    source_key = item.get('source_key')
+    if not isinstance(kind, str) or not kind:
+        return None
+    if not isinstance(source_key, str) or not source_key:
+        return None
+    return (kind, source_key, item.get('entry_index'), item.get('memory_id'),
+            item.get('deferred_key'))
+
+
+def _merge_companion_lines(existing_text, bundle_text):
+    """Union of a bundle JSONL and the current file, keyed by record identity.
+
+    Rows that describe the same record are not duplicated: the current file's row wins, so a reconcile
+    marker such as `stage_unlinked` is neither duplicated nor silently rolled back (P6-S2 review).
+    Rows without a stable identity keep the previous exact-line behaviour.
+    """
+    existing = _parse_jsonl_lines(existing_text)
+    bundle = _parse_jsonl_lines(bundle_text)
+    current_by_identity = {}
+    for line, item in existing:
+        key = _jsonl_identity(item)
+        if key is not None:
+            current_by_identity[key] = line
+    merged, seen_lines, seen_keys = [], set(), set()
+    for line, item in bundle:
+        key = _jsonl_identity(item)
+        if key is not None:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            line = current_by_identity.get(key, line)
+        if line in seen_lines:
+            continue
+        merged.append(line)
+        seen_lines.add(line)
+    for line, item in existing:
+        key = _jsonl_identity(item)
+        if key is not None:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+        if line in seen_lines:
+            continue
+        merged.append(line)
+        seen_lines.add(line)
+    return '\n'.join(merged) + ('\n' if merged else '')
+
+
 def _actual_digest(connection):
     from veil_brain import canonical_digest
     return canonical_digest(connection)
@@ -178,8 +264,18 @@ def restore(backup_path, db_path, *, lock_held=False):
               'sha256': hashlib.sha256(data).hexdigest(),
               'pre_restore': str(safety) if safety else '',
               'pre_restore_export': str(safety_export) if safety_export else '',
-              'safety_preserved': bool(safety), 'preserved_new': preserved,
-              **snapshot(target)}
+              'safety_preserved': bool(safety), 'preserved_new': preserved}
+    try:
+        post = snapshot(target)
+    except Exception:
+        # P6-S2 review: the database is already replaced here. A failed post-restore check must put
+        # the pre-restore copy back instead of leaving a half-verified database in place.
+        if safety is not None and safety.exists():
+            shutil.copy2(safety, target)
+        else:
+            target.unlink(missing_ok=True)
+        raise
+    result.update(post)
     return result
 
 
@@ -266,11 +362,12 @@ def _merge_new_rows(current_db, target_db):
         counts['vectors'] = _copy_missing(
             target, 'vectors', 'memory_id', new_memory_ids, ignore=True)
         for table in ('sidecar_state', 'sidecar_events', 'relations', 'sources', 'quotes'):
-            try:
-                counts[table] = _copy_missing(
-                    target, table, 'memory_id', new_memory_ids, ignore=True)
-            except sqlite3.Error:
-                counts[table] = 0
+            # P6-S2 review: an old database may lack a child table entirely; skip the whole table so
+            # the DELETE and the INSERT stay together. Any other SQLite error must propagate and roll
+            # the merge back instead of leaving deleted rows behind.
+            if not _copyable(target, table):
+                continue
+            counts[table] = _copy_missing(target, table, 'memory_id', new_memory_ids, ignore=True)
         counts['events'] = _copy_missing(target, 'events', 'event_id', new_event_ids)
         counts['event_stages'] = _copy_missing(
             target, 'event_stages', 'event_id', new_event_ids, ignore=True)
@@ -285,18 +382,17 @@ def _merge_new_rows(current_db, target_db):
                 % (names, names, _in(existing_memory_ids)), list(existing_memory_ids))
             counts['updated_memories'] = target.execute('SELECT changes()').fetchone()[0]
             for table in ('vectors', 'sidecar_state', 'relations', 'sources', 'quotes'):
-                try:
-                    columns = _table_columns(target, table)
-                    names = ', '.join(columns)
-                    target.execute('DELETE FROM main.%s WHERE memory_id IN %s' %
-                                   (table, _in(existing_memory_ids)), list(existing_memory_ids))
-                    target.execute(
-                        'INSERT OR REPLACE INTO main.%s(%s) SELECT %s FROM old.%s WHERE memory_id IN %s'
-                        % (table, names, names, table, _in(existing_memory_ids)),
-                        list(existing_memory_ids))
-                    counts['updated_' + table] = target.execute('SELECT changes()').fetchone()[0]
-                except sqlite3.Error:
-                    counts['updated_' + table] = 0
+                if not _copyable(target, table):
+                    continue
+                columns = _table_columns(target, table)
+                names = ', '.join(columns)
+                target.execute('DELETE FROM main.%s WHERE memory_id IN %s' %
+                               (table, _in(existing_memory_ids)), list(existing_memory_ids))
+                target.execute(
+                    'INSERT OR REPLACE INTO main.%s(%s) SELECT %s FROM old.%s WHERE memory_id IN %s'
+                    % (table, names, names, table, _in(existing_memory_ids)),
+                    list(existing_memory_ids))
+                counts['updated_' + table] = target.execute('SELECT changes()').fetchone()[0]
             version_columns = [name for name in _table_columns(target, 'versions') if name != 'seq']
             existing_versions = {tuple(row) for row in target.execute(
                 'SELECT %s FROM main.versions' % ', '.join(version_columns))}
@@ -425,6 +521,9 @@ COMPANION_FILES = (
     'recall-rotation.json',
 )
 
+# Files reconcile_companion_state() may rewrite; restore snapshots them before it runs.
+RECONCILE_FILES = ('learned-context.json', 'experience-memory.jsonl')
+
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -447,8 +546,13 @@ def _chat_watermark(chat_path: Path) -> dict[str, Any]:
             lines += 1
             try:
                 item = json.loads(raw)
-                if isinstance(item, dict) and item.get('id') is not None:
-                    last_id = item.get('id')
+                if isinstance(item, dict):
+                    # Store.append() writes `message_id`; older exports used `id`.
+                    message_id = item.get('message_id')
+                    if message_id is None:
+                        message_id = item.get('id')
+                    if message_id is not None:
+                        last_id = message_id
             except Exception:
                 pass
     return {
@@ -518,7 +622,12 @@ def reconcile_companion_state(role_dir: str | Path) -> dict[str, Any]:
                 for entry in section:
                     if not isinstance(entry, dict):
                         continue
-                    refs = _extract_db_refs(json.dumps(entry, ensure_ascii=False))
+                    # P6-S2 review: read only the entry's own content. Scanning the whole entry also
+                    # re-reads the stale_ref/missing_refs written by the previous pass, so a repaired
+                    # reference could never clear the marker.
+                    content = {key: value for key, value in entry.items()
+                               if key not in ('stale_ref', 'missing_refs')}
+                    refs = _extract_db_refs(json.dumps(content, ensure_ascii=False))
                     missing = [
                         f'{kind}:{ref_id}'
                         for kind, ref_id in refs
@@ -547,7 +656,7 @@ def reconcile_companion_state(role_dir: str | Path) -> dict[str, Any]:
     if exp_path.exists():
         updated_lines: list[str] = []
         changed = False
-        for raw in exp_path.read_text(encoding='utf-8').splitlines():
+        for raw in _read_jsonl_lines(exp_path.read_text(encoding='utf-8')):
             if not raw.strip():
                 continue
             try:
@@ -614,6 +723,28 @@ def backup_bundle(role_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
     return {'out_dir': str(out), 'manifest': manifest}
 
 
+def _valid_sha256(value):
+    value = str(value or '')
+    return len(value) == 64 and all(char in '0123456789abcdefABCDEF' for char in value)
+
+
+def _bundle_file(base, name, allowed=None):
+    """Resolve one manifest entry to a file inside `base`.
+
+    A manifest may not name an absolute path, a parent directory or any file the format does not
+    define; a matching hash authorises content, never a location (P6-S2 review).
+    """
+    if not isinstance(name, str) or not name or name != Path(name).name:
+        raise ValueError('bundle manifest names an invalid path: %r' % (name,))
+    if allowed is not None and name not in allowed:
+        raise ValueError('bundle manifest names an unexpected file: %r' % (name,))
+    root = base.resolve()
+    candidate = (base / name).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError('bundle manifest path escapes the bundle: %r' % (name,))
+    return candidate
+
+
 def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, Any]:
     """Restore a coordinated backup bundle, preserving newer data and reconciling refs."""
     bundle = Path(bundle_dir)
@@ -624,17 +755,35 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 
     db_info = manifest.get('db') or {}
-    bundle_db = bundle / str(db_info.get('file') or 'brain.db')
-    if db_info.get('sha256') and _sha256_file(bundle_db) != db_info['sha256']:
+    if not isinstance(db_info, dict):
+        raise ValueError('bundle manifest db entry must be an object')
+    db_name = str(db_info.get('file') or 'brain.db')
+    if db_name != 'brain.db':
+        raise ValueError('bundle manifest must name the database brain.db: %r' % (db_name,))
+    bundle_db = _bundle_file(bundle, db_name, allowed={'brain.db'})
+    db_sha = str(db_info.get('sha256') or '')
+    if not _valid_sha256(db_sha):
+        raise ValueError('bundle brain.db entry has no valid sha256; refusing to restore')
+    if not bundle_db.is_file():
+        raise FileNotFoundError(f'missing brain.db in bundle: {bundle_db}')
+    if _sha256_file(bundle_db) != db_sha.lower():
         raise RuntimeError('bundle brain.db sha256 mismatch')
 
     companions_meta = manifest.get('companions') or {}
+    if not isinstance(companions_meta, dict):
+        raise ValueError('bundle manifest companions must be an object')
+    companion_paths: dict[str, Path] = {}
     for name, meta in companions_meta.items():
-        bfile = bundle / name
-        if not bfile.exists():
+        meta = meta if isinstance(meta, dict) else {}
+        bfile = _bundle_file(bundle, name, allowed=set(COMPANION_FILES))
+        sha = str(meta.get('sha256') or '')
+        if not _valid_sha256(sha):
+            raise ValueError(f'bundle companion entry has no valid sha256: {name}')
+        if not bfile.is_file():
             raise FileNotFoundError(f'missing companion file in bundle: {name}')
-        if meta.get('sha256') and _sha256_file(bfile) != meta['sha256']:
+        if _sha256_file(bfile) != sha.lower():
             raise RuntimeError(f'bundle companion sha256 mismatch: {name}')
+        companion_paths[name] = bfile
 
     role.mkdir(parents=True, exist_ok=True)
     with write_lock(SimpleNamespace(root=role.parent), role.name):
@@ -645,7 +794,7 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
         stamp = f'{int(time.time())}-{uuid.uuid4().hex[:8]}'
         try:
             for name in companions_meta:
-                src = bundle / name
+                src = companion_paths[name]
                 dst = role / name
                 safety = None
                 if dst.exists():
@@ -655,21 +804,16 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
                 if dst.exists() and name == 'learned-context.json' and dst.stat().st_mtime > src.stat().st_mtime:
                     preserved_newer.append(name)
                     continue
+                if dst.exists() and name == 'recall-rotation.json':
+                    # P6-S2 review: rotation state describes the current memory set. An older bundle
+                    # copy must not roll it back; only a missing file is restored from the backup.
+                    preserved_newer.append(name)
+                    continue
                 if dst.exists() and name.endswith('.jsonl'):
-                    existing_lines = [
-                        ln for ln in dst.read_text(encoding='utf-8').splitlines() if ln.strip()
-                    ]
-                    bundle_lines = [
-                        ln for ln in src.read_text(encoding='utf-8').splitlines() if ln.strip()
-                    ]
-                    seen = set(bundle_lines)
-                    merged = list(bundle_lines)
-                    for ln in existing_lines:
-                        if ln not in seen:
-                            merged.append(ln)
-                            seen.add(ln)
+                    merged_text = _merge_companion_lines(
+                        dst.read_text(encoding='utf-8'), src.read_text(encoding='utf-8'))
                     temporary = role / f'.{name}.restore-{uuid.uuid4().hex}'
-                    temporary.write_text('\n'.join(merged) + ('\n' if merged else ''), encoding='utf-8')
+                    temporary.write_text(merged_text, encoding='utf-8')
                     os.replace(temporary, dst)
                     restored_companions.append(name)
                     continue
@@ -677,6 +821,17 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
                 shutil.copy2(src, temporary)
                 os.replace(temporary, dst)
                 restored_companions.append(name)
+            # P6-S2 review: reconcile rewrites these files even when they were created after the
+            # backup and are therefore not in the manifest, so snapshot them inside the same rollback
+            # boundary before it can touch them.
+            for name in RECONCILE_FILES:
+                if name in companion_safety:
+                    continue
+                dst = role / name
+                if dst.exists():
+                    safety = role / f'{name}.pre-restore.{stamp}'
+                    shutil.copy2(dst, safety)
+                    companion_safety[name] = safety
             reconcile = reconcile_companion_state(role)
         except Exception:
             pre_restore = Path(db_result['pre_restore']) if db_result.get('pre_restore') else None

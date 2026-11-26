@@ -273,8 +273,8 @@ class TestMergeManyPassesStory(unittest.TestCase):
         calls = []
         original = getattr(em, '_merge_story_chunk', None)
 
-        def tracking_merge(story, chunk):
-            calls.append(('merge', story, chunk))
+        def tracking_merge(story, chunk, carried=None):
+            calls.append(('merge', story, chunk, carried))
             return story + '\n' + chunk[0]['text']
 
         em._merge_story_chunk = tracking_merge

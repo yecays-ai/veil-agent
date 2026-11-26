@@ -15,6 +15,7 @@ import uuid
 SCHEMA_ADDITIONS = (
     "ALTER TABLE memories ADD COLUMN vector_state TEXT NOT NULL DEFAULT 'ready'",
 )
+TABLE_NAMES = ('tombstones', 'delete_requests', 'write_journal', 'experience_recoveries')
 TABLES = """
 CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT);
 CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT);
@@ -37,9 +38,25 @@ def now():
 
 def ensure_schema(connection):
     columns = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
-    if 'vector_state' not in columns:
+    schema_changed = 'vector_state' not in columns
+    if schema_changed:
         connection.execute(SCHEMA_ADDITIONS[0])
+    present = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if any(name not in present for name in TABLE_NAMES):
+        schema_changed = True
     connection.executescript(TABLES)
+    if schema_changed:
+        # P6-S2 review: canonical_digest() covers experience_recoveries, so a newly created empty
+        # table changes the digest. Refresh it in the same committed step as the schema change;
+        # otherwise a business transaction that rolls back afterwards leaves meta.digest stale and
+        # check_db() reports a corrupt database even though no memory data was touched.
+        try:
+            apply_digest(connection)
+        except sqlite3.Error:
+            # A database without meta/canonical tables must still open for repair; the first real
+            # write or import stores the digest.
+            pass
     connection.commit()
 
 
@@ -410,17 +427,39 @@ def retry_pending_vectors(connection, embedder):
     for memory_id, body in rows:
         try:
             values = embedder(body)
-            if not values or len(values) != 1024:
-                continue
-            with connection:
-                connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
-                                   'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
-                                   (memory_id, len(values), _vector_blob(values),
-                                    _sha(_vector_blob(values)), now(), _sha(body)))
-                connection.execute("UPDATE memories SET vector_state='ready' WHERE id=?", (memory_id,))
-            saved += 1
         except Exception:
+            values = None
+        if not values or len(values) != 1024:
             continue
+        # P6-S2 review: the embedding call runs outside the role write lock, so the body may have
+        # been rewritten (or already indexed) while we waited. Only write the vector and mark the
+        # row ready when it still holds the body we embedded and is still pending; a newer body
+        # must never be replaced by this stale vector.
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+        except sqlite3.Error:
+            continue
+        try:
+            current = connection.execute(
+                "SELECT body,vector_state FROM memories WHERE id=? AND is_deleted=0 "
+                "AND is_tombstone=0", (memory_id,)).fetchone()
+            if not current or current[0] != body or current[1] != 'pending':
+                connection.rollback()
+                continue
+            blob = _vector_blob(values)
+            connection.execute('INSERT OR REPLACE INTO vectors(memory_id,dim,vector,vector_sha256,'
+                               'updated_at,content_hash) VALUES(?,?,?,?,?,?)',
+                               (memory_id, len(values), blob, _sha(blob), now(), _sha(body)))
+            connection.execute("UPDATE memories SET vector_state='ready' "
+                               "WHERE id=? AND body=? AND vector_state='pending'", (memory_id, body))
+            connection.commit()
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            continue
+        saved += 1
     if saved:
         refresh_digest(connection)
     return {'retried': len(rows), 'saved': saved, 'pending': len(rows) - saved}

@@ -27,26 +27,101 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Rows of a JSONL file, split on physical newlines only.
+
+    A JSON string may legally contain U+2028; str.splitlines() would split such a record and the
+    fragments would be dropped, so only '\n' separates records (P6-S2 review). `strict` refuses to
+    continue when a record cannot be parsed: a recovery must stop rather than commit an incomplete
+    slice that a rerun could never complete.
+    """
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for raw in path.read_text(encoding='utf-8').splitlines():
-        raw = raw.strip()
+    text = path.read_text(encoding='utf-8')
+    for number, raw in enumerate(text.split('\n'), start=1):
+        raw = raw.rstrip('\r').strip()
         if not raw:
             continue
         try:
             item = json.loads(raw)
-        except Exception:
+        except Exception as exc:
+            if strict:
+                raise ValueError(
+                    f'{path.name} line {number} is not valid JSON; refusing a partial recovery') from exc
             continue
         if isinstance(item, dict):
             rows.append(item)
     return rows
 
 
+def _parse_time(value: Any, label: str = 'time') -> datetime:
+    """A timezone-aware instant; a value without an offset is read as local time."""
+    text = str(value or '').strip()
+    if not text:
+        raise ValueError(f'{label} is empty; an ISO timestamp is required')
+    try:
+        parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except ValueError as exc:
+        raise ValueError(f'{label} is not an ISO timestamp: {text!r}') from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed
+
+
+def _normalise_time(value: Any) -> str:
+    """Canonical form of a boundary so equivalent instants share one recovery key."""
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    try:
+        parsed = _parse_time(text)
+    except ValueError:
+        return text
+    return parsed.astimezone(timezone.utc).isoformat(timespec='microseconds')
+
+
 def make_recovery_source_key(memory_id: str, from_time: str, to_time: str) -> str:
+    digest = hashlib.sha256(
+        f'{memory_id}|{_normalise_time(from_time)}|{_normalise_time(to_time)}'.encode('utf-8')
+    ).hexdigest()[:12]
+    return f'p6-s2-recover:{memory_id}:{digest}'
+
+
+def _legacy_recovery_key(memory_id: str, from_time: str, to_time: str) -> str:
+    """The key format used before boundaries were normalised, so old recoveries are recognised."""
     digest = hashlib.sha256(f'{memory_id}|{from_time}|{to_time}'.encode('utf-8')).hexdigest()[:12]
     return f'p6-s2-recover:{memory_id}:{digest}'
+
+
+def _recovery_keys(memory_id: str, from_time: str, to_time: str) -> list[str]:
+    keys = [make_recovery_source_key(memory_id, from_time, to_time)]
+    legacy = _legacy_recovery_key(memory_id, from_time, to_time)
+    if legacy not in keys:
+        keys.append(legacy)
+    return keys
+
+
+def _committed_recovery(db: Path, keys: list[str]) -> tuple[str, str] | None:
+    """(event_id, stage_id) of an already committed recovery for any of these keys."""
+    if not db.exists():
+        return None
+    connection = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=30.0)
+    connection.row_factory = sqlite3.Row
+    try:
+        present = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='experience_recoveries'").fetchone()
+        if not present:
+            return None
+        for key in keys:
+            row = connection.execute(
+                'SELECT event_id,stage_id FROM experience_recoveries WHERE source_key=?',
+                (key,)).fetchone()
+            if row is not None:
+                return (row['event_id'], row['stage_id'])
+        return None
+    finally:
+        connection.close()
 
 
 def audit_failures(role_dir: str | Path) -> dict[str, Any]:
@@ -110,10 +185,25 @@ def audit_failures(role_dir: str | Path) -> dict[str, Any]:
 
 
 def _load_chat_slice(chat_path: Path, from_time: str, to_time: str) -> list[dict[str, Any]]:
+    """Messages inside the inclusive window, compared as instants rather than as strings.
+
+    ``04:00:00+00:00`` and ``12:00:00+08:00`` are the same moment; a string comparison would keep one
+    out of a ``11:00+08:00``..``13:00+08:00`` window (P6-S2 review).
+    """
+    start = _parse_time(from_time, '--from-time')
+    end = _parse_time(to_time, '--to-time')
+    if end < start:
+        raise ValueError('--to-time is earlier than --from-time')
     rows: list[dict[str, Any]] = []
-    for item in _read_jsonl(chat_path):
-        ts = str(item.get('ts') or item.get('time') or item.get('created_at') or '')
-        if ts and from_time <= ts <= to_time:
+    for item in _read_jsonl(chat_path, strict=True):
+        raw = item.get('ts') or item.get('time') or item.get('created_at')
+        if not raw:
+            continue
+        try:
+            stamp = _parse_time(raw, 'message time')
+        except ValueError:
+            continue
+        if start <= stamp <= end:
             rows.append(item)
     return rows
 
@@ -184,7 +274,8 @@ def _legacy_recover_slice(
     if ev is None:
         return {'status': 'event_missing', 'memory_id': memory_id, 'source_key': source_key}
 
-    msg_ids = [str(m.get('id')) for m in messages if m.get('id') is not None]
+    msg_ids = [str(m.get('message_id') or m.get('id')) for m in messages
+               if (m.get('message_id') or m.get('id')) is not None]
     summary_text = (draft_text or '').strip()
     if not summary_text:
         snippets = [
@@ -293,11 +384,27 @@ def recover_slice(
     """Idempotently append a dropped slice to its event story and projection."""
     role = Path(role_dir)
     db = Path(db_path)
-    source_key = make_recovery_source_key(memory_id, from_time, to_time)
+    keys = _recovery_keys(memory_id, from_time, to_time)
+    source_key = keys[0]
+    # P6-S2 review: check the committed key before requiring the source messages. If the database
+    # committed and only the external marker failed, the chat may already be archived; a rerun must
+    # still report already_recovered and repair the marker from the persisted recovery record.
+    committed = _committed_recovery(db, keys)
+    if committed is not None:
+        marker = {'ts': _now_iso(), 'kind': 'p6-s2-recovery', 'memory_id': memory_id,
+                  'source_key': source_key, 'covers': [from_time, to_time],
+                  'event_id': committed[0], 'stage_id': committed[1]}
+        if not dry_run:
+            store = Store(role.parent)
+            with write_lock(store, role.name):
+                _ensure_external_marker(role, marker)
+        return {'status': 'already_recovered', **marker}
     messages = _load_chat_slice(role / 'chat.jsonl', from_time, to_time)
     if not messages and not draft_text:
         return {'status': 'no_messages', 'memory_id': memory_id, 'source_key': source_key}
-    msg_ids = [str(m.get('id')) for m in messages if m.get('id') is not None]
+    # Store.append() writes `message_id`; older rows may carry `id`.
+    msg_ids = [str(m.get('message_id') or m.get('id')) for m in messages
+               if (m.get('message_id') or m.get('id')) is not None]
     summary_text = (draft_text or '').strip()
     if not summary_text:
         summary_text = '\n'.join(
@@ -312,14 +419,6 @@ def recover_slice(
         conn = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
-            has_recoveries = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='experience_recoveries'").fetchone()
-            existing = (conn.execute(
-                'SELECT event_id,stage_id FROM experience_recoveries WHERE source_key=?',
-                (source_key,)).fetchone() if has_recoveries else None)
-            if existing is not None:
-                marker.update({'event_id': existing['event_id'], 'stage_id': existing['stage_id']})
-                return {'status': 'already_recovered', **marker}
             mem = conn.execute(
                 'SELECT id,body FROM memories WHERE id=? AND is_deleted=0 AND is_tombstone=0',
                 (memory_id,)).fetchone()
@@ -352,9 +451,13 @@ def recover_slice(
                 'CREATE TABLE IF NOT EXISTS experience_recoveries('
                 'source_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, event_id TEXT NOT NULL, '
                 'stage_id TEXT NOT NULL, created_at TEXT NOT NULL)')
-            existing = conn.execute(
-                'SELECT event_id,stage_id FROM experience_recoveries WHERE source_key=?',
-                (source_key,)).fetchone()
+            existing = None
+            for key in keys:
+                existing = conn.execute(
+                    'SELECT event_id,stage_id FROM experience_recoveries WHERE source_key=?',
+                    (key,)).fetchone()
+                if existing is not None:
+                    break
             if existing is not None:
                 marker.update({'event_id': existing['event_id'], 'stage_id': existing['stage_id']})
                 if not dry_run:
@@ -421,7 +524,9 @@ def recover_slice(
             raise
         finally:
             conn.close()
-    _ensure_external_marker(role, marker)
+        # P6-S2 review: the marker's check-and-append runs under the same role write lock as the
+        # commit, so a concurrent retry cannot append a second marker for one recovery key.
+        _ensure_external_marker(role, marker)
     return {'status': 'recovered', **marker}
 
 

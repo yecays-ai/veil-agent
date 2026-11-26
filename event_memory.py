@@ -22,6 +22,7 @@ from decimal import Decimal
 
 import prompts
 import brain_events
+from brain_authority import ProjectionConflict
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
@@ -608,35 +609,9 @@ class EventMemory:
             ledger_rows.append(('event-review', {
                 'at': saved_at.isoformat(), 'event_id': event['event_id'],
                 'reason': 'low confidence grouping; candidate links kept'}))
-        for item in collected:
-            ledger_rows.append(('stage-evidence', {
-                **item, 'stage_id': stage_id, 'event_id': event['event_id']}))
-        explicit_ids = ((stage.get('source') or {}).get('message_ids')
-                        if isinstance(stage.get('source'), dict) else [])
-        if explicit_ids:
-            resolved_ids = {item['message_id'] for item in explicit_quotes}
-            ledger_rows.append(('stage-evidence', {
-                'at': stage.get('at') or saved_at.isoformat(), 'stage_id': stage_id,
-                'event_id': event['event_id'], 'kind': 'chat-message-ids',
-                'message_ids': list(dict.fromkeys(explicit_ids)),
-                'unresolved_message_ids': [mid for mid in dict.fromkeys(explicit_ids)
-                                           if mid not in resolved_ids],
-                'text': ''}))
-            for quote in explicit_quotes:
-                ledger_rows.append(('stage-evidence', {
-                    'at': stage.get('at') or saved_at.isoformat(), 'stage_id': stage_id,
-                    'event_id': event['event_id'], 'kind': 'chat', 'role': 'user',
-                    'message_id': quote['message_id'], 'text': quote['text']}))
-        quote_rows = []
-        quote_seen = set()
-        for quote in ([{'speaker': 'user', 'text': item.get('text')}
-                       for item in collected
-                       if item.get('kind') == 'chat' and item.get('role') == 'user' and item.get('text')]
-                      + [{'speaker': 'user', 'text': item['text']} for item in explicit_quotes]):
-            key = (quote['speaker'], quote['text'])
-            if key not in quote_seen:
-                quote_seen.add(key)
-                quote_rows.append(quote)
+        evidence_rows, quote_rows = self._stage_evidence_ledger(
+            stage, event['event_id'], collected, explicit_quotes, saved_at)
+        ledger_rows.extend(evidence_rows)
 
         if authority is not None:
             try:
@@ -660,9 +635,20 @@ class EventMemory:
                             {'content': projection, 'title': title or event.get('title') or 'Event'},
                             f'新建→{memory_id}')
                     elif callable(getattr(self.memory, 'record_native_update', None)):
-                        self.memory.record_native_update(memory_id, projection)
+                        # P6-S2 review: a locked event keeps its committed body. The candidate story
+                        # must never become the readable cached body before Lan confirms it.
+                        confirmed = old_projection if locked else projection
+                        if confirmed:
+                            self.memory.record_native_update(memory_id, confirmed)
                 except Exception:
                     pass
+            except ProjectionConflict:
+                # The committed body changed between the read above and the transaction; nothing new
+                # was overwritten and the stage stays journaled for recovery.
+                return {'event_id': event['event_id'], 'title': event.get('title') or title,
+                        'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
+                        'locked': locked, 'confidence': confidence, 'pending': True,
+                        'version_conflict': True}
             except Exception:
                 return {'event_id': event['event_id'], 'title': event.get('title') or title,
                         'memory_id': event.get('memory_id'), 'updated': updated, 'changed': False,
@@ -751,6 +737,9 @@ class EventMemory:
                     embedder=embedder,
                     old_story=old_story,
                     operation_reason='事件故事修订',
+                    # P6-S2 review: the body checked above may have changed since; re-check inside the
+                    # transaction so a draft based on the old text can never overwrite a newer save.
+                    seen_projection=old_projection if memory_id else None,
                     ledger_rows=(
                         ('event-revision', {'state': 'done', 'event_id': event_id,
                                             'revision_id': revision_id, 'story': text, 'at': stamp}),
@@ -758,6 +747,9 @@ class EventMemory:
                                       'why': why, 'before': old_story[:500], 'after': text[:500]}),
                     ),
                 )
+            except ProjectionConflict:
+                self.last_revise_status = 'conflict'
+                return False
             except Exception:
                 self.last_revise_status = 'write_failed'
                 return False
@@ -855,9 +847,37 @@ class EventMemory:
                 event = {**snapshot, 'story': self._story(event_id, extra=clean), 'dirty': True}
                 if not event.get('memory_id') and projected:
                     event['memory_id'] = projected
+            # P6-S2 review: a stage whose bundle failed had its evidence and quotes rolled back with
+            # that transaction. Recovering it must go through the same bundle path and commit the
+            # stage together with its evidence; marking it committed alone would lose the chain.
+            try:
+                collected = self._capture_evidence(clean, persist=False)
+            except Exception:
+                collected = []
+            explicit_quotes = self._explicit_user_quotes(clean)
+            stamp = _when(clean.get('saved_at')) or _when(clean.get('at')) or datetime.now().astimezone()
+            ledger_rows, quote_rows = self._stage_evidence_ledger(
+                clean, event_id, collected, explicit_quotes, stamp)
+            authority = getattr(self.memory, 'brain_authority', None)
+            if authority is not None:
+                try:
+                    authority.commit_event_bundle(
+                        event=event, stage={**clean, 'state': 'committed'},
+                        projection=None, title=event.get('title') or 'Event',
+                        embedder=None, old_story='', operation_reason='待提交阶段恢复',
+                        ledger_rows=ledger_rows, quotes=quote_rows)
+                    fixed += 1
+                except Exception:
+                    continue
+                continue
             try:
                 self.store.append(self.events_path, event)
                 self.store.append(self.stages_path, {**clean, 'state': 'committed'})
+                ledger_paths = {kind: f'{self.cfg.id}/{name}'
+                                for name, kind in brain_events.EVENT_LEDGER_FILES.items()}
+                for kind, row in ledger_rows:
+                    if kind in ledger_paths:
+                        self.store.append(ledger_paths[kind], row)
                 fixed += 1
             except Exception:
                 continue
@@ -1150,18 +1170,15 @@ class EventMemory:
         for chunk in self._story_batches(stages, budget):
             if not chunk:
                 continue
-            if story:
-                merged = self._merge_story_chunk(story, chunk)
-                if merged is None:
-                    pending = True
-                    break
-                story = merged
-            else:
-                merged = self._merge_story_chunk('', chunk)
-                if merged is None:
-                    pending = True
-                    break
-                story = merged
+            # P6-S2 review: every accepted merge must still carry the facts already accepted in the
+            # story so far, not just this batch's facts. Otherwise a later batch can replace the
+            # earlier story while the caller treats the result as the complete narrative.
+            carried = [{'text': story, 'facts': facts(story)}] if story else []
+            merged = self._merge_story_chunk(story, chunk, carried=carried)
+            if merged is None:
+                pending = True
+                break
+            story = merged
             progressed = True
             through = chunk[-1].get('at') or chunk[-1].get('saved_at') or through
         return (story if progressed else ''), pending, through
@@ -1233,8 +1250,12 @@ class EventMemory:
         material = sum(len(str(stage.get('text') or '')) for stage in chunk)
         return max(1200, min(8000, material // 2))
 
-    def _merge_story_chunk(self, previous, chunk):
-        """One model call over one batch. None when the answer is unusable or drops a fact."""
+    def _merge_story_chunk(self, previous, chunk, carried=None):
+        """One model call over one batch. None when the answer is unusable or drops a fact.
+
+        `carried` holds pseudo-stages for facts already accepted in `previous`, so a later merge may
+        not silently rewrite the earlier narrative without them (P6-S2 review).
+        """
         prompt_id = 'memory.event.story.merge' if previous else 'memory.event.story'
         payload = {
             'existing_story': previous,
@@ -1245,6 +1266,7 @@ class EventMemory:
                          'valid_from': stage.get('at'), 'invalid_at': stage.get('invalid_at')}
                         for stage in chunk if stage.get('interpretation')],
         }
+        check_stages = list(chunk) + list(carried or [])
         persona = str(getattr(self.cfg, 'persona', '') or '')
         messages = [{'role': 'system', 'content': prompts.text(prompt_id)}]
         if persona:
@@ -1255,7 +1277,7 @@ class EventMemory:
             story, finish = self._call_story_model(messages, max_tokens)
             if not story or finish == 'length':
                 continue
-            missing = self._missing_facts(chunk, story)
+            missing = self._missing_facts(check_stages, story)
             if not missing:
                 return story
             messages.append({'role': 'user', 'content': 'Keep every one of these exactly: ' + ', '.join(missing[:20])})
@@ -1286,48 +1308,120 @@ class EventMemory:
     @staticmethod
     def _month_day_set(text):
         """Normalize date expressions like 11-25, 11/25, 11月25日, 2026-11-25, Nov 25 into (month, day)."""
-        found = set()
-        for m in re.finditer(r'(?:\d{4}[-/年])?(\d{1,2})[-/月](\d{1,2})日?', text or ''):
-            month, day = int(m.group(1)), int(m.group(2))
-            if 1 <= month <= 12 and 1 <= day <= 31:
-                found.add((month, day))
+        return {(month, day) for month, day, _year, _span in EventMemory._date_parts(text)}
+
+    @staticmethod
+    def _date_parts(text):
+        """(month, day, year_or_None, span) for every date expression in text.
+
+        Digit boundaries keep a longer number such as ``11-250`` from being read as November 25
+        (P6-S2 review); a year written with the date is returned so it can participate in matching.
+        """
+        text = text or ''
+        found = []
+        pattern = re.compile(r'(?:(?P<year>\d{4})\s*[-/年]\s*)?'
+                             r'(?P<month>\d{1,2})\s*[-/月]\s*(?P<day>\d{1,2})\s*日?')
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            if start and text[start - 1].isdigit():
+                continue
+            if end < len(text) and text[end].isdigit():
+                continue
+            month, day = int(match.group('month')), int(match.group('day'))
+            if not (1 <= month <= 12 and 1 <= day <= 31):
+                continue
+            year = int(match.group('year')) if match.group('year') else None
+            found.append((month, day, year, (start, end)))
         months = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
                   'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
-        for m in re.finditer(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})\b',
-                             text or '', re.I):
-            month = months.get(m.group(1).lower()[:3])
-            day = int(m.group(2))
+        for match in re.finditer(r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2})\b',
+                                 text, re.I):
+            month = months.get(match.group(1).lower()[:3])
+            day = int(match.group(2))
             if month and 1 <= day <= 31:
-                found.add((month, day))
+                found.append((month, day, None, match.span()))
         return found
+
+    @classmethod
+    def _independent_numbers(cls, text):
+        """Numbers that stand on their own, excluding the digits inside a date expression.
+
+        ``On 11-25 we ordered 25 tickets`` keeps an independent 25: a draft that converts the date
+        format but drops the ticket count must not pass (P6-S2 review).
+        """
+        text = text or ''
+        if not text:
+            return set()
+        blanked = list(text)
+        for _month, _day, _year, (start, end) in cls._date_parts(text):
+            blanked[start:end] = ' ' * (end - start)
+        return set(_NUMBER.findall(''.join(blanked)))
 
     @classmethod
     def _missing_facts(cls, stages, story):
         missing = []
         story_text = story or ''
         story_numbers = set(_NUMBER.findall(story_text))
-        story_dates = cls._month_day_set(story_text)
+        story_free_numbers = cls._independent_numbers(story_text)
+        story_dates = cls._date_parts(story_text)
         for stage in stages:
             extra = stage.get('facts') if isinstance(stage.get('facts'), dict) else {}
+            independent = cls._independent_numbers(str(stage.get('text') or ''))
             matched_date_tokens = set()
+            missing_date_numbers = set()
             for value in (extra.get('dates') or []):
                 sval = str(value)
                 if not sval:
                     continue
-                md = cls._month_day_set(sval)
-                if sval in story_text or (md and md <= story_dates):
+                if cls._contains_number_token(story_text, sval):
                     for num in _NUMBER.findall(sval):
                         matched_date_tokens.add(num)
-                else:
+                    continue
+                parts = cls._date_parts(sval)
+                matched = [part for part in parts
+                           if any(part[0] == smonth and part[1] == sday
+                                  and (part[2] is None or syear is None or part[2] == syear)
+                                  for smonth, sday, syear, _span in story_dates)]
+                if not parts or len(matched) != len(parts):
                     missing.append(sval)
+                    missing_date_numbers.update(_NUMBER.findall(sval))
+                    continue
+                for month, day, year, _span in matched:
+                    matched_date_tokens.add(str(month))
+                    matched_date_tokens.add(str(day))
+                    # A known year must survive a format change: '2026-11-25' may become
+                    # '2026年11月25日', but never '2025-11-25' or a yearless date that drops it.
+                    if year is not None and any(
+                            syear == year for smonth, sday, syear, _span in story_dates
+                            if smonth == month and sday == day):
+                        matched_date_tokens.add(str(year))
+            # Only the digits that belong to a date may be exempted; the same value written as an
+            # independent quantity stays required.
+            matched_date_tokens -= independent
             for value in (extra.get('files') or []):
                 if str(value) and str(value) not in story_text:
                     missing.append(str(value))
             for value in extra.get('numbers') or []:
                 sval = str(value)
-                if sval not in story_numbers and sval not in matched_date_tokens:
-                    missing.append(sval)
+                if sval in matched_date_tokens or sval in missing_date_numbers:
+                    continue
+                if sval in story_numbers:
+                    # A value that only occurs inside a date in the story cannot satisfy an
+                    # independent quantity from the stage (P6-S2 review).
+                    if sval in independent and sval not in story_free_numbers:
+                        missing.append(sval)
+                    continue
+                missing.append(sval)
         return list(dict.fromkeys(missing))
+
+    @staticmethod
+    def _contains_number_token(text, value):
+        """True when `value` occurs in `text` as a whole token, not as part of a longer number."""
+        if not value:
+            return False
+        if not text:
+            return False
+        return re.search(r'(?<!\d)' + re.escape(value) + r'(?!\d)', text) is not None
 
     def _belief_history(self, event_id, extra=None):
         history = []
@@ -1717,6 +1811,38 @@ class EventMemory:
                                'text': ' '.join(text.split())})
         return quotes
 
+    def _stage_evidence_ledger(self, stage, event_id, collected, explicit_quotes, saved_at):
+        """Ledger rows and user quotes for one stage; shared by record() and retry_pending()."""
+        stage_id = stage.get('stage_id')
+        at = stage.get('at') or (saved_at.isoformat() if saved_at is not None else '')
+        rows = [('stage-evidence', {**item, 'stage_id': stage_id, 'event_id': event_id})
+                for item in collected]
+        explicit_ids = ((stage.get('source') or {}).get('message_ids')
+                        if isinstance(stage.get('source'), dict) else [])
+        if explicit_ids:
+            resolved_ids = {item['message_id'] for item in explicit_quotes}
+            rows.append(('stage-evidence', {
+                'at': at, 'stage_id': stage_id, 'event_id': event_id, 'kind': 'chat-message-ids',
+                'message_ids': list(dict.fromkeys(explicit_ids)),
+                'unresolved_message_ids': [mid for mid in dict.fromkeys(explicit_ids)
+                                           if mid not in resolved_ids],
+                'text': ''}))
+            for quote in explicit_quotes:
+                rows.append(('stage-evidence', {
+                    'at': at, 'stage_id': stage_id, 'event_id': event_id, 'kind': 'chat',
+                    'role': 'user', 'message_id': quote['message_id'], 'text': quote['text']}))
+        quotes = []
+        quote_seen = set()
+        for quote in ([{'speaker': 'user', 'text': item.get('text')}
+                       for item in collected
+                       if item.get('kind') == 'chat' and item.get('role') == 'user' and item.get('text')]
+                      + [{'speaker': 'user', 'text': item['text']} for item in explicit_quotes]):
+            key = (quote['speaker'], quote['text'])
+            if key not in quote_seen:
+                quote_seen.add(key)
+                quotes.append(quote)
+        return rows, quotes
+
     def _capture_evidence(self, stage, *, persist=True):
         now = _when(stage.get('at')) or _when(stage.get('saved_at')) or datetime.now().astimezone()
         cutoff = now - timedelta(minutes=max(1, self.settings['evidence_minutes']))
@@ -1730,7 +1856,9 @@ class EventMemory:
                 continue
             for row in rows:
                 stamp = _when(row.get('time'))
-                if stamp is None or stamp < cutoff:
+                # P6-S2 review: nothing that happened after the stage can be its evidence. Keep the
+                # earlier cutoff and also refuse a row newer than the stage's own time.
+                if stamp is None or stamp < cutoff or stamp > now:
                     continue
                 text = row.get('content') if kind == 'chat' else (
                     row.get('detail') or row.get('path') or row.get('text') or row.get('summary'))
