@@ -217,6 +217,8 @@
     const nav = document.getElementById('navigation') || document.querySelector('.navigation');
     if (!nav || nav.dataset.workspaceGrouped === 'true') return;
     nav.dataset.workspaceGrouped = 'true';
+    const person = nav.querySelector('.sidebar-person');
+    const foot = nav.querySelector('.sidebar-foot');
     const existing = new Map();
     for (const btn of nav.querySelectorAll('.nav-item[data-page]')) {
       existing.set(btn.dataset.page, btn);
@@ -281,7 +283,7 @@
       if (item) gAdmin.append(item);
     }
 
-    nav.replaceChildren(brand, gDaily, gBrain, gAdmin);
+    nav.replaceChildren(...[person, brand, gDaily, gBrain, gAdmin, foot].filter(Boolean));
   }
 
   function upgradeActivityLayout() {

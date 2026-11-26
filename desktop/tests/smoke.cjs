@@ -211,6 +211,13 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
     try { return await chat.webContents.executeJavaScript('document.body.textContent.includes("Fictional saved history")'); }
     catch { return false; }
   }, 'history missing');
+  if (process.env.VEIL_WORKSPACE_PREVIEW === '1') {
+    clearTimeout(failSafe);
+    app.once('will-quit', () => server?.close());
+    await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-home]")?.click()');
+    console.log('PREVIEW READY: keeping isolated workspace preview open until closed.');
+    return;
+  }
   assert.equal(await chat.webContents.executeJavaScript('getComputedStyle(document.querySelector("#voice-hold")).position'), 'absolute', 'voice-message control must sit inside the input field');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").getBoundingClientRect().width >= 30'), true, 'voice-message control must remain visible');
   assert.equal(await chat.webContents.executeJavaScript('document.querySelector("#voice-hold").parentElement.classList.contains("chat-input-shell")'),true,'voice-message control must stay attached to the text field');
@@ -442,12 +449,6 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => pinnedChat.webContents.executeJavaScript('document.querySelector("#detached-pin").getAttribute("aria-pressed")==="true"'), 'detached pin toggle did not persist');
   await pinnedChat.webContents.executeJavaScript('setTimeout(()=>document.querySelector("#merge-view").click(),0); true');
   await wait(() => pinnedChat.isDestroyed(), 'detached chat did not merge back');
-
-  if (process.env.VEIL_WORKSPACE_PREVIEW === '1') {
-    clearTimeout(failSafe);
-    console.log('PREVIEW READY: keeping isolated workspace preview open until closed.');
-    return;
-  }
 
   console.log('SMOKE PASS: local dark chat, history, audio-only permissions, >5 MB image compression and decode, automatic-language dictation, send-first voice with hidden transcript and appearance settings, right-click menu, audio loading, activity controls, hide/reopen, sandbox');
   clearTimeout(failSafe);

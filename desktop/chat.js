@@ -2602,7 +2602,7 @@ railToggle.onclick=()=>{
   try{localStorage.setItem('veil-rail-visible',visible?'1':'0')}catch{}
 };
 function syncDesktopRail(){
-  const syncText=(id,value)=>{if($(id).textContent!==value)$(id).textContent=value};
+  const syncText=(id,value)=>{const el=$(id);if(el&&el.textContent!==value)el.textContent=value};
   syncText('sidebar-next-wake',$('header-next-wake').textContent);
   syncText('rail-next-wake',$('header-next-wake').textContent);
   syncText('rail-activity-status',$('activity-work-status').textContent);

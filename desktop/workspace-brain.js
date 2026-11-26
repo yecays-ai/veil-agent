@@ -368,10 +368,10 @@
       });
 
       archBtn.addEventListener('click', async () => {
-        const res = await reqJson(lastReq, '/api/memory/archive', {
+        const res = await reqJson(lastReq, item.archived ? '/api/memory/unarchive' : '/api/memory/archived', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: item.memory_id, archived: !item.archived }),
+          body: JSON.stringify({ id: item.memory_id }),
         });
         if (res.ok) await loadLibrary(item.memory_id);
         else actionStatus.textContent = '归档状态切换失败。';
@@ -467,7 +467,7 @@
   // =========================================================================
   async function renderEventsWorkspace(host, req, focusEventId = null) {
     host.replaceChildren(el('p', '', '正在加载共同经历与事件故事…'));
-    const { ok, data } = await reqJson(req, '/api/memory/events?limit=100');
+    const { ok, data } = await reqJson(req, '/api/memory/events');
     const events = data?.events || data?.items || [];
     if (!ok || !Array.isArray(events) || !events.length) {
       host.replaceChildren(renderEmptyState('暂无事件故事', '共同经历会在自动梳理后按时间线沉淀在这里。'));
@@ -622,14 +622,8 @@
   // =========================================================================
   async function renderRecallWorkspace(host, req, focusTurnId = null) {
     host.replaceChildren(el('p', '', '正在读取记忆召回链路与开销快照…'));
-    const [traceRes, snapRes] = await Promise.all([
-      reqJson(req, '/api/diagnostics/trace'),
-      reqJson(req, '/api/request-snapshots?limit=24'),
-    ]);
-
-    const traces = traceRes.data?.turns || traceRes.data?.items || traceRes.data?.chains || [];
-    const snaps = snapRes.data?.snapshots || snapRes.data?.items || [];
-    const combined = traces.length ? traces : snaps;
+    const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
+    const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
 
     if (!combined.length) {
       host.replaceChildren(renderEmptyState('暂无召回追踪记录', '完成一轮聊天后，这里会展示每一层的 Token 预算、命中的记忆与成本。'));
@@ -639,22 +633,31 @@
     const split = el('div', 'split-reader');
     const listPane = el('div', 'index-pane');
     const detailPane = el('article', 'veil-card reader-pane');
-    let selectedId = focusTurnId || combined[0].request_id || combined[0].id || '0';
+    let selectedId = focusTurnId || combined[0].request_id || combined[0].id || '';
 
     async function showTurn(item) {
-      const tid = item.request_id || item.id || '';
+      const tid = String(item.request_id || item.id || '');
       selectedId = tid;
       for (const n of listPane.querySelectorAll('.index-item')) {
-        n.setAttribute('aria-current', String(n.dataset.turnId === String(tid)));
+        n.setAttribute('aria-current', String(n.dataset.turnId === tid));
       }
+      detailPane.replaceChildren(el('p', '', '正在加载该轮召回层级详情…'));
+
+      let traceData = item;
+      if (tid) {
+        const traceRes = await reqJson(req, `/api/diagnostics/trace?request_id=${encodeURIComponent(tid)}`);
+        if (traceRes.ok && traceRes.data) traceData = { ...item, ...traceRes.data };
+      }
+
       detailPane.replaceChildren();
       detailPane.append(el('h3', 'reader-title', `轮次 ${tid || '最近对话'}`));
 
-      const recall = item.recall || item;
+      const recall = traceData.recall || traceData.chain?.recall || traceData;
+      const costs = traceData.costs || traceData.chain?.costs;
       const tags = el('div', 'index-tags');
       if (recall.retrieval_mode) tags.append(pill(`模式: ${recall.retrieval_mode}`, 'rose'));
-      if (item.model) tags.append(pill(item.model));
-      if (item.costs?.total_cost != null) tags.append(pill(`费用 ¥${item.costs.total_cost}`, 'gold'));
+      if (traceData.model) tags.append(pill(traceData.model));
+      if (costs?.total_cost != null) tags.append(pill(`费用 ¥${costs.total_cost}`, 'gold'));
       detailPane.append(tags);
 
       // Layer breakdown
