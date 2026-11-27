@@ -1,13 +1,15 @@
 # HANDOFF
 
-> 更新：2026-11-27 +08:00 · 工单 459 / PR #460 · 复审基线 `de2cc06`，接入 `main` `2b03006`；未部署。
+> 更新：2026-11-27 +08:00 · 工单 460 / PR #461（P6-S5）· 已合入 `main` `f979ca2`（含 PR #459 与 PR #460 S3）；待最终复核与合并，未部署。
 
 ## 当前停点
 
-- 独立语义核验、费用热配置与费用管理状态已完成开发，待 PR 审核；未合并、未部署。用户明确否决可在原始证据层拦截：来源与否决正文或其中明确引用的锚点匹配时，不发送核验请求，也不应用旧的模型结论。无明确锚点的任意跨语言改写仍依赖语义判断，不能视为完整的等价判定。
-- VEIL Lab 合成快照 `459-sem-synthetic/r1`（manifest `ef1e50ff…`）。最终真实模型矩阵 9/9：4 条晋升并实际注入、5 条未注入；其中跨语言否决在程序层拦截，无对应模型调用。最后一轮本地账本 ¥0.043138，五轮累计 ¥0.227000（含 mock 探针，低于 ¥2）。合成候选由脚本提交到生产入口，未测主聊天模型自行提取候选。
-
-- **本单（工单 459 · P6-S3 关系底座解耦、证据链晋升与认知治理）**：
+- **本单（工单 460 · PR #461 · P6-S5 检索、判官与情境相关自然联想升级）**：
+  - 检索与判官：保留 Min-Max 混合检索、`stopwords_enabled=False`（可审计停用词表与保护词零重叠）、`candidate_k=8`、4 秒超时 / 300 字卡片保守基线；新增本地零费用情境分类（`context_signal.py`）、情境判官升级与失败/超时/解析失败分口径诊断。
+  - 自然联想与界面持久化开关：保留 `association_enabled=True`、`association_contextual_enabled=False` 默认配置；在现有「VEIL Brain → 记忆监控」界面补齐「自然联想总开关」与「情境相关自然联想」双独立开关及实时生效状态显示，经 `/api/brain/layer-toggle` 持久化至 `recall-association.json`，下一轮生效、重启保留，关闭情境联想后恢复现行联想机制。
+  - VEIL Lab 正式日用模型三路盲评：基于最新只读快照 `peter-20261127T170245/r2` 与正式日用 `gemini-4-hydrogen` 完成 3 组 9 回复完整上下文盲评（¥1.10，`all_checks_ok=true`），Lan 盲评结果为第 1 组 `contextual_s5`/`legacy_breath8` 平局、第 2 组 `contextual_s5` 胜、第 3 组 `contextual_s5` 弱偏好（不作显著优势结论）；实验报告见 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](docs/reports/p6-s5-retrieval-judge-association-20261127.md)。
+  - 跨模块合流：已合入最新 `origin/main`（`f979ca2`，含 PR #459 与 PR #460 S3），保持六层网格结构与 S3 关系底座/诊断/预算完全兼容，联合回归通过；未触碰正式运行目录与正式 `data/peter`。
+- **前序已合入 `main`（`f979ca2`）的工单 459 · PR #460（P6-S3）要点与门禁全部保留如下**：
   - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
   - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。
   - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本支持进程中断恢复，按角色与写入及备份互斥。
@@ -25,6 +27,7 @@
 3. [认知追加](veil/brain/learned_context.py#L1895)与[待办新增](veil/brain/learned_context.py#L2130)：提交后丢响应时，重试可能重复写入。验收：持久化幂等键在丢回包、并发和重启场景下均返回原结果与原 ID，只落一条正文及相应版本。
 4. [反证长期积累](veil/brain/learned_context.py#L806)：以长期历史验证载荷与查询有界，不裁掉相关否决；证据不足时不晋升并标记原因。
 5. [任意跨语言同义否决](veil/brain/learned_context.py#L164)：现有原文锚点不是完整语义保证；验证无共享锚点的译写拒绝、无关正例与明确恢复路径。以上五项均是 S6 开工门禁，本单不重构。
+6. [情境自然联想隐式 `trap` 穿透与同轮判官联合判断](veil/brain/recall/natural_association.py)（PR #461 延期）：离线回放存在 2 条隐式工作 `trap` 穿透，当前保持 `association_contextual_enabled=False` 默认关闭；S6 前置须以同轮判官语义结论联合门控自然联想，通过零穿透门禁后再评估默认启用。
 
 ### 既有边界与反例
 

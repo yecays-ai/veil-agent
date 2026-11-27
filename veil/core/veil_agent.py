@@ -3992,14 +3992,28 @@ class Chat:
     def send(self, text, *, autonomy=False, **kwargs):
         # Ticket 379: automatic recall marks memories as shown (cooldown). A turn that delivers nothing, by
         # error, stop or an empty answer, gives those marks back, so retrying or regenerating it still recalls.
+        self._turn_recall_request_id = ''
         if self.memory is not None:
             self.memory.last_recall_marks = None
+            self.memory.last_association_marks = None
+            self.memory._has_association_rollback = False
         try:
             return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
         finally:
             delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
-            if not delivered and self.memory is not None and getattr(self.memory, 'last_recall_marks', None):
-                self.memory.rollback_recall()
+            req_id = getattr(self, '_turn_recall_request_id', '') or ''
+            if self.memory is not None:
+                if delivered:
+                    confirm = getattr(self.memory, 'confirm_delivery', None)
+                    if callable(confirm):
+                        confirm(req_id)
+                elif (getattr(self.memory, 'last_recall_marks', None)
+                      or getattr(self.memory, 'last_association_marks', None)
+                      or getattr(self.memory, '_has_association_rollback', False)):
+                    try:
+                        self.memory.rollback_recall(req_id)
+                    except TypeError:
+                        self.memory.rollback_recall()
 
     def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
         models = getattr(self.cfg, 'models', None)
@@ -4605,6 +4619,7 @@ class Chat:
             except Exception:
                 pass
 
+        self._turn_recall_request_id = str(request_id or '')
         diagnostics_saved = False
 
         def save_turn_debug(sent_messages=()):

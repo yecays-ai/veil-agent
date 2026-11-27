@@ -257,3 +257,80 @@ def model_config_overview(*, role_id: str, settings: Mapping | None = None,
         model_id = entry['effective']['value'] or entry['configured']['value']
         entry['readiness'] = ('unknown' if model_id in duplicates else key_states.get(model_id, 'unknown'))
     return view
+
+
+# P6-S5: recall, retrieval & contextual association configuration registry (read-only projection).
+_RECALL_DEFINITIONS = ConfigRegistry((
+    ConfigDefinition('memory.retrieval.stopwords_enabled', '检索中文停用词过滤（候选开关）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.retrieval.candidate_k', '混合检索候选数 K',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall_judge.enabled', '召回判官总开关',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.IMMEDIATE, sensitive=False),
+    ConfigDefinition('memory.recall_judge.timeout_seconds', '召回判官模型超时（秒）',
+                     Scope.ROLE, ValueType.NUMBER, ApplyMode.RESTART, sensitive=False),
+    ConfigDefinition('memory.recall.association_enabled', '自然联想总开关',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.association_contextual_enabled', '情境相关自然联想（候选开关）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.association_min_similarity', '情境自然联想最低余弦相似度',
+                     Scope.ROLE, ValueType.NUMBER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.association_pool_size', '情境自然联想候选池上限',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+))
+
+
+def recall_config_registry() -> ConfigRegistry:
+    return _RECALL_DEFINITIONS
+
+
+def recall_config_overview(*, role_id: str, memory_cfg: Mapping | None = None,
+                           retrieval_runtime: Mapping | None = None,
+                           recall_runtime: Mapping | None = None,
+                           judge_enabled: bool | None = None,
+                           judge_timeout: float | None = None) -> dict:
+    """Project configured vs runtime-effective recall/retrieval/association settings."""
+    from veil.brain.recall.brain_retrieval import load_settings as load_ret
+    from veil.brain.recall.recall_judge import load_settings as load_judge
+    from veil.brain.recall.recall_rotation import settings as load_rot
+
+    mem = memory_cfg if isinstance(memory_cfg, Mapping) else {}
+    ret_raw = mem.get('retrieval') if isinstance(mem.get('retrieval'), Mapping) else {}
+    judge_raw = mem.get('recall_judge') if isinstance(mem.get('recall_judge'), Mapping) else {}
+    rot_raw = mem.get('recall') if isinstance(mem.get('recall'), Mapping) else {}
+    ret_cfg = load_ret(ret_raw)
+    judge_cfg = load_judge(judge_raw)
+    rot_cfg = load_rot(mem)
+    ret_eff = retrieval_runtime if isinstance(retrieval_runtime, Mapping) else ret_cfg
+    rot_eff = recall_runtime if isinstance(recall_runtime, Mapping) else rot_cfg
+
+    def _obs(raw_map, key, val):
+        return Observation(Source.SAVED if key in raw_map else Source.SETTINGS_DEFAULT, val)
+
+    evidence = {
+        'memory.retrieval.stopwords_enabled': ConfigEvidence(
+            role_id, _obs(ret_raw, 'stopwords_enabled', bool(ret_cfg['stopwords_enabled'])),
+            Observation(Source.RUNTIME, bool(ret_eff.get('stopwords_enabled', False)))),
+        'memory.retrieval.candidate_k': ConfigEvidence(
+            role_id, _obs(ret_raw, 'candidate_k', int(ret_cfg['candidate_k'])),
+            Observation(Source.RUNTIME, int(ret_eff.get('candidate_k', 8)))),
+        'memory.recall_judge.enabled': ConfigEvidence(
+            role_id, _obs(judge_raw, 'enabled', bool(judge_cfg['enabled'])),
+            Observation(Source.RUNTIME, bool(judge_enabled)) if type(judge_enabled) is bool else None),
+        'memory.recall_judge.timeout_seconds': ConfigEvidence(
+            role_id, _obs(judge_raw, 'timeout_seconds', float(judge_cfg['timeout_seconds'])),
+            Observation(Source.STARTUP, float(judge_timeout)) if type(judge_timeout) in (int, float) else None),
+        'memory.recall.association_enabled': ConfigEvidence(
+            role_id, _obs(rot_raw, 'association_enabled', bool(rot_cfg['association_enabled'])),
+            Observation(Source.RUNTIME, bool(rot_eff.get('association_enabled', True)))),
+        'memory.recall.association_contextual_enabled': ConfigEvidence(
+            role_id, _obs(rot_raw, 'association_contextual_enabled', bool(rot_cfg['association_contextual_enabled'])),
+            Observation(Source.RUNTIME, bool(rot_eff.get('association_contextual_enabled', False)))),
+        'memory.recall.association_min_similarity': ConfigEvidence(
+            role_id, _obs(rot_raw, 'association_min_similarity', float(rot_cfg['association_min_similarity'])),
+            Observation(Source.RUNTIME, float(rot_eff.get('association_min_similarity', 0.52)))),
+        'memory.recall.association_pool_size': ConfigEvidence(
+            role_id, _obs(rot_raw, 'association_pool_size', int(rot_cfg['association_pool_size'])),
+            Observation(Source.RUNTIME, int(rot_eff.get('association_pool_size', 32)))),
+    }
+    return recall_config_registry().overview(role_id=role_id, evidence=evidence)

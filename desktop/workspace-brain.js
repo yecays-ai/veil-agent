@@ -264,7 +264,11 @@
       } else {
         top.append(pill(layer.status_text || '受保护', layer.tone || 'good'));
       }
-      item.append(top, el('small', '', layer.detail || ''));
+      item.append(top);
+      if (layer.toggle_key && !layer.protected && layer.status_text) {
+        item.append(pill(layer.status_text, layer.tone || ''));
+      }
+      item.append(el('small', '', layer.detail || ''));
       if (layer.protected && layer.protected_reason) {
         item.append(el('small', 'muted', layer.protected_reason));
       }
@@ -280,6 +284,58 @@
       layerGrid.append(item);
     }
     layerCard.append(layerHead, layerGrid);
+
+    // 2b. Natural Association Controls (inside existing memory config card, persisted via /api/brain/layer-toggle)
+    if (data.recall_association && Array.isArray(data.recall_association.controls) && data.recall_association.controls.length) {
+      const assoc = data.recall_association;
+      const assocSub = el('div', 'veil-subpanel');
+      assocSub.style.marginTop = '10px';
+      const assocHead = el('div', 'veil-card-head');
+      const modeTone = assoc.effective_mode === 'disabled' ? '' : 'good';
+      assocHead.append(
+        el('strong', '', '自然联想控制'),
+        pill(`当前生效：${assoc.status_text || assoc.effective_mode}`, modeTone),
+      );
+      const assocGrid = el('div', 'six-layer-grid');
+      assocGrid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
+      for (const ctrl of assoc.controls) {
+        const item = el('div', 'layer-item');
+        const top = el('div', 'layer-item-top');
+        top.append(el('strong', '', ctrl.name));
+        const sw = el('button', 'workspace-switch');
+        sw.type = 'button';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', String(Boolean(ctrl.enabled)));
+        sw.setAttribute('aria-label', `${ctrl.name}开关`);
+        sw.title = ctrl.enabled ? '点击关闭' : '点击启用';
+        sw.addEventListener('click', async () => {
+          const nextVal = !Boolean(ctrl.enabled);
+          sw.disabled = true;
+          const res = await reqJson(req, '/api/brain/layer-toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layer_id: ctrl.id, enabled: nextVal }),
+          });
+          sw.disabled = false;
+          if (!res.ok || !res.data?.ok) {
+            alert(res.data?.error || '切换失败，已恢复原状态');
+            return;
+          }
+          ctrl.enabled = Boolean(res.data.enabled);
+          sw.setAttribute('aria-checked', String(ctrl.enabled));
+          renderBrainHome(host, req);
+        });
+        top.append(sw);
+        item.append(top);
+        if (ctrl.status_text) {
+          item.append(pill(ctrl.status_text, ctrl.tone || ''));
+        }
+        item.append(el('small', '', ctrl.detail || ''));
+        assocGrid.append(item);
+      }
+      assocSub.append(assocHead, assocGrid);
+      layerCard.append(assocSub);
+    }
 
     // 3. Memory Growth Analysis & One-Click Report
     const chartCard = el('article', 'veil-card');
