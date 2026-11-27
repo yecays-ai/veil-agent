@@ -1935,6 +1935,7 @@ class Memory:
         widen = (rotate or wake) and recall_cfg['rotation_candidates'] > 3
         with self.mutex:
             self.rotation.turn += 1
+        self._turn_query_vector = None
         opening = []
         normal = []
         pool = []
