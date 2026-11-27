@@ -91,8 +91,8 @@ def main():
     parser.add_argument('--out', default='.local-tmp/365-compare')
     parser.add_argument('--fake', action='store_true')
     args = parser.parse_args()
-    from memory_agent import Memory, vault_path
-    from memory_sidecar import Sidecar
+    from veil.brain.memory_agent import Memory, vault_path
+    from veil.brain.memory_sidecar import Sidecar
     from veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     real = load_character(root, 'peter')

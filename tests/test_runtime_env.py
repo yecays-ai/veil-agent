@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import runtime_env
-from memory_agent import Memory
-from recall_judge import RecallJudge
+from veil.brain.memory_agent import Memory
+from veil.brain.recall.recall_judge import RecallJudge
 
 
 class RuntimeEnvTests(unittest.TestCase):

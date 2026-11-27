@@ -45,7 +45,7 @@ LONG = ('Use it when Lan asks. The service returns structured JSON with ids, aut
 def fake_tools():
     import importlib
     wanted = {}
-    for module in ('memory_native', 'desktop_files', 'windows_observer'):
+    for module in ('veil.brain.memory_native', 'veil.tools.desktop_files', 'veil.windows.windows_observer'):
         for value in vars(importlib.import_module(module)).values():
             for item in value if isinstance(value, (list, tuple)) else [value]:
                 if hasattr(item, 'inputSchema') and isinstance(getattr(item, 'name', None), str):

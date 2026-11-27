@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import brain_retrieval
+from veil.brain.recall import brain_retrieval
 from dotenv import dotenv_values
-from recall_relevance import QueryEmbedder
+from veil.brain.recall.recall_relevance import QueryEmbedder
 
 
 def read(path):

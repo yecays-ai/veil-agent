@@ -512,7 +512,7 @@ def stratified_long_tail_pool(snapshot, *, size=24, importance_min=7, rotation=0
     full-library ring, and `rotation` slides a window of `size` across the entire ring (not just
     reordering the same 24 items), so long-tail imp>=7/8 memories genuinely surface across turns.
     """
-    from natural_association import _NOT_LIGHT
+    from veil.brain.recall.natural_association import _NOT_LIGHT
     visible_set = set(snapshot.visible_ids)
     candidates = [memory for memory in snapshot.memories.values()
                   if memory.id in visible_set and memory.importance >= importance_min
@@ -542,7 +542,7 @@ def stratified_long_tail_pool(snapshot, *, size=24, importance_min=7, rotation=0
 def association_choice(snapshot, query, candidates, *, turn=0, already=(), recall_cfg=None,
                        last_shown=None, previous=None):
     """Run the production natural-association scoring over an explicit candidate pool."""
-    from natural_association import choose
+    from veil.brain.recall.natural_association import choose
     metas = {}
     for memory in candidates:
         metas[memory.id if hasattr(memory, 'id') else memory] = {
@@ -564,7 +564,7 @@ def wake_association_choice(snapshot, wake_context, candidates, *, turn=0, alrea
     - idle wakes filter out work-topic candidate bodies, respect cooldown and `already`, and score
       candidates by importance + silence + light lexical affinity to the idle wake context.
     """
-    from natural_association import _NOT_LIGHT
+    from veil.brain.recall.natural_association import _NOT_LIGHT
     if not is_idle:
         return {'key': '', 'body': '', 'score': 0, 'reason': 'task_wake', 'dropped': []}
     if not candidates:

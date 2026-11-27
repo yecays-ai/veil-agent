@@ -24,7 +24,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 import prompts
-from recall_relevance import all_vectors, cosine
+from veil.brain.recall.recall_relevance import all_vectors, cosine
 
 COST_CATEGORY = 'recall_judge'
 COST_ACCOUNTING = 'recall-judge'
@@ -201,7 +201,7 @@ class RecallJudge:
     def make_embedder(self):
         from dotenv import dotenv_values
         from pathlib import Path
-        from recall_relevance import QueryEmbedder
+        from veil.brain.recall.recall_relevance import QueryEmbedder
         from runtime_env import env_file
         # P2-B: same instance-scoped key as Memory.embedder(); never the repository .env in a test instance.
         key = dotenv_values(env_file(self.memory.cfg), interpolate=False,
@@ -253,7 +253,7 @@ class RecallJudge:
         not re-scan the whole folder for every candidate. Under Brain authority the rows come from brain.db."""
         authority = getattr(self.memory, 'brain_authority', None)
         if authority is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             index = {}
             self._brain_rows = {}
             with BrainRead(authority.db_path) as reader:
@@ -276,7 +276,7 @@ class RecallJudge:
                     index[item['id']] = item['id']
             return index
         self._brain_rows = None
-        from memory_agent import vault_path
+        from veil.brain.memory_agent import vault_path
         vault = vault_path(self.memory.store.root, self.memory.cfg.id)
         index = {}
         for path in vault.rglob('*.md'):
@@ -313,7 +313,7 @@ class RecallJudge:
                     or (row.get('source_tool') or '').casefold() == 'letter'):
                 return None
             return {'body': row.get('body') or '', 'title': row.get('title') or ''}
-        from recall_rotation import front_matter
+        from veil.brain.recall.recall_rotation import front_matter
         raw = self._raw(key)
         if raw is None:
             return None
@@ -328,10 +328,10 @@ class RecallJudge:
 
     def _vector_candidates(self, query_vector, taken):
         from pathlib import Path
-        from memory_agent import vault_path
+        from veil.brain.memory_agent import vault_path
         self._vector_note = {'skipped_dim': 0, 'skipped_model': False}
         if getattr(self.memory, 'brain_authority', None) is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             with BrainRead(self.memory.brain_authority.db_path) as reader:
                 vectors = reader.all_vectors()
                 stored_model = reader.embedding_model()

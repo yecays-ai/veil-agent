@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from recall_judge import JudgeFailed, parse_choice  # noqa: E402
+from veil.brain.recall.recall_judge import JudgeFailed, parse_choice  # noqa: E402
 from recall_lab import core  # noqa: E402
 from recall_lab.judge import JudgeClient, PROMPT_CONSERVATIVE, build_messages  # noqa: E402
 from recall_lab.retrieval import RetrievalConfig, judge_candidate_pool  # noqa: E402

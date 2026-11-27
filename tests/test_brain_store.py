@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import brain_store
-import brain_writer
-import veil_brain
+from veil.brain.storage import brain_store
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 
 class FakeStore:

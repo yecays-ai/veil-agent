@@ -120,7 +120,7 @@ def main():
     parser.add_argument('--out', default='.local-tmp/364-compare')
     parser.add_argument('--fake', action='store_true')
     args = parser.parse_args()
-    from experience_memory import ExperienceMemory, load_settings
+    from veil.brain.experience_memory import ExperienceMemory, load_settings
     from veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')

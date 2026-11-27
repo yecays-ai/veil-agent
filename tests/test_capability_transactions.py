@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from autonomy import AutonomyController
-from memory_native import NativeMemoryTools
+from veil.brain.memory_native import NativeMemoryTools
 from veil.tools.tools_agent import FilesystemTools
 from veil_agent import ActivityState, Store, UserError
 from web_agent import Hub

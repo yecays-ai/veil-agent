@@ -13,10 +13,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-import natural_association
-import relationship_base
-from memory_agent import Memory, vault_path
-from recall_judge import DEFAULTS as JUDGE_DEFAULTS
+from veil.brain.recall import natural_association
+from veil.brain import relationship_base
+from veil.brain.memory_agent import Memory, vault_path
+from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
 from test_recall_judge import FakeEmbedder, FakeJudgeModel
 from test_recall_rotation import FictionalOmbre
 from veil_agent import Budget, Chat, Store, load_character, estimate_request_tokens
@@ -186,7 +186,7 @@ class RelationshipBaseChangeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        from learned_context import LearnedContext
+        from veil.brain.learned_context import LearnedContext
         self.store = Store(Path(self.temp.name) / 'data')
         self.profile = LearnedContext(self.store.root, 'fake',
                                       {'learned': True, 'file': 'learned-context.json',
@@ -469,7 +469,7 @@ class PageSaveProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        from learned_context import LearnedContext
+        from veil.brain.learned_context import LearnedContext
         self.store = Store(Path(self.temp.name) / 'data')
         self.profile = LearnedContext(self.store.root, 'fake',
                                       {'learned': True, 'file': 'learned-context.json',
@@ -518,7 +518,7 @@ class EvidencePathTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        from learned_context import LearnedContext
+        from veil.brain.learned_context import LearnedContext
         self.store = Store(Path(self.temp.name) / 'data')
         self.profile = LearnedContext(self.store.root, 'fake',
                                       {'learned': True, 'file': 'learned-context.json',
@@ -638,7 +638,7 @@ class DataSafetyTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        from learned_context import LearnedContext
+        from veil.brain.learned_context import LearnedContext
         self.store = Store(Path(self.temp.name) / 'data')
         self.profile = LearnedContext(self.store.root, 'fake',
                                       {'learned': True, 'file': 'learned-context.json',

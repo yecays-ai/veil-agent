@@ -17,9 +17,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import brain_events  # noqa: E402
-import brain_writer  # noqa: E402
-from brain_lock import write_lock  # noqa: E402
+from veil.brain.storage import brain_events  # noqa: E402
+from veil.brain.storage import brain_writer  # noqa: E402
+from veil.brain.storage.brain_lock import write_lock  # noqa: E402
 from veil_agent import Store  # noqa: E402
 
 

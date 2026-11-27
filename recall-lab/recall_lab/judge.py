@@ -40,7 +40,7 @@ def production_prompt(wake=False):
 
 def card_300(raw):
     """Production judge card (ticket 419 behaviour)."""
-    from recall_judge import card_text
+    from veil.brain.recall.recall_judge import card_text
     return card_text(raw)
 
 
@@ -72,7 +72,7 @@ def card_500(raw, snapshot=None, memory_id=''):
 
 
 def _split_card(raw):
-    from recall_judge import split_card
+    from veil.brain.recall.recall_judge import split_card
     return split_card(raw)
 
 
@@ -149,7 +149,7 @@ class JudgeClient:
 def build_messages(query, ordered_candidates, snapshot, *, card='300', prompt=PROMPT_CONSERVATIVE,
                    wake=False):
     """Production layout: one system prompt, one user message listing the shuffled cards."""
-    from recall_judge import labels_for
+    from veil.brain.recall.recall_judge import labels_for
     letters = labels_for(len(ordered_candidates))
     lines = []
     for letter, (memory_id, _body) in zip(letters, ordered_candidates):
@@ -169,7 +169,7 @@ def build_messages(query, ordered_candidates, snapshot, *, card='300', prompt=PR
 
 def parse_picked(call, letters):
     """(picked ids, error kind). Mirrors recall_judge.parse_choice's contract."""
-    from recall_judge import parse_choice, JudgeFailed
+    from veil.brain.recall.recall_judge import parse_choice, JudgeFailed
     if call.error:
         return [], call.error_kind
     try:

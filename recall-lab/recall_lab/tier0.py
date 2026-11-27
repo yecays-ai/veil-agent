@@ -461,7 +461,7 @@ def run_a1a(ctx):
     result = core.result_stub('AB-A1a', 0, title='全库分层轮换自然联想池',
                               variable='无联想 vs 生产静态 breath(8) vs 全库分层轮换池(24)',
                               fixed='普通聊天主链路；生产 natural_association 打分与冷却规则不变')
-    from natural_association import _NOT_LIGHT
+    from veil.brain.recall.natural_association import _NOT_LIGHT
     visible_set = set(ctx.snapshot.visible_ids)
     imp8_total = sum(1 for memory in ctx.snapshot.memories.values()
                      if memory.id in visible_set and memory.importance == 8)

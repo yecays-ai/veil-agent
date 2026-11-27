@@ -13,10 +13,10 @@ import re
 import uuid
 
 from agent_types import UserError
-from brain_writer import WriteConflict
+from veil.brain.storage.brain_writer import WriteConflict
 from capability_state import capability_lock, save_capabilities
-from memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
-from memory_sidecar import Sidecar
+from veil.brain.memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
+from veil.brain.memory_sidecar import Sidecar
 
 # Ticket 427/441: Ombre's feature tools are gone. Only trace (edit/archive/delete) remains, and
 # P3-1 defines its schema locally so memory no longer needs an Ombre process just to describe tools.
@@ -274,7 +274,7 @@ class NativeMemoryTools:
         self.events = None
         event_settings = (getattr(memory.cfg, 'memory', None) or {}).get('events')
         if isinstance(event_settings, dict) and event_settings.get('enabled'):
-            from event_memory import EventMemory
+            from veil.brain.event_memory import EventMemory
             experience = (getattr(memory.cfg, 'memory', None) or {}).get('experience') or {}
             daily_cap = experience.get('daily_budget_cny') if isinstance(experience, dict) else None
             self.events = EventMemory(memory, event_settings, model=self.model, sidecar=self.sidecar,
@@ -374,7 +374,7 @@ class NativeMemoryTools:
 
     def _visible_records(self, include_hidden=False):
         if getattr(self.memory, 'brain_authority', None) is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             try:
                 with BrainRead(self.memory.brain_authority.db_path) as reader:
                     entries = reader.panel_entries(limit=10000)
@@ -441,7 +441,7 @@ class NativeMemoryTools:
         """
         auth = getattr(self.memory, 'brain_authority', None)
         if auth is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             with BrainRead(auth.db_path) as reader:
                 pending = {row[0] for row in reader.connection.execute(
                     "SELECT memory_id FROM delete_requests WHERE status='pending'")}
@@ -470,7 +470,7 @@ class NativeMemoryTools:
         auth = getattr(self.memory, 'brain_authority', None)
         if auth is not None:
             try:
-                from brain_read import BrainRead
+                from veil.brain.storage.brain_read import BrainRead
                 with BrainRead(auth.db_path) as reader:
                     row = reader.connection.execute(
                         'SELECT bucket FROM memories WHERE id=? AND is_tombstone=0 AND is_deleted=0',
@@ -570,7 +570,7 @@ class NativeMemoryTools:
             # P2-B: with Brain authoritative the vault archive is a stale Ombre copy. The list and
             # the unarchive check must come from brain.db or the page shows old rows and refuses
             # memories archived after the switch.
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             with BrainRead(self.memory.brain_authority.db_path) as reader:
                 rows = reader.archived(limit=10000)
                 titles = {into: reader.title(into) or into
@@ -699,7 +699,7 @@ class NativeMemoryTools:
 
     def _pinned_ids(self):
         if getattr(self.memory, 'brain_authority', None) is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             with BrainRead(self.memory.brain_authority.db_path) as reader:
                 return set(reader.pinned_ids())
         pinned = set()
@@ -723,7 +723,7 @@ class NativeMemoryTools:
                 stamps.append(stamp)
         archived = 0
         if getattr(self.memory, 'brain_authority', None) is not None:
-            from brain_read import BrainRead
+            from veil.brain.storage.brain_read import BrainRead
             try:
                 with BrainRead(self.memory.brain_authority.db_path) as reader:
                     archived = len(reader.archived(limit=10000))

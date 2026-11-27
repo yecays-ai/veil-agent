@@ -12,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from event_memory import EventMemory
-from learned_context import LearnedContext, _text_bytes
+from veil.brain.event_memory import EventMemory
+from veil.brain.learned_context import LearnedContext, _text_bytes
 
 
 class _MiniStore:

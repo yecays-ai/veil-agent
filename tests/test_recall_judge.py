@@ -18,8 +18,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from agent_types import UserError
-from memory_agent import Memory, vault_path
-from recall_judge import DEFAULTS, JudgeFailed, card_text, load_settings, parse_choice
+from veil.brain.memory_agent import Memory, vault_path
+from veil.brain.recall.recall_judge import DEFAULTS, JudgeFailed, card_text, load_settings, parse_choice
 from test_recall_rotation import FictionalOmbre
 from veil_agent import Budget, Character, Store
 
@@ -419,7 +419,7 @@ class RecallJudgeTests(unittest.TestCase):
         self.assertEqual('Old name | …opening: body | self', card_text(old))
 
     def test_labels_stay_parseable_past_twenty_six_candidates(self):
-        from recall_judge import labels_for
+        from veil.brain.recall.recall_judge import labels_for
         labels = labels_for(32)
         self.assertEqual(32, len(set(labels)))
         self.assertEqual('A', labels[0])

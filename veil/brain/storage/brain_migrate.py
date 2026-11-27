@@ -15,9 +15,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-import brain_events
-import brain_writer
-from brain_lock import write_lock
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_writer
+from veil.brain.storage.brain_lock import write_lock
 
 
 def _sha(data):

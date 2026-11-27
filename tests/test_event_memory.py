@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from memory_agent import Memory
-from memory_native import NativeMemoryTools, ToolSet
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools, ToolSet
 from veil_agent import Budget, Character, Store
 from test_memory import Backend
 
@@ -256,7 +256,7 @@ class EventMemoryTests(unittest.TestCase):
         pending = self.native.events.record(third, 'The charcoal note')
         self.assertTrue(pending.get('pending'))
         self.store.append = original
-        from event_memory import EventMemory
+        from veil.brain.event_memory import EventMemory
         restarted = EventMemory(self.memory, {'enabled': True}, model=StubModel(), sidecar=self.native.sidecar)
         restarted.retry_pending()
         restarted.retry_dirty()
@@ -351,7 +351,7 @@ class EventMemoryTests(unittest.TestCase):
         event_id = next(iter(self.native.events.events()))
         key = self.native.events.events()[event_id]['memory_id']
         projection = self.memory.content_for(key, refresh=True)
-        from experience_memory import ExperienceMemory
+        from veil.brain.experience_memory import ExperienceMemory
         tidy = ExperienceMemory(self.cfg, self.store, self.budget, StubModel(), 'fake/chat.jsonl',
                                 self.memory, {'enabled': True})
         self.assertTrue(tidy._save_update({'id': key, 'text': '整理后的完整故事：争执、meh、那张纸。'},
@@ -378,7 +378,7 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(self.native.events._missing_facts(stages, 'The count was 100.5.'), ['100'])
 
     def test_version_number_extraction_and_check_use_the_same_boundary(self):
-        from event_memory import _NUMBER
+        from veil.brain.event_memory import _NUMBER
         text = 'Version 1.2.3.'
         self.assertEqual(_NUMBER.findall(text), [])
         stages = [{'facts': {'numbers': _NUMBER.findall(text), 'dates': [], 'files': []}}]
@@ -442,7 +442,7 @@ class EventMemoryTests(unittest.TestCase):
         self.assertEqual(len(self.backend.rows), 1)
 
         # Background tidy revises the narrative without adding a stage.
-        from experience_memory import ExperienceMemory
+        from veil.brain.experience_memory import ExperienceMemory
         projection = self.memory.content_for(key, refresh=True)
         tidy = ExperienceMemory(self.cfg, self.store, self.budget, StubModel(), 'fake/chat.jsonl',
                                 self.memory, {'enabled': True})

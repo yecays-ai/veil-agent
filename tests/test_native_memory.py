@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, MemoryToolError
-from memory_native import HOLD, NativeMemoryTools, ToolSet
+from veil.brain.memory_agent import Memory, MemoryToolError
+from veil.brain.memory_native import HOLD, NativeMemoryTools, ToolSet
 from long_tasks import LongTaskStore
 from test_memory import Backend
 from veil.tools.tools_agent import permitted_tools
@@ -681,7 +681,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertIn('edit_reason', trace.inputSchema['properties'])
         for refused in ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason'):
             self.assertNotIn(refused, trace.inputSchema['properties'])
-        from memory_native import ombre_tool_for_model
+        from veil.brain.memory_native import ombre_tool_for_model
         stripped = ombre_tool_for_model(SimpleNamespace(name='trace', description='上游', inputSchema={
             'title': 'traceArguments', 'type': 'object', 'properties': {
                 'bucket_id': {'title': 'Bucket Id', 'type': 'string'},

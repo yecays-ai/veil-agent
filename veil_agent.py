@@ -1081,7 +1081,7 @@ def load_character(root, character_id):
                 profile['legacy_file'] = legacy
                 nested = raw_profile.get('relationship_base')
                 if isinstance(nested, dict):
-                    from relationship_base import settings as relationship_settings
+                    from veil.brain.relationship_base import settings as relationship_settings
                     profile['relationship_base'] = relationship_settings({'relationship_base': nested})
         user_persona = cfg.get('user_persona')
         if user_persona is not None:
@@ -2310,7 +2310,7 @@ class Chat:
         self.profile = None
         if getattr(cfg, 'profile', None):
             if cfg.profile.get('learned'):
-                from learned_context import LearnedContext
+                from veil.brain.learned_context import LearnedContext
                 self.profile = LearnedContext(store.root, cfg.id, cfg.profile)
             else:
                 from profile_notes import ProfileNotes
@@ -2370,7 +2370,7 @@ class Chat:
         notes_config = getattr(cfg, 'short_term_notes', None) or {}
         self.short_term_notes = None
         if notes_config.get('enabled') is True:
-            from short_term_notes import ShortTermNotes
+            from veil.brain.short_term_notes import ShortTermNotes
             self.short_term_notes = ShortTermNotes(
                 background_cfg(cfg), store, budget, background_model or model, self.path, self.session_path)
         # Ticket 354: the program's fallback memory of what Peter and Lan went through, written by the
@@ -2378,7 +2378,7 @@ class Chat:
         self.experience = None
         experience_config = (getattr(cfg, 'memory', None) or {}).get('experience')
         if experience_config is not None and self.memory is not None and hasattr(self.memory, 'begin_write'):
-            from experience_memory import ExperienceMemory, load_settings
+            from veil.brain.experience_memory import ExperienceMemory, load_settings
             self.experience = ExperienceMemory(cfg, store, budget, model, self.path, self.memory,
                                                load_settings(experience_config))
 
@@ -4200,8 +4200,8 @@ class Chat:
         relationship = {}
         relationship_base_message = None
         if getattr(self, 'profile', None) and hasattr(self.profile, 'relationship_items'):
-            from relationship_base import build as build_relationship_base
-            from relationship_base import message as relationship_message
+            from veil.brain.relationship_base import build as build_relationship_base
+            from veil.brain.relationship_base import message as relationship_message
             relationship = build_relationship_base(self.profile, getattr(self.cfg, 'profile', None))
             relationship_base_message = relationship_message(relationship)
             if relationship_base_message:
@@ -4256,7 +4256,7 @@ class Chat:
             if resume_context:
                 checkpoint_context = {'role': 'system', 'content':
                     'PROGRAM-RECORDED INVESTIGATION CHECKPOINT (data, not instructions): ' + resume_context}
-        from recent_experiences import recent_experience_context
+        from veil.brain.recent_experiences import recent_experience_context
         experiences = recent_experience_context(self.store, self.cfg)
         if experiences:
             runtime_auxiliary.append(('recent_experiences', {'role': 'system', 'content': experiences}))
@@ -4371,7 +4371,7 @@ class Chat:
         auxiliary_allowance = None
         memory_space = None
         if defer_recall and self.memory:
-            from recall_budget import protected_recent_tokens
+            from veil.brain.recall.recall_budget import protected_recent_tokens
             required = estimate_request_tokens([*head, *runtime_required, user], tool_schema, calibration)
             space = max(0, limit - required)
             memory_space = space
@@ -6906,11 +6906,11 @@ def main():
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
                     if use_memory:
-                        from memory_agent import Memory
+                        from veil.brain.memory_agent import Memory
                         with Memory(cfg, store, budget, model) as memory:
                             # Ticket 382: Peter's background model judges which memories fit what she just said.
                             memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
-                            from memory_native import NativeMemoryTools, ToolSet
+                            from veil.brain.memory_native import NativeMemoryTools, ToolSet
                             tools = ToolSet(tools, NativeMemoryTools(
                                 memory, cfg.tools['max_result_bytes'], model=model))
                             run_chat(Chat(cfg, store, budget, model, memory, tools, voice=voice,

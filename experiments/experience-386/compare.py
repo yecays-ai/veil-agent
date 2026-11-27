@@ -186,7 +186,7 @@ def main():
     parser.add_argument('--squeeze', type=int, help='cap max_tokens of calls that still think to this, to make the '
                         'reasoning use the whole limit like the 11-16 failures (the retry without thinking is not capped)')
     args = parser.parse_args()
-    from experience_memory import ExperienceMemory, load_settings
+    from veil.brain.experience_memory import ExperienceMemory, load_settings
     from veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')

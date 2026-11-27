@@ -262,7 +262,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             activity = ActivityState(store.root / 'test' / 'resident-state.json')
             activity.set(True)
             hub = Hub('Test', activity)
-            from memory_native import ToolSet
+            from veil.brain.memory_native import ToolSet
             native = SimpleNamespace(tools=[], description='', bind_capabilities=lambda _files: None,
                                      handles=lambda _name: False)
             chat = Chat(cfg, store, Budget(store), model, tools=ToolSet(manager, native), output=hub.output)

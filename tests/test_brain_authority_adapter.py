@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-import brain_authority
-import brain_writer
-import veil_brain
-from memory_agent import Memory
+from veil.brain.storage import brain_authority
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.memory_agent import Memory
 
 
 class AuthorityTests(unittest.TestCase):
@@ -126,7 +126,7 @@ class AuthorityTests(unittest.TestCase):
         self.assertTrue(text.startswith('新建→'))
 
     def test_hold_works_without_a_configured_budget(self):
-        from memory_agent import Memory
+        from veil.brain.memory_agent import Memory
         from veil_agent import Character, Store
         import tempfile
         from unittest.mock import Mock

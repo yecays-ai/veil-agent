@@ -1233,7 +1233,7 @@ output_cny_per_million = "8"
                 return 2
             return 2 if 'OPTIONAL_CONTEXT' in content else 1
 
-        with patch('recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
+        with patch('veil.brain.recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
              patch('veil.windows.screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
              patch('veil_agent.estimate_request_tokens', side_effect=estimate):
             self.chat.send('继续')

@@ -124,8 +124,8 @@ def main():
     parser.add_argument('--out', default='.local-tmp/363-compare')
     parser.add_argument('--fake', action='store_true')
     args = parser.parse_args()
-    from memory_agent import Memory
-    from memory_native import NativeMemoryTools, ToolSet
+    from veil.brain.memory_agent import Memory
+    from veil.brain.memory_native import NativeMemoryTools, ToolSet
     from veil_agent import Budget, Chat, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')

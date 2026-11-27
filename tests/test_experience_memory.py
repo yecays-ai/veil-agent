@@ -15,7 +15,7 @@ from pathlib import Path
 from agent_types import UserError
 import test_native_memory
 from chat_search import search_chat
-from experience_memory import COST_CATEGORY, ExperienceMemory, load_settings
+from veil.brain.experience_memory import COST_CATEGORY, ExperienceMemory, load_settings
 from veil_agent import Budget, Character, Chat, Store
 
 DAY1 = '2026-11-12'

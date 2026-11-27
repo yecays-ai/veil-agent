@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from brain_lock import write_lock
+from veil.brain.storage.brain_lock import write_lock
 
 COUNTS = ('memories', 'versions', 'vectors', 'events', 'event_stages', 'event_ledger',
           'event_state', 'delete_requests', 'write_journal', 'tombstones',
@@ -120,7 +120,7 @@ def _merge_companion_lines(existing_text, bundle_text):
 
 
 def _actual_digest(connection):
-    from veil_brain import canonical_digest
+    from veil.brain.storage.veil_brain import canonical_digest
     return canonical_digest(connection)
 
 
@@ -231,7 +231,7 @@ def restore(backup_path, db_path, *, lock_held=False):
         # byte-identical database copy and a readable export before any replacement.
         safety = target.with_name(target.name + '.pre-restore-' + stamp)
         shutil.copy2(target, safety)
-        import brain_export
+        from veil.brain.storage import brain_export
         safety_export = target.with_name(target.name + '.pre-restore-' + stamp + '-export')
         brain_export.export_vault(target, safety_export)
     temp = target.with_name(target.name + '.restore-' + uuid.uuid4().hex)
@@ -312,7 +312,7 @@ def _merge_new_rows(current_db, target_db):
     target = sqlite3.connect(str(target_db))
     counts = {}
     try:
-        from brain_writer import ensure_schema
+        from veil.brain.storage.brain_writer import ensure_schema
         ensure_schema(target)
         target.execute('ATTACH DATABASE ? AS old', (str(Path(current_db)),))
         tombstone_ids = [row[0] for row in target.execute('SELECT memory_id FROM old.tombstones')]
@@ -503,7 +503,7 @@ def _merge_new_rows(current_db, target_db):
             existing_journal.add(values)
             counts['write_journal'] = counts.get('write_journal', 0) + 1
         target.commit()
-        from brain_writer import refresh_digest
+        from veil.brain.storage.brain_writer import refresh_digest
         refresh_digest(target)
         return counts
     except Exception:

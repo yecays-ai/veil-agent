@@ -459,7 +459,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}, token='wrong')[0], 403)
         # Ticket 456 review: an edit without a concurrency token is refused, never written blindly.
         self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}})[0], 400)
-        with patch('brain_p4_api.memory_sha256', return_value='a' * 64):
+        with patch('veil.brain.brain_p4_api.memory_sha256', return_value='a' * 64):
             self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'},
                                                            'expected_sha256': 'a' * 64}),
                              (200, {'ok': True, 'message': 'saved'}))

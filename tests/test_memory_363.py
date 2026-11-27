@@ -8,8 +8,8 @@ import unittest
 from unittest.mock import Mock
 
 from agent_types import UserError
-from memory_agent import Memory
-from memory_native import MEMORY_CHARS, NativeMemoryTools, ToolSet, dates_in
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import MEMORY_CHARS, NativeMemoryTools, ToolSet, dates_in
 from test_memory import Backend
 from veil_agent import Budget, Character, Store
 

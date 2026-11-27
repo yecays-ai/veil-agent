@@ -8,7 +8,7 @@ import hashlib
 import json
 import sqlite3
 
-import brain_health
+from veil.brain import brain_health
 import diagnostics
 import request_snapshots
 import web_agent

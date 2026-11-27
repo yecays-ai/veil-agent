@@ -32,12 +32,12 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import brain_retrieval  # noqa: E402
-import brain_writer  # noqa: E402
-import veil_brain  # noqa: E402
-from brain_read import BrainRead  # noqa: E402
-from memory_agent import Memory  # noqa: E402
-from recall_judge import DEFAULTS as JUDGE_DEFAULTS, card_text, split_card  # noqa: E402
+from veil.brain.recall import brain_retrieval  # noqa: E402
+from veil.brain.storage import brain_writer  # noqa: E402
+from veil.brain.storage import veil_brain  # noqa: E402
+from veil.brain.storage.brain_read import BrainRead  # noqa: E402
+from veil.brain.memory_agent import Memory  # noqa: E402
+from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS, card_text, split_card  # noqa: E402
 from veil_agent import Budget, Character, Store  # noqa: E402
 
 CRLF = ('---\r\nid: {id}\r\ntitle: {title}\r\nimportance: {importance}\r\n---\r\n'

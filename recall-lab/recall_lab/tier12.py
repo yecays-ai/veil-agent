@@ -817,7 +817,7 @@ def run_c2b(ctx):
     from .tier2_real import run_c2a_c2b_real
     result = core.result_stub('AB-C2b', 2, title='短闲聊记忆注入上限 Top-2+1 vs 不限',
                               variable='light_chat recalled 上限 3 条 vs 不限', fixed='完整单轮聊天切片 + deepseek-flash 真实生成盲评')
-    from natural_association import light_chat
+    from veil.brain.recall.natural_association import light_chat
     diag_path = ctx.options.get('recall_diagnostics')
     picked_counts = []
     if diag_path and Path(diag_path).is_file():

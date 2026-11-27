@@ -57,7 +57,7 @@ test('chat shell exposes appearance CSS, custom background, global and per-page 
 test('daily memory view reads Ombre catalog and exact records without the legacy /memory command', async () => {
   const [html, main, web, native] = await Promise.all([
     read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8'),
-    fs.readFile(path.join(__dirname, '..', '..', 'memory_native.py'), 'utf8')
+    fs.readFile(path.join(__dirname, '..', '..', 'veil', 'brain', 'memory_native.py'), 'utf8')
   ]);
   assert.match(html, /data-memory-group="all"/);
   assert.match(html, /data-memory-group="recent"/);

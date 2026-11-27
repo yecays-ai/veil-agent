@@ -129,7 +129,7 @@ def main():
     import veil_agent
     from veil_agent import Budget, Chat, Store, load_character, make_model
     try:
-        from experience_memory import ExperienceMemory, load_settings
+        from veil.brain.experience_memory import ExperienceMemory, load_settings
     except ImportError:
         ExperienceMemory = None
     root = Path(args.root)

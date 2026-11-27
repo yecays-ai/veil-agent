@@ -4,8 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 
-import tag_governance
-import veil_brain
+from veil.brain.storage import tag_governance
+from veil.brain.storage import veil_brain
 
 
 class TagGovernanceTests(unittest.TestCase):

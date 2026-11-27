@@ -4,8 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 
-import brain_writer
-import veil_brain
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 
 def vector(value=0.1):

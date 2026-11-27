@@ -16,14 +16,14 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-from event_memory import EventMemory
-from memory_agent import Memory, vault_path
-from memory_native import NativeMemoryTools
-from memory_sidecar import Sidecar
-from recall_budget import (fit, partial_text, protected_recent_tokens, split,
+from veil.brain.event_memory import EventMemory
+from veil.brain.memory_agent import Memory, vault_path
+from veil.brain.memory_native import NativeMemoryTools
+from veil.brain.memory_sidecar import Sidecar
+from veil.brain.recall.recall_budget import (fit, partial_text, protected_recent_tokens, split,
                            tokens_for, tokens_for_messages)
-from recall_judge import DEFAULTS as JUDGE_DEFAULTS
-from recall_rotation import asks_about_past, is_followup
+from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
+from veil.brain.recall.recall_rotation import asks_about_past, is_followup
 from test_recall_judge import FakeEmbedder, FakeJudgeModel
 from test_recall_rotation import FictionalOmbre
 from veil_agent import Budget, Character, Store, estimate_message_tokens
@@ -556,7 +556,7 @@ class FinalStateTests(MemoryLevelBudgetTests):
                  'text': '[bucket_id:opening]\n' + 'A long complete sentence. ' * 100,
                  'tokens': 10000, 'complete': True}
         memory._pending_recall['blocks'] = [block]
-        with unittest.mock.patch('recall_budget.fit', return_value=([block], [])):
+        with unittest.mock.patch('veil.brain.recall.recall_budget.fit', return_value=([block], [])):
             out = memory.finish_recall(space=300, history_tokens=250,
                                         protected_tokens=100, auxiliary_tokens=0)
         self.assertNotIn('opening', memory.last_context_refs)
@@ -627,7 +627,7 @@ class EffectiveHistoryReuseRemovedTests(MemoryLevelBudgetTests):
 
 class BoundaryTests(unittest.TestCase):
     def test_partial_sentence_keeps_closing_quotes(self):
-        from recall_rotation import _cut_on_boundary
+        from veil.brain.recall.recall_rotation import _cut_on_boundary
         for sentence in ('“我会回来。”', '「我会回来。」', '“I will return.”', '（我会回来。）', 'First sentence.】'):
             text = sentence + ' ' + '后续还有很多内容。' * 20
             body, _, _ = partial_text(text, tokens_for(sentence, 0.4), 0.4)
@@ -636,7 +636,7 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(sentence, _cut_on_boundary(sentence + '后续。', len(sentence)))
 
     def test_wrapped_line_is_not_a_sentence_boundary(self):
-        from recall_rotation import _cut_on_boundary
+        from veil.brain.recall.recall_rotation import _cut_on_boundary
         text = '这句话写到这里\n才接着说完。'
         self.assertEqual('', _cut_on_boundary(text, len('这句话写到这里')))
         self.assertEqual((None, 0, False),

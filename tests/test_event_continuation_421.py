@@ -21,10 +21,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from agent_types import BudgetExceeded, UserError
-from event_memory import EventMemory, entities
-from experience_memory import ExperienceMemory, load_settings
-from memory_agent import Memory
-from memory_native import NativeMemoryTools, ToolSet
+from veil.brain.event_memory import EventMemory, entities
+from veil.brain.experience_memory import ExperienceMemory, load_settings
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools, ToolSet
 from veil_agent import Budget, Character, Store
 from test_memory import Backend
 

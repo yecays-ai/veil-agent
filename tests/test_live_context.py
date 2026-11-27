@@ -8,7 +8,7 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 from agent_types import RequestFailed
-from short_term_notes import ShortTermNotes, COST_ACCOUNTING, MAX_REQUEST_BYTES
+from veil.brain.short_term_notes import ShortTermNotes, COST_ACCOUNTING, MAX_REQUEST_BYTES
 from veil_agent import Budget, Character, Store
 from web_agent import Hub
 

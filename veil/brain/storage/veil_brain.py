@@ -710,7 +710,7 @@ def run_import(source, db_path, snapshot=None, report=None):
         events_path = importer.source / 'events.jsonl'
         stages_path = importer.source / 'event-stages.jsonl'
         if events_path.is_file() and stages_path.is_file():
-            import brain_events
+            from veil.brain.storage import brain_events
             brain_events.import_events(connection, events_path, stages_path)
         importer.verify(connection, before)
         # P2-A: the digest must cover the full event payload/stages imported above, otherwise

@@ -406,7 +406,7 @@ def acknowledge_chat_handoff(store, cfg, activity_started_at):
 
 def recent_glance_handoff(store, cfg):
     """Deliver the latest short-term desktop glimpse with the next ordinary chat turn."""
-    from recent_experiences import has_recent_glance
+    from veil.brain.recent_experiences import has_recent_glance
     if has_recent_glance(store, cfg):
         return None, None
     rows = store.read(f'{cfg.id}/glance-last.json')
@@ -1626,7 +1626,7 @@ class GlanceController:
     def run(self):
         self._claimed = False
         started_at = now()
-        from recent_experiences import begin_glance, record_glance
+        from veil.brain.recent_experiences import begin_glance, record_glance
         begin_glance(self.chat.store, self.chat.cfg, started_at)
         self.chat.last_tool_summaries = []
         row = {'started_at': started_at, 'finished_at': None, 'decision': '',

@@ -49,7 +49,7 @@ QUESTION = re.compile(r'^(?:what|why|how|who|where|when|which|do|does|did|is|are
 def fake_tools():
     import importlib
     wanted = {}
-    for value in vars(importlib.import_module('memory_native')).values():
+    for value in vars(importlib.import_module('veil.brain.memory_native')).values():
         for item in value if isinstance(value, (list, tuple)) else [value]:
             if hasattr(item, 'inputSchema') and isinstance(getattr(item, 'name', None), str):
                 wanted[item.name] = item

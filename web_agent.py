@@ -2489,7 +2489,7 @@ def make_handler(hub, token):
             if chat is None:
                 self._send(503, {'error': '服务尚未就绪。'})
                 return
-            from brain_health import load_health_settings, load_latest_report, load_snapshots
+            from veil.brain.brain_health import load_health_settings, load_latest_report, load_snapshots
             from_date = (query.get('from') or [''])[0]
             to_date = (query.get('to') or [''])[0]
             try:
@@ -2514,7 +2514,7 @@ def make_handler(hub, token):
             if chat is None:
                 self._send(503, {'error': '服务尚未就绪。'})
                 return
-            from brain_health import export_report, load_latest_report
+            from veil.brain.brain_health import export_report, load_latest_report
             report = load_latest_report(data_root, role_id)
             if report is None:
                 self._send(404, {'error': '尚未生成健康检查报告，请先执行一次只读检查。'})
@@ -2527,7 +2527,7 @@ def make_handler(hub, token):
             if chat is None:
                 self._send(503, {'error': '服务尚未就绪。'})
                 return
-            from brain_health import run_health_scan
+            from veil.brain.brain_health import run_health_scan
             from_date = str(body.get('from') or '')
             to_date = str(body.get('to') or '')
             experience = getattr(chat, 'experience', None)
@@ -2561,7 +2561,7 @@ def make_handler(hub, token):
             if chat is None:
                 self._send(503, {'error': '服务尚未就绪。'})
                 return
-            from brain_health import save_health_settings
+            from veil.brain.brain_health import save_health_settings
             try:
                 updated = save_health_settings(data_root, role_id, body)
             except ValueError as exc:
@@ -2588,7 +2588,7 @@ def make_handler(hub, token):
                 if url.query:
                     self._send(400, {'error': 'Brain 总览不接受查询参数。'})
                     return
-                from brain_p4_api import overview as brain_overview
+                from veil.brain.brain_p4_api import overview as brain_overview
                 try:
                     self._send(200, brain_overview(hub))
                 except sqlite3.Error:
@@ -2596,7 +2596,7 @@ def make_handler(hub, token):
             elif url.path == '/api/memory/library':
                 if not self._guard(self.headers.get('X-Token')):
                     return
-                from brain_p4_api import library as brain_library
+                from veil.brain.brain_p4_api import library as brain_library
                 try:
                     self._send(200, brain_library(hub, query))
                 except sqlite3.Error:
@@ -2608,7 +2608,7 @@ def make_handler(hub, token):
             elif url.path == '/api/peter-page/versions':
                 if not self._guard(self.headers.get('X-Token')):
                     return
-                from brain_p4_api import learned_versions
+                from veil.brain.brain_p4_api import learned_versions
                 self._send(200, {'items': learned_versions(hub)})
             elif url.path in ('/api/memory/catalog', '/api/memory/read',
                               '/api/memory/events', '/api/memory/event'):
@@ -2797,7 +2797,7 @@ def make_handler(hub, token):
                     if not isinstance(expected_sha, str) or not expected_sha:
                         self._send(400, {'error': '缺少内容校验值，请刷新记忆页后重试。'})
                         return
-                    from brain_p4_api import memory_sha256
+                    from veil.brain.brain_p4_api import memory_sha256
                     current_sha = memory_sha256(hub, body['id'])
                     if not current_sha:
                         self._send(409, {
@@ -2821,7 +2821,7 @@ def make_handler(hub, token):
                 elif url.path == '/api/memory/versions':
                     versions = tools.panel_versions(body['id'])
                     if versions is not None:
-                        from brain_p4_api import compute_line_diff, memory_sha256
+                        from veil.brain.brain_p4_api import compute_line_diff, memory_sha256
                         cur_body = tools.memory.content_for(body['id']) or '' if hasattr(tools, 'memory') else ''
                         for v in versions:
                             v['diff'] = compute_line_diff(v.get('body', ''), cur_body)
@@ -3744,7 +3744,7 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
         background = chat.cfg.models.startup_choice('background')
         hub.background_running = background[0] if background else None
         hub.refresh_models()
-    from brain_health import start_health_scheduler
+    from veil.brain.brain_health import start_health_scheduler
     start_health_scheduler(hub)
     chat.screen_pop_handler = hub.request_screen_pop
     files = getattr(chat.tools, 'files', None) if chat.tools else None
@@ -4021,12 +4021,12 @@ def main(argv=None):
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:
                         if use_memory:
-                            from memory_agent import Memory
+                            from veil.brain.memory_agent import Memory
                             with Memory(cfg, store, budget, model,
                                         runtime_monitor=runtime_monitor) as memory:
                                 # Ticket 382: Peter's background model judges which memories fit what she just said.
                                 memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
-                                from memory_native import NativeMemoryTools, ToolSet
+                                from veil.brain.memory_native import NativeMemoryTools, ToolSet
                                 tools = ToolSet(tools, NativeMemoryTools(
                                     memory, cfg.tools['max_result_bytes'], model=model))
                                 hub.memory_tools = tools.native

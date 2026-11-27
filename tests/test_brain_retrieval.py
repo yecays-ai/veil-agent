@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import brain_retrieval
-import veil_brain
-from memory_agent import Memory, ordinary_hits
+from veil.brain.recall import brain_retrieval
+from veil.brain.storage import veil_brain
+from veil.brain.memory_agent import Memory, ordinary_hits
 
 
 def frontmatter(**fields):

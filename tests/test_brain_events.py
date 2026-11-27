@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import brain_events
+from veil.brain.storage import brain_events
 
 
 class EventStorageTests(unittest.TestCase):

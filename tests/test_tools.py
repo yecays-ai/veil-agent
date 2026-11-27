@@ -1695,7 +1695,7 @@ class FilesystemServerTests(unittest.TestCase):
 
     def test_tool_failure_source_strings_are_english(self):
         root = Path(__file__).resolve().parents[1]
-        paths = ('long_tasks.py', 'memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'memory_agent.py')
+        paths = ('long_tasks.py', 'veil/brain/memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'veil/brain/memory_agent.py')
         failure_states = {'被拒绝', '出错', False}
         found = 0
 
@@ -1722,7 +1722,7 @@ class FilesystemServerTests(unittest.TestCase):
                 self.assertNotRegex(
                     reason, r'[\u3400-\u9fff]',
                     f'{relative_path}:{node.lineno} has a non-English tool failure reason')
-            if relative_path == 'memory_agent.py':
+            if relative_path == 'veil/brain/memory_agent.py':
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ClassDef) and node.name == 'MemoryToolError':
                         diagnostics = ''.join(
