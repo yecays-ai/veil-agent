@@ -67,9 +67,9 @@ python scripts/dev/migrate_layout.py --all --move --rewrite
 
 ## 4. 自动化测试
 
-- 代码修复后全量 Python 套件：`2,358` 个用例（原 2,351 + 新增 7 个入口/迁移/recall-lab 测试）。
+- 代码修复后全量 Python 套件：`2,359` 个用例（原 2,351 + 新增 8 个入口/迁移/recall-lab 测试）。
 - 本机结果：18 failures / 4 errors / 29 skipped，全部集中在既有环境依赖测试：真实 DOCX/PDF、真实 OpenCode、`test_maintenance` 的 git/gh 环境、本机 `%APPDATA%` 桌面设置；与本次目录/回滚修复无关。CI 在干净矩阵中运行全量套件。
-- 定向通过：`test_repo_layout` 5/5、`test_entrypoints` 3/3、`test_migrate_layout` 3/3、`test_prompt_registry` 32/32、`test_recall_lab` 41/41、桌面后端 9/9、桌面全套 56/56、`test_ledger_recovery` 全部通过。
+- 定向通过：`test_repo_layout` 5/5、`test_entrypoints` 4/4、`test_migrate_layout` 3/3、`test_prompt_registry` 32/32、`test_recall_lab` 41/41、桌面后端 9/9、桌面全套 56/56、`test_ledger_recovery` 全部通过。
 
 ## 5. 边界
 
