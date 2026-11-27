@@ -745,6 +745,19 @@
       const costs = traceData.costs || traceData.chain?.costs;
       const tags = el('div', 'index-tags');
       if (recall.retrieval_mode) tags.append(pill(`模式: ${recall.retrieval_mode}`, 'rose'));
+      if (recall.context_signal?.mode) tags.append(pill(`情境: ${recall.context_signal.mode}`));
+      if (recall.judge?.outcome) tags.append(pill(`判官: ${recall.judge.outcome}`));
+      if (recall.degraded && typeof recall.degraded === 'object' && recall.degraded.stage) {
+        tags.append(pill(`降级: ${recall.degraded.stage}/${recall.degraded.reason || recall.degraded.error || ''}`, 'warn'));
+      }
+      if (recall.association?.mode) {
+        const assocLabel = recall.association.picked?.length
+          ? `联想(${recall.association.mode}): 命中`
+          : `联想(${recall.association.mode}): ${recall.association.reason || '未触发'}`;
+        tags.append(pill(assocLabel));
+      }
+      if (recall.lifecycle?.delivered === true) tags.append(pill('已送达', 'good'));
+      else if (recall.lifecycle?.rolled_back === true) tags.append(pill('已回滚', 'warn'));
       if (traceData.model) tags.append(pill(traceData.model));
       if (Array.isArray(costs)) {
         const settled = costs.filter(row => row && row.type === 'settle');

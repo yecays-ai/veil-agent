@@ -3962,8 +3962,14 @@ class Chat:
             return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
         finally:
             delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
-            if not delivered and self.memory is not None and getattr(self.memory, 'last_recall_marks', None):
-                self.memory.rollback_recall()
+            if self.memory is not None:
+                if delivered:
+                    confirm = getattr(self.memory, 'confirm_delivery', None)
+                    if callable(confirm):
+                        confirm(getattr(self, 'last_request_id', '') or '')
+                elif (getattr(self.memory, 'last_recall_marks', None)
+                      or getattr(self.memory, 'last_association_marks', None)):
+                    self.memory.rollback_recall()
 
     def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
         models = getattr(self.cfg, 'models', None)

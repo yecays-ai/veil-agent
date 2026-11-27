@@ -1,20 +1,18 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
+> 更新时间：2026-11-27T15:10:00+08:00 · 基线 `main` = `2a264a7`（PR #458 已合并）· 当前分支 `ticket/460-p6-s5-retrieval-judge-association`（工单 460 · P6-S5 实现、隔离实验与回归测试完成，待 PR 审核与 Lan 三路盲评验收；未合并、未部署正式目录）
 
 ## 当前停点
 
-- **本单（工单 458 · 仓库目录结构重整）**：
-  - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
-  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
-  - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
-  - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
-  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
-  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
-  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
-  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
-  - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
-- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
+- **本单（工单 460 · P6-S5 检索、判官与情境相关自然联想升级）**：
+  - **检索与候选池**：`veil/brain/recall/brain_retrieval.py` 新增默认关闭的可审计停用词表（`CHINESE_STOPWORDS`，保护日期/否定/人称/约定词，单测守卫零交集）及显式 `candidate_k`（默认 8，不放大 `vector_candidates=8`）。DeepSeek 36 样本四组对照证实 `sw_on_k8` 全指标净正收益，`K=12` 精确率下跌不默认开启。
+  - **判官与情境相关性**：新增零付费 `veil/brain/recall/context_signal.py`，`recall_judge.py` 注入受限近期对话与工作/情感分流提示，`memory.judge.prompt.md` 维持保守底盘并区分纯技术排查与工作情绪倾诉（空查询 FPR `-18.2pp`，工作 trap FPR `-33.3pp`）。
+  - **带情境约束自然联想**：`natural_association.py`、`recall_rotation.py`、`memory_agent.py` 新增独立默认关闭候选开关 `association_contextual_enabled`、按 `brain.db` 签名自动失效的有界多源候选池（长尾 `imp>=7` + 普通生活经历）、共享向量余弦相似度硬门控（`min_similarity=0.52`），唯一覆盖 `2→18` 条、工作干扰 `0`；6 组三路匿名盲评材料落盘于本机 `.local-tmp/s5/lan-blind-review-s5.md`（不入库）。
+  - **Reranker 评估与契约**：本机 `.venv` 无本地重型推理依赖，按红线保持关闭；交付 `veil/brain/recall/reranker_contract.py`（`threshold=0.25` 拦截 39.3% 空查询 + 异步 `request_id`/`topic_hash`/`db_signature`/版本/权限过期核对）。
+  - **跨轮连续性与送达/回滚契约**：修复预算淘汰联想污染冷却/连击问题；明确 `retrieved/judged/injected/delivered/effective_used` 五层生命周期，`veil_agent.send()` 送达后调 `confirm_delivery()` 通知 S6 监听钩子，失败/取消完整回滚。
+  - **配置与诊断**：通过 `config_registry.py`、`brain_p4_api.py`、`desktop/workspace-brain.js` 统一投影与展示，零平行系统。
+  - **测试与费用**：340+ 项单元/回归/布局/recall-lab 测试全绿；DeepSeek 实验累计花费 `¥2.44 / ¥10.00`；未触碰正式 Peter 与正式数据。
+  - **与 S3 并行**：S5 未触碰 S3（工单 459）独占文件；合流后需与 S3 做一次联合回归。
 
 ## 下一个窗口第一步
 

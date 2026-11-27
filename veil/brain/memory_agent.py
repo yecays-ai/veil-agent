@@ -1106,6 +1106,7 @@ class Memory:
                     if shared_vector is not None:
                         # P6-S1 G-A05: this is the judge's embedding for the same query; the budget
                         # was already reserved and settled by the judge, so no second booking here.
+                        self._turn_query_vector = shared_vector
                         text, meta = brain_retrieval_search(
                             brain_db, query, limit=asked, query_vector=shared_vector,
                             settings=settings, model=model)
@@ -1304,11 +1305,21 @@ class Memory:
         """Ticket 379: the last recall's cooldown marks are undone, because that turn delivered no reply.
 
         Ticket 419: a failed/retried turn keeps the last *successfully injected* context available,
-        so an immediate follow-up or a retry can still use it."""
+        so an immediate follow-up or a retry can still use it.
+        P6-S5: also clears pending delivery state and rolls back association marks even when
+        last_recall_marks is empty, so cancelled/failed turns never pollute cooldown or streaks.
+        """
         with self.mutex:
             marks, self.last_recall_marks = self.last_recall_marks, None
             association = getattr(self, 'last_association_marks', None)
             self.last_association_marks = None
+            self._pending_delivery = None
+            debug = getattr(self, 'last_recall_debug', None)
+            if isinstance(debug, dict):
+                lifecycle = debug.get('lifecycle')
+                if isinstance(lifecycle, dict):
+                    lifecycle['delivered'] = False
+                    lifecycle['rolled_back'] = True
             if association is not None and hasattr(self.rotation, 'restore_association'):
                 # The association never reached her (error, stop, empty answer), so its cooldown
                 # streak must not grow as if it had been shown.
@@ -1325,6 +1336,140 @@ class Memory:
                     self.rotation.last.pop(key, None)
                     self.rotation.last[key] = previous
         self._save_rotation()
+
+    def confirm_delivery(self, request_id=''):
+        """P6-S5: mark the last finish_recall() payload as actually delivered to the user.
+
+        Separates retrieved / judged / injected / delivered / effective_used (reserved for S6
+        activity reinforcement and consolidation) so budget drops, cancellations, and failures
+        never fire delivery consumers.
+        """
+        with self.mutex:
+            pending = getattr(self, '_pending_delivery', None)
+            if not isinstance(pending, dict):
+                return None
+            self._pending_delivery = None
+            event = {
+                'request_id': str(request_id or pending.get('request_id') or ''),
+                'turn': pending.get('turn', self.rotation.turn),
+                'time': self.budget.clock() if getattr(self, 'budget', None) else '',
+                'injected_ids': list(pending.get('injected_ids') or []),
+                'opening_ids': list(pending.get('opening_ids') or []),
+                'relevant_ids': list(pending.get('relevant_ids') or []),
+                'association_ids': list(pending.get('association_ids') or []),
+                'carried_ids': list(pending.get('carried_ids') or []),
+                'delivered': True,
+                'effective_used': None,
+            }
+            self.last_delivered_recall = event
+            debug = getattr(self, 'last_recall_debug', None)
+            if isinstance(debug, dict):
+                lifecycle = debug.get('lifecycle')
+                if isinstance(lifecycle, dict):
+                    lifecycle['delivered'] = True
+                    lifecycle['rolled_back'] = False
+            listeners = list(getattr(self, 'delivery_listeners', None) or [])
+        for listener in listeners:
+            try:
+                listener(dict(event))
+            except Exception:
+                pass
+        return event
+
+    def _association_pool(self, limit=32):
+        """P6-S5: bounded multi-source candidate pool for contextual natural association.
+
+        Decouples association from the 8-item opening cache: combines pinned / high-importance
+        (imp>=7) long-tail memories (ordered by longest silence) with recent & ordinary daily-life
+        memories (imp>=4), invalidated automatically whenever brain.db changes.
+        """
+        authority = getattr(self, 'brain_authority', None)
+        brain_db = (authority.db_path if authority is not None
+                    else self.store.root / self.cfg.id / 'brain.db')
+        if not brain_db.is_file():
+            return [], {'source': 'opening_fallback', 'refreshed': False, 'long_tail': 0, 'ordinary': 0}
+        try:
+            stat = brain_db.stat()
+            sig = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return [], {'source': 'unavailable', 'refreshed': False, 'long_tail': 0, 'ordinary': 0}
+        cache = getattr(self, '_assoc_pool_cache', None)
+        refreshed = False
+        if not isinstance(cache, dict) or cache.get('sig') != sig:
+            import sqlite3
+            from veil.brain.recall.brain_retrieval import HIDDEN_TYPES, VISIBLE_BUCKETS
+            rows = []
+            conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
+            try:
+                base_sql = (
+                    'SELECT id, title, body, created, importance, pinned, type '
+                    'FROM memories WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0'
+                )
+                try:
+                    raw_rows = conn.execute(
+                        base_sql + " AND id NOT IN (SELECT memory_id FROM delete_requests "
+                                   "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
+                except sqlite3.OperationalError:
+                    raw_rows = conn.execute(base_sql, VISIBLE_BUCKETS).fetchall()
+                for row in raw_rows:
+                    if (row[6] or '') in HIDDEN_TYPES:
+                        continue
+                    rows.append({
+                        'id': row[0], 'title': row[1] or '', 'body': row[2] or '',
+                        'created': row[3] or '', 'importance': int(row[4] or 5),
+                        'pinned': bool(row[5]),
+                    })
+            finally:
+                conn.close()
+            self._assoc_pool_cache = {'sig': sig, 'rows': rows}
+            refreshed = True
+        rows = list(self._assoc_pool_cache.get('rows') or [])
+        last_shown = self.rotation.last
+        high_rows = [r for r in rows if r['pinned'] or r['importance'] >= 7]
+        high_rows.sort(key=lambda r: (0 if r['pinned'] else 1,
+                                      last_shown.get(r['id'], -1),
+                                      -r['importance'], r['id']))
+        ordinary_rows = [r for r in rows if not (r['pinned'] or r['importance'] >= 7)
+                         and r['importance'] >= 4]
+        ordinary_rows.sort(key=lambda r: (last_shown.get(r['id'], -1),
+                                          -(1 if r['created'] else 0),
+                                          r['created'], r['id']))
+        # Reserve ~2/3 for long-tail imp>=7/pinned and ~1/3 for recent/ordinary daily memories.
+        high_quota = max(4, (int(limit) * 2) // 3)
+        ord_quota = max(2, int(limit) - high_quota)
+        chosen_high = high_rows[:high_quota]
+        chosen_ord = ordinary_rows[:ord_quota]
+        picked_rows = chosen_high + chosen_ord
+        if len(picked_rows) < limit:
+            seen = {r['id'] for r in picked_rows}
+            for r in high_rows[high_quota:] + ordinary_rows[ord_quota:]:
+                if r['id'] not in seen:
+                    picked_rows.append(r)
+                    seen.add(r['id'])
+                if len(picked_rows) >= limit:
+                    break
+        blocks_list = [(r['id'], f"[bucket_id:{r['id']}] {r['title']}\n{r['body']}")
+                       for r in picked_rows]
+        meta = {'source': 'bounded_multi_source', 'refreshed': refreshed,
+                'long_tail': len(chosen_high), 'ordinary': len(chosen_ord),
+                'total_visible': len(rows)}
+        return blocks_list, meta
+
+    def _association_similarities(self, query_vector, candidate_ids):
+        """Reuse BrainIndex's in-memory vectors with the turn's shared query_vector (zero extra API cost)."""
+        if not query_vector or not candidate_ids:
+            return {}
+        brain_db = self.store.root / self.cfg.id / 'brain.db'
+        if not brain_db.is_file():
+            return {}
+        from veil.brain.recall.brain_retrieval import get_index
+        settings = getattr(self, 'retrieval_settings', None) or {'weight_vector': 0.65, 'weight_keyword': 0.35}
+        model = str(((getattr(getattr(self, 'cfg', None), 'memory', None) or {}).get('model')) or '').strip()
+        try:
+            index = get_index(brain_db, settings)
+            return index.vector_similarities(query_vector, candidate_ids, model=model)
+        except Exception:
+            return {}
 
     def _save_rotation(self):
         try:
@@ -1524,6 +1669,8 @@ class Memory:
         self.last_association_marks = None
         self.last_memory_budget = None
         self._pending_recall = None
+        self._pending_delivery = None
+        self._turn_query_vector = None
         # Ticket 391: one read-only record of where each candidate went. IDs and reasons only, never text.
         self.last_recall_debug = {'query_chars': len(query or ''), 'query_hash': hashlib.sha256(
             (query or '').encode('utf-8')).hexdigest()[:12], 'ombre': [], 'hidden': [], 'vector': [],
@@ -1533,12 +1680,22 @@ class Memory:
             # Ticket 422: three separate paths plus the base that is always carried, and the reason
             # each natural-association candidate was passed over.
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
-            'association': {}, 'carried': [], 'retrieval': {}, 'degraded': ''}
+            'association': {}, 'carried': [], 'retrieval': {}, 'degraded': '',
+            # P6-S5: situational classification and explicit lifecycle separation for S6.
+            'context_signal': {}, 'lifecycle': {}}
         recall_cfg = self.recall_settings
+        ret_cfg = getattr(self, 'retrieval_settings', None) or {}
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']
         followup = bool(not (rotate or wake) and is_followup(query, recent))
+        from veil.brain.recall.context_signal import analyze as analyze_context
+        signal = analyze_context(query, recent, explicit_past=explicit, followup=followup)
+        if followup and signal.get('is_work_task') and not explicit:
+            # Topic shifted to a fresh technical task: release old followup carryover.
+            followup = False
+            signal = analyze_context(query, recent, explicit_past=explicit, followup=False)
         self.last_recall_debug['followup'] = followup
+        self.last_recall_debug['context_signal'] = signal
         widen = (rotate or wake) and recall_cfg['rotation_candidates'] > 3
         with self.mutex:
             self.rotation.turn += 1
@@ -1571,7 +1728,10 @@ class Memory:
             # Ticket 381: Ombre also returns archived memories, and its top three are cut before we look at
             # visibility, so an archived hit used up a slot and was then dropped. Ask for a few spare hits,
             # drop what Peter may not see, and only then keep the visible pool.
-            asked = recall_cfg['rotation_candidates'] if widen else 3 + SEARCH_SPARE_HITS
+            # P6-S5: explicit hybrid candidate_k controls hybrid search & judge's hybrid pool without
+            # inflating vector_candidates or rotation_candidates.
+            candidate_k = int(ret_cfg.get('candidate_k', 8) or 8)
+            asked = recall_cfg['rotation_candidates'] if widen else max(candidate_k, 3 + SEARCH_SPARE_HITS)
             raw = self.search_candidates(query, asked, prefetched=prefetched,
                                          prefetched_timeout=prefetched_timeout)
             normal = ordinary_hits(raw, limit=asked)
@@ -1594,8 +1754,17 @@ class Memory:
             try:
                 # "None fits" is an answer: nothing is filled back from Ombre. Only a technical failure
                 # (JudgeFailed) keeps today's recall for this turn.
-                normal = judge.choose(query, pool, prefetched, wake=wake,
-                                      candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
+                judge_limit = (max(3, recall_cfg['rotation_candidates']) if wake
+                               else max(int(ret_cfg.get('candidate_k', 8) or 8),
+                                        int(judge.settings.get('ombre_candidates', 8))))
+                try:
+                    normal = judge.choose(query, pool, prefetched, wake=wake,
+                                          candidate_limit=judge_limit,
+                                          recent=recent, context_signal=signal)
+                except TypeError:
+                    # Compatibility with minimal test fake judges that only accept the legacy signature.
+                    normal = judge.choose(query, pool, prefetched, wake=wake,
+                                          candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self._merge_embedding_wait(self.last_recall_debug, judge)
@@ -1754,20 +1923,37 @@ class Memory:
                 kinds[key] = 'relevant'
             elif widen:
                 kinds[key] = 'rotation'
+        pending_association_key = ''
         if not wake and not widen and not explicit and not followup:
-            # Ticket 422: weak natural association. Candidates come from Ombre's own importance-ordered
-            # list (its `breath`, already cached for this conversation) plus the random "忽然想起来"
-            # hits as a lower-priority extra; which one, or none, comes from importance, time since it
-            # last surfaced, the cooldown, the room this moment leaves and what this request already
-            # carries. No dice, and no dependence on the judge's relevance verdict.
+            # Ticket 422 + P6-S5: natural association. When association_contextual_enabled is False
+            # (default), preserves the Ticket 422 baseline over breath_blocks. When enabled, draws
+            # from a bounded multi-source pool (pinned/imp>=7 long-tail + ordinary daily memories)
+            # and gates strictly on situational context and shared-embedding similarity.
             from veil.brain.recall.natural_association import choose as choose_association
             shown = {other for other, _ in kept}
             origin = {}
             pool_rows = []
-            for key, body in breath_blocks:
-                origin.setdefault(key, 'importance')
-                pool_rows.append((key, body))
+            contextual_mode = bool(recall_cfg.get('association_contextual_enabled'))
+            pool_meta = {'source': 'opening_cache', 'refreshed': False, 'long_tail': 0, 'ordinary': 0}
+            if contextual_mode:
+                pool_rows, pool_meta = self._association_pool(
+                    limit=int(recall_cfg.get('association_pool_size', 32) or 32))
+                for key, _ in pool_rows:
+                    origin.setdefault(key, 'multi_source')
+                if not pool_rows and breath_blocks:
+                    pool_meta['source'] = 'opening_fallback'
+                    for key, body in breath_blocks:
+                        origin.setdefault(key, 'importance')
+                        pool_rows.append((key, body))
+            else:
+                for key, body in breath_blocks:
+                    origin.setdefault(key, 'importance')
+                    pool_rows.append((key, body))
             visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
+            # Ensure metadata is loaded for all multi-source candidates before scoring.
+            missing_meta = [key for key, _ in visible_pool if key not in metas]
+            if missing_meta:
+                metas.update(self._recall_meta(missing_meta))
             considered = []
             association_dropped = []
             for key, body in visible_pool:
@@ -1779,16 +1965,34 @@ class Memory:
                     association_dropped.append({'id': key, 'reason': 'same_event'})
                 else:
                     considered.append((key, body))
+            similarities = None
+            if contextual_mode and considered:
+                qvec = getattr(self, '_turn_query_vector', None)
+                if qvec is None and prefetched is not None:
+                    try:
+                        qvec = prefetched.result(timeout=0.05)
+                    except Exception:
+                        qvec = None
+                if qvec is not None:
+                    similarities = self._association_similarities(qvec, [key for key, _ in considered])
             previous = (self.rotation.previous_association()
                         if hasattr(self.rotation, 'previous_association') else None)
             choice = choose_association(query, considered, metas, self.rotation.last,
-                                       self.rotation.turn, shown, recall_cfg, origin=origin,
-                                       previous=previous)
+                                        self.rotation.turn, shown, recall_cfg, origin=origin,
+                                        previous=previous, similarities=similarities,
+                                        recent=recent, context_signal=signal)
             association_dropped.extend(choice['dropped'])
             listed = association_dropped[:40]
             self.last_recall_debug['association'] = {
+                'mode': choice.get('mode', 'legacy'),
+                'pool_source': pool_meta.get('source', 'opening_cache'),
+                'pool_refreshed': bool(pool_meta.get('refreshed')),
+                'context_mode': choice.get('context_mode') or signal.get('mode', ''),
+                'similarity': choice.get('similarity'),
                 'candidates': len(visible_pool),
-                'from_importance': len({key for key, _ in breath_blocks}),
+                'from_importance': (pool_meta.get('long_tail', 0) if contextual_mode
+                                    else len({key for key, _ in breath_blocks})),
+                'from_ordinary': pool_meta.get('ordinary', 0) if contextual_mode else 0,
                 'from_drift': 0,   # P6-S1: the dead random-drift branch was removed
                 'picked': [choice['key']] if choice['key'] else [],
                 'dropped': listed,
@@ -1800,14 +2004,9 @@ class Memory:
                              prompts.text('memory.association.label') + '\n' + choice['body']))
                 sources[choice['key']] = 'association'
                 kinds[choice['key']] = 'association'
-                if hasattr(self.rotation, 'mark_association'):
-                    with self.mutex:
-                        # Keep what it was, so a turn that delivers nothing can take the streak back.
-                        self.last_association_marks = (
-                            self.rotation.previous_association()
-                            if hasattr(self.rotation, 'previous_association') else None)
-                        self.rotation.mark_association(choice['key'], self.rotation.turn)
-                    self._save_rotation()
+                # P6-S5: defer rotation.mark_association() to finish_recall() so a budget-dropped
+                # association never pollutes cooldown or streak state.
+                pending_association_key = choice['key']
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
@@ -1880,7 +2079,8 @@ class Memory:
                                'source': 'opening', 'event_id': event_id, 'pointer': pointer_text,
                                'kind': 'opening'})
         self.last_recall_debug['reused'] = []   # ticket 419 review: no prefix-only reuse claims
-        self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening}
+        self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening,
+                                'association_key': pending_association_key}
         if defer:
             return []
         return self.finish_recall()
@@ -2004,10 +2204,27 @@ class Memory:
                                    for item in opening_items + recall_items}
         self.last_injected_refs = [item['id'] for item in recall_items]
         self.mark_surfaced(self.last_context_refs)
+        injected_assoc = [item['id'] for item in recall_items if item.get('kind') == 'association']
+        pending_assoc_key = pending.get('association_key') or ''
         with self.mutex:
             # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
             self.last_recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
             self.rotation.mark(self.last_context_refs)
+            # P6-S5: commit association streak only when the association actually survived budget fitting.
+            if pending_assoc_key and pending_assoc_key in injected_assoc and hasattr(self.rotation, 'mark_association'):
+                self.last_association_marks = (
+                    self.rotation.previous_association()
+                    if hasattr(self.rotation, 'previous_association') else None)
+                self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
+            self._pending_delivery = {
+                'turn': self.rotation.turn,
+                'injected_ids': [item['id'] for item in recall_items],
+                'opening_ids': [item['id'] for item in opening_items],
+                'relevant_ids': [item['id'] for item in recall_items
+                                 if item.get('kind') in ('search', 'context', 'relevant', 'rotation')],
+                'association_ids': list(injected_assoc),
+                'carried_ids': [item['id'] for item in recall_items if item.get('source') == 'followup'],
+            }
         self._save_rotation()
         if dropped:
             self.last_recall_skipped['budget'] = len(dropped)
@@ -2029,6 +2246,14 @@ class Memory:
                                         if item.get('kind') == 'association']
         debug['carried'] = [item['id'] for item in recall_items
                             if item.get('source') == 'followup']
+        debug['lifecycle'] = {
+            'retrieved': list(debug.get('ombre') or []),
+            'judged': list((debug.get('judge') or {}).get('picked') or []),
+            'injected': [item['id'] for item in recall_items],
+            'delivered': False,
+            'rolled_back': False,
+            'effective_used': None,
+        }
         debug['budget'] = {**plan, 'memory_allowance': memory_allowance,
                            'memory_used': memory_used, 'history_allowance': history_allowance,
                            'auxiliary_allowance': auxiliary_allowance}

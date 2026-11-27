@@ -485,6 +485,22 @@ def overview(hub):
         latest_health = load_latest_report(data_root, cfg.id)
         snapshots = load_snapshots(data_root, cfg.id, limit=14)
 
+    recall_config = None
+    if cfg is not None:
+        try:
+            from veil.core.config_registry import recall_config_overview
+            mem = getattr(chat, 'memory', None)
+            recall_config = recall_config_overview(
+                role_id=cfg.id,
+                memory_cfg=getattr(cfg, 'memory', None),
+                retrieval_runtime=getattr(mem, 'retrieval_settings', None),
+                recall_runtime=getattr(mem, 'recall_settings', None),
+                judge_enabled=judge.enabled() if judge is not None else None,
+                judge_timeout=judge.settings.get('timeout_seconds') if judge is not None else None,
+            )
+        except Exception:
+            recall_config = None
+
     return {
         'schema_version': 1,
         'source': 'brain.db',
@@ -494,6 +510,7 @@ def overview(hub):
         'activities': activities,
         'experience': exp_status,
         'recall_judge': judge_status,
+        'recall_config': recall_config,
         'health_summary': latest_health.get('summary') if latest_health else None,
         'health_scanned_at': latest_health.get('scanned_at') if latest_health else None,
         'health_snapshots': snapshots,

@@ -21,7 +21,16 @@ No model call is made here. It is arithmetic over candidates the normal recall a
 """
 import re
 
-DEFAULTS = {'enabled': True, 'min_importance': 4, 'cooldown_turns': 8, 'light_chars': 40}
+DEFAULTS = {
+    'enabled': True,
+    'min_importance': 4,
+    'cooldown_turns': 8,
+    'light_chars': 40,
+    # P6-S5: independent candidate switch for context-aware natural association (default off).
+    'contextual_enabled': False,
+    'min_similarity': 0.52,
+    'pool_size': 32,
+}
 # Name at most this many passed-over candidates in diagnostics; the rest are counted only, so a big
 # candidate pool cannot make every request record a thousand reasons.
 DROP_LIST_LIMIT = 40
@@ -57,6 +66,14 @@ def settings(recall_cfg):
     value = raw.get('association_light_chars')
     if type(value) is int and 8 <= value <= 400:
         result['light_chars'] = value
+    if type(raw.get('association_contextual_enabled')) is bool:
+        result['contextual_enabled'] = raw['association_contextual_enabled']
+    sim = raw.get('association_min_similarity')
+    if type(sim) in (int, float) and 0.05 <= float(sim) <= 0.95:
+        result['min_similarity'] = float(sim)
+    pool_size = raw.get('association_pool_size')
+    if type(pool_size) is int and 8 <= pool_size <= 128:
+        result['pool_size'] = pool_size
     return result
 
 
@@ -78,18 +95,20 @@ def _importance(item, metas_key):
 
 
 def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None, origin=None,
-           previous=None):
-    """Pick at most one weak association.
+           previous=None, *, similarities=None, recent=None, context_signal=None):
+    """Pick at most one natural association.
 
-    ``candidates`` are (memory_id, body) pairs from a finite pool: Ombre's importance-ordered list
-    and/or its random "忽然想起来" hits; ``metas`` is the per-id metadata already read for this turn;
-    ``last_shown`` maps id -> turn it was last shown; ``already`` is the set of ids this request
-    already carries; ``origin`` says where each candidate came from ('importance' or 'drift'), so a
-    random hit cannot win merely because it happened to be the only one. Returns
-    ``{'key', 'body', 'score'}`` (key/body empty when nothing fits) and every candidate's reason.
+    When ``association_contextual_enabled`` is False (default), runs the deterministic Ticket 422
+    baseline unchanged. When enabled, uses situational gating (suppressing pure work/error tasks
+    and bare acknowledgements while allowing work-induced emotional sharing) plus a mandatory
+    semantic similarity threshold over the shared turn embedding — importance and silence rank
+    eligible candidates but can NEVER bypass the similarity gate.
     """
     options = settings(recall_cfg)
-    result = {'key': '', 'body': '', 'score': 0, 'dropped': [], 'reason': ''}
+    contextual = bool(options.get('contextual_enabled'))
+    result = {'key': '', 'body': '', 'score': 0, 'dropped': [], 'reason': '',
+              'mode': 'contextual' if contextual else 'legacy', 'similarity': None,
+              'context_mode': ''}
 
     def drop(result, key, reason):
         # Only what a diagnostic page can read; the count of passed-over candidates stays exact.
@@ -110,24 +129,48 @@ def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None,
     if not candidates:
         result['reason'] = 'no_candidates'
         return finish(result)
-    if not light_chat(query, light_chars=options['light_chars']):
-        result['reason'] = 'mood'
-        for key, _ in candidates:
-            drop(result, key, 'mood')
-        return finish(result)
+
+    if contextual:
+        from veil.brain.recall.context_signal import analyze as analyze_context
+        signal = context_signal if isinstance(context_signal, dict) else analyze_context(query, recent)
+        result['context_mode'] = signal.get('mode') or ''
+        if not signal.get('allow_association'):
+            gate_reason = ('work_task_suppressed' if signal.get('is_work_task')
+                           else 'low_context_signal')
+            result['reason'] = gate_reason
+            for key, _ in candidates:
+                drop(result, key, gate_reason)
+            return finish(result)
+        sim_map = similarities if isinstance(similarities, dict) else None
+        if not sim_map:
+            # Never fall back to blind rotation without semantic similarity.
+            result['reason'] = 'no_similarity_signal'
+            for key, _ in candidates:
+                drop(result, key, 'no_similarity_signal')
+            return finish(result)
+    else:
+        if not light_chat(query, light_chars=options['light_chars']):
+            result['reason'] = 'mood'
+            for key, _ in candidates:
+                drop(result, key, 'mood')
+            return finish(result)
+        sim_map = None
+
     turn = turn if type(turn) is int else 0
     already = already if isinstance(already, (set, frozenset, list, tuple)) else ()
     already = set(already)
+    min_sim = float(options.get('min_similarity', 0.34))
     scored = []
     for key, body in candidates:
         if key in already:
             drop(result, key, 'already_in_context')
             continue
-        importance = _importance(key, metas.get(key) if isinstance(metas, dict) else None)
-        if importance < options['min_importance']:
+        meta = metas.get(key) if isinstance(metas, dict) else None
+        importance = _importance(key, meta)
+        if not contextual and importance < options['min_importance']:
             drop(result, key, 'not_meaningful')
             continue
-        if _NOT_LIGHT.search(str(body or '')[:600]):
+        if not contextual and _NOT_LIGHT.search(str(body or '')[:600]):
             drop(result, key, 'work_topic')
             continue
         last = last_shown.get(key) if isinstance(last_shown, dict) else None
@@ -140,19 +183,36 @@ def choose(query, candidates, metas, last_shown, turn, already, recall_cfg=None,
             drop(result, key, 'association_cooldown')
             continue
         silence = 50 if type(last) is not int else min(max(0, turn - last), 50)
-        weight = importance * 10 + silence
-        # A memory that came up by Ombre's random draw may still surface, but only if it is clearly
-        # strong on its own terms: the importance-ordered pool wins ties against a lucky hit.
-        if isinstance(origin, dict) and origin.get(key) == 'drift':
-            weight -= DRIFT_PENALTY
-        scored.append((weight, key, body))
+        if contextual:
+            sim = sim_map.get(key)
+            if sim is None:
+                drop(result, key, 'no_vector')
+                continue
+            sim = float(sim)
+            if sim < min_sim:
+                drop(result, key, 'low_similarity')
+                continue
+            pinned = str((meta or {}).get('pinned', '')).lower() == 'true'
+            # Semantic similarity is the primary driver; importance & silence protect long-tail
+            # memories without drowning out highly relevant ordinary daily experiences.
+            weight = round(sim * 100.0 + importance * 1.2 + min(silence, 40) * 0.25
+                           + (3.0 if pinned else 0.0), 4)
+            scored.append((weight, sim, key, body))
+        else:
+            weight = importance * 10 + silence
+            # A memory that came up by Ombre's random draw may still surface, but only if it is clearly
+            # strong on its own terms: the importance-ordered pool wins ties against a lucky hit.
+            if isinstance(origin, dict) and origin.get(key) == 'drift':
+                weight -= DRIFT_PENALTY
+            scored.append((weight, None, key, body))
     if not scored:
-        result['reason'] = 'nothing_suitable'
+        result['reason'] = 'low_relevance' if contextual else 'nothing_suitable'
         return finish(result)
     # Deterministic: strongest score wins; a tie falls back to the id so a restart cannot reshuffle it.
-    scored.sort(key=lambda row: (-row[0], row[1]))
-    score, key, body = scored[0]
-    for _, other, _ in scored[1:]:
+    scored.sort(key=lambda row: (-row[0], row[2]))
+    score, sim, key, body = scored[0]
+    for _, _, other, _ in scored[1:]:
         drop(result, other, 'lower_score')
-    result.update({'key': key, 'body': body, 'score': score})
+    result.update({'key': key, 'body': body, 'score': score,
+                   'similarity': round(sim, 4) if sim is not None else None})
     return finish(result)
