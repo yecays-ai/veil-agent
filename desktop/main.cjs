@@ -481,7 +481,13 @@ function allowedChatRequest(pathname, method) {
     if (url.pathname === '/api/memory/event') {
       return keys.length === 1 && keys[0] === 'id' && /^[A-Za-z0-9_-]{1,80}$/.test(url.searchParams.get('id') || '');
     }
-    if (url.pathname === '/api/memory/panel' || url.pathname === '/api/config/overview' || url.pathname === '/api/config/inventory' || url.pathname === '/api/budget/summary' || url.pathname === '/api/brain/overview' || url.pathname === '/api/peter-page/versions') return keys.length === 0;
+    if (url.pathname === '/api/memory/panel' || url.pathname === '/api/config/overview' || url.pathname === '/api/config/inventory' || url.pathname === '/api/budget/summary' || url.pathname === '/api/brain/overview' || url.pathname === '/api/brain/memory-weights' || url.pathname === '/api/peter-page/versions') return keys.length === 0;
+    if (url.pathname === '/api/brain/consolidation') {
+      return keys.every(key => key === 'limit') && (url.searchParams.get('limit') === null || /^\d{1,2}$/.test(url.searchParams.get('limit') || ''));
+    }
+    if (url.pathname === '/api/brain/memory-proposals') {
+      return keys.every(key => ['memory_id', 'status', 'limit'].includes(key));
+    }
     if (url.pathname === '/api/memory/library') {
       const allowedKeys = new Set(['q', 'status', 'kind', 'source', 'sort', 'limit', 'offset']);
       return keys.every(key => allowedKeys.has(key)) &&
@@ -564,6 +570,8 @@ function allowedChatRequest(pathname, method) {
     '/api/message/action', ...MEMORY_POSTS, '/api/models', '/api/models/use', '/api/stop',
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
     '/api/brain/health/scan', '/api/brain/health/settings', '/api/brain/layer-toggle',
+    '/api/brain/memory-weights', '/api/brain/memory-proposal', '/api/brain/memory-reevaluate',
+    '/api/brain/consolidation/settings', '/api/brain/consolidation/run', '/api/brain/consolidation/experience',
     '/api/voice-style', '/api/peter-page', '/api/pending-approvals', '/api/instructions'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
@@ -572,13 +580,13 @@ ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {
     (detachedView === 'activity' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/pending-approvals')) || (body && ['/api/activity', '/api/glance', '/api/codex-watch', '/api/quiet-hours', '/api/pending-approvals'].includes(pathname)))) ||
     (detachedView === 'context' && !body && pathname?.startsWith('/api/events?')) ||
     (detachedView === 'mcp' && ((!body && pathname?.startsWith('/api/events?')) || pathname === '/api/mcp' || (!body && pathname === '/api/mcp?retry=1'))) ||
-    (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/') || pathname === '/api/brain/overview')) ||
-      (body && MEMORY_POSTS.includes(pathname)))) ||
+    (detachedView === 'memory' && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/memory/') || pathname === '/api/brain/overview' || pathname?.startsWith('/api/brain/memory-'))) ||
+      (body && (MEMORY_POSTS.includes(pathname) || pathname?.startsWith('/api/brain/memory-'))))) ||
     (detachedView === 'life' && ((!body && (pathname?.startsWith('/api/events?') || pathname === '/api/life')) || (body && pathname === '/api/life'))) ||
-    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || ['/api/config/overview', '/api/config/inventory', '/api/budget/summary', '/api/workbench', '/api/windows-apps'].includes(pathname))) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps'].includes(pathname)))) ||
+    (detachedView === 'more' && ((!body && (pathname?.startsWith('/api/events?') || ['/api/config/overview', '/api/config/inventory', '/api/budget/summary', '/api/workbench', '/api/windows-apps'].includes(pathname))) || (body && ['/api/exit', '/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps', '/api/brain/consolidation/settings'].includes(pathname)))) ||
     (detachedView === 'peter' && (pathname === '/api/peter-page' || pathname === '/api/peter-page/versions' || (!body && pathname?.startsWith('/api/events?')))) ||
-    (['brain-home', 'brain-health', 'brain-recall', 'brain-cognition', 'workspace-events'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/brain/') || pathname?.startsWith('/api/memory/') || pathname?.startsWith('/api/diagnostics/') || pathname?.startsWith('/api/request-snapshot') || pathname?.startsWith('/api/peter-page'))) || (body && (MEMORY_POSTS.includes(pathname) || pathname === '/api/peter-page' || pathname?.startsWith('/api/brain/health/'))))) ||
-    (['workspace-home', 'workspace-budget', 'workspace-access', 'workspace-inventory', 'workspace-work', 'diagnostics', 'instructions'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/config/') || pathname === '/api/budget/summary' || pathname === '/api/workbench' || pathname === '/api/windows-apps' || pathname === '/api/mcp' || pathname === '/api/pending-approvals' || pathname?.startsWith('/api/diagnostics/') || pathname === '/api/instructions' || pathname?.startsWith('/api/request-snapshot'))) || (body && ['/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps', '/api/mcp', '/api/pending-approvals', '/api/instructions'].includes(pathname))));
+    (['brain-home', 'brain-health', 'brain-recall', 'brain-cognition', 'workspace-events'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/brain/') || pathname?.startsWith('/api/memory/') || pathname?.startsWith('/api/diagnostics/') || pathname?.startsWith('/api/request-snapshot') || pathname?.startsWith('/api/peter-page'))) || (body && (MEMORY_POSTS.includes(pathname) || pathname === '/api/peter-page' || pathname?.startsWith('/api/brain/'))))) ||
+    (['workspace-home', 'workspace-budget', 'workspace-access', 'workspace-inventory', 'workspace-work', 'diagnostics', 'instructions'].includes(detachedView) && ((!body && (pathname?.startsWith('/api/events?') || pathname?.startsWith('/api/config/') || pathname === '/api/budget/summary' || pathname === '/api/workbench' || pathname === '/api/windows-apps' || pathname === '/api/mcp' || pathname === '/api/pending-approvals' || pathname?.startsWith('/api/diagnostics/') || pathname === '/api/instructions' || pathname?.startsWith('/api/request-snapshot'))) || (body && ['/api/models', '/api/models/use', '/api/workbench', '/api/windows-apps', '/api/mcp', '/api/pending-approvals', '/api/instructions', '/api/brain/consolidation/settings'].includes(pathname))));
   if (!fromChatPage(event) || typeof pathname !== 'string' || !allowedChatRequest(pathname, body ? 'POST' : 'GET') || !detachedAllowed)
     return { ok: false, status: 403, data: { error: '请求未允许。' } };
   if (body && (typeof body !== 'object' || Array.isArray(body)))

@@ -197,6 +197,68 @@ def reevaluate_memory(hub, memory_id):
     return weights.reevaluate(str(memory_id or ''), trigger='manual', force=True)
 
 
+def _consolidator_for(hub):
+    """The live CognitiveConsolidator, or one built from the role store when absent."""
+    chat = getattr(hub, 'chat', None)
+    live = getattr(chat, 'consolidation', None)
+    if live is not None:
+        return live
+    cfg = getattr(chat, 'cfg', None)
+    store = getattr(chat, 'store', None)
+    if cfg is None or store is None:
+        return None
+    try:
+        from veil.brain.cognitive_consolidation import CognitiveConsolidator
+        return CognitiveConsolidator(
+            cfg, store, getattr(chat, 'budget', None), None,
+            memory=getattr(chat, 'memory', None), profile=getattr(chat, 'profile', None),
+        )
+    except Exception:
+        return None
+
+
+def consolidation_status(hub, *, runs_limit=12):
+    cons = _consolidator_for(hub)
+    if cons is None:
+        return {'available': False, 'error': '认知巩固模块未就绪'}
+    try:
+        return cons.status(runs_limit=runs_limit)
+    except Exception as exc:
+        return {'available': False, 'error': type(exc).__name__}
+
+
+def set_consolidation_settings(hub, values):
+    cons = _consolidator_for(hub)
+    if cons is None:
+        return {'ok': False, 'error': '认知巩固模块未就绪', 'status_code': 503}
+    try:
+        result = cons.update_settings(values if isinstance(values, dict) else {})
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
+    return {**result, 'status': cons.status()}
+
+
+def run_consolidation(hub, *, force=False):
+    cons = _consolidator_for(hub)
+    if cons is None:
+        return {'ok': False, 'error': '认知巩固模块未就绪', 'status_code': 503}
+    try:
+        result = cons.run_once(trigger='manual', force=bool(force))
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
+    return {**result, 'consolidation': cons.status()}
+
+
+def decide_consolidation_experience(hub, candidate_id, action, note=''):
+    cons = _consolidator_for(hub)
+    if cons is None:
+        return {'ok': False, 'error': '认知巩固模块未就绪', 'status_code': 503}
+    try:
+        return cons.decide_experience_candidate(candidate_id, action, note=note)
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
+
+
 def compute_line_diff(old_text, new_text):
     old_lines = (old_text or '').splitlines()
     new_lines = (new_text or '').splitlines()
@@ -928,6 +990,21 @@ def overview(hub):
         except Exception:
             recall_config = None
 
+    cons_summary = None
+    try:
+        cs = consolidation_status(hub, runs_limit=3)
+        if isinstance(cs, dict) and cs.get('available'):
+            cons_summary = {
+                'available': True,
+                'enabled': bool((cs.get('settings') or {}).get('enabled', False)),
+                'effective': cs.get('effective') or {},
+                'budget': cs.get('budget') or {},
+                'totals': cs.get('totals') or {},
+                'p7_interface': cs.get('p7_interface') or {},
+            }
+    except Exception:
+        cons_summary = None
+
     return {
         'schema_version': 1,
         'source': 'brain.db',
@@ -939,6 +1016,7 @@ def overview(hub):
         'recall_judge': judge_status,
         'recall_association': assoc_status,
         'recall_config': recall_config,
+        'consolidation': cons_summary,
         'health_summary': latest_health.get('summary') if latest_health else None,
         'health_scanned_at': latest_health.get('scanned_at') if latest_health else None,
         'health_snapshots': snapshots,

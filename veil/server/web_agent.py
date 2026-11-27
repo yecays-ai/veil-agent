@@ -2483,7 +2483,8 @@ def make_handler(hub, token):
                     categories = []
                     caps = {'autonomy': budget.autonomy_daily, 'glance': budget.glance_daily}
                     for key in ('autonomy', 'glance', 'short_term_notes', 'delegate',
-                                'experience_memory', 'recall_judge', 'calendar_agreements'):
+                                'experience_memory', 'recall_judge', 'calendar_agreements',
+                                'cognitive_consolidation'):
                         used, reserved = budget.category_totals(stamp=stamp, category=key)
                         categories.append({'id': key, 'spent_cny': str(used), 'pending_cny': str(reserved),
                                            'limit_cny': str(caps[key]) if key in caps else None})
@@ -2506,6 +2507,33 @@ def make_handler(hub, token):
                         semantic['verification'] = summary()
                     except (UserError, OSError, UnicodeError):
                         pass  # Unknown, not a fabricated zero.
+            consolidation_budget = None
+            try:
+                from veil.brain.brain_p4_api import consolidation_status
+                cs = consolidation_status(hub, runs_limit=1)
+                if isinstance(cs, dict) and cs.get('available'):
+                    cs_cfg = cs.get('settings') or {}
+                    cs_b = cs.get('budget') or {}
+                    cs_eff = cs.get('effective') or {}
+                    cs_tot = cs.get('totals') or {}
+                    consolidation_budget = {
+                        'enabled': bool(cs_cfg.get('enabled', False)),
+                        'daily_cap_cny': str(cs_b.get('daily_cap_cny', cs_cfg.get('daily_budget_cny', '0.05'))),
+                        'spent_cny': str(cs_b.get('spent_cny', '0')),
+                        'pending_cny': str(cs_b.get('pending_cny', '0')),
+                        'remaining_cny': str(cs_b.get('remaining_cny', '0')),
+                        'interval_hours': int(cs_cfg.get('interval_hours', 24)),
+                        'max_runs_per_day': int(cs_cfg.get('max_runs_per_day', 2)),
+                        'timeout_seconds': int(cs_cfg.get('timeout_seconds', 25)),
+                        'runs_today': int(cs_eff.get('runs_today', 0)),
+                        'status_text': str(cs_eff.get('status_text', '')),
+                        'effective_code': str(cs_eff.get('code', '')),
+                        'cognition_written': int(cs_tot.get('cognition_written', 0)),
+                        'cognition_revised': int(cs_tot.get('cognition_revised', 0)),
+                        'importance_proposed': int(cs_tot.get('importance_proposed', 0)),
+                    }
+            except Exception:
+                consolidation_budget = None
             self._send(200, {
                 'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
                 # limit_cny is the effective cap (base + today's approved raise); the form must
@@ -2518,6 +2546,7 @@ def make_handler(hub, token):
                             'remaining_cny': str(monthly_cap - month - pending)},
                 'pending_cny': str(pending), 'ledger_unverified': unverified,
                 'categories': categories, 'model_summary': models, 'relationship_semantic': semantic,
+                'cognitive_consolidation': consolidation_budget,
             })
 
         def _health_context(self):
@@ -2730,6 +2759,16 @@ def make_handler(hub, token):
                     return
                 from veil.brain.brain_p4_api import memory_weights_status
                 self._send(200, memory_weights_status(hub))
+            elif url.path == '/api/brain/consolidation':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import consolidation_status
+                try:
+                    runs_limit = max(1, min(50, int((query.get('limit') or ['12'])[0] or 12)))
+                except ValueError:
+                    self._send(400, {'error': 'limit 必须为整数。'})
+                    return
+                self._send(200, consolidation_status(hub, runs_limit=runs_limit))
             elif url.path == '/api/brain/memory-proposals':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -3900,6 +3939,31 @@ def make_handler(hub, token):
                     self._send(400, {'error': '缺少记忆 ID。'})
                     return
                 res = reevaluate_memory(hub, memory_id)
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/brain/consolidation/settings':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import set_consolidation_settings
+                values = body.get('values') if isinstance(body.get('values'), dict) else body
+                res = set_consolidation_settings(hub, values)
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/brain/consolidation/run':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import run_consolidation
+                res = run_consolidation(hub, force=bool(body.get('force')))
+                code = 200 if res.get('ok') or res.get('status') in ('skipped', 'budget_exhausted') else int(res.get('status_code') or 500)
+                self._send(code, res)
+            elif url.path == '/api/brain/consolidation/experience':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import decide_consolidation_experience
+                res = decide_consolidation_experience(
+                    hub, str(body.get('id') or body.get('candidate_id') or ''),
+                    str(body.get('action') or ''), note=str(body.get('note') or ''),
+                )
                 code = 200 if res.get('ok') else int(res.get('status_code') or 400)
                 self._send(code, res)
             elif url.path == '/api/pending-approvals':

@@ -1,11 +1,11 @@
 # 当前状态
 
-> 更新：2026-11-28 +08:00 · `main = 81dba35`（PR #461 / S5、PR #462 / 工单 461、PR #463 / S6-2 均已合并）· 工单 462（P6-S6-1 记忆动态评价、强化与保护性衰减）在 PR #464 / `ticket/462-p6-s6-1-memory-reinforcement`（已合流含 S6-2 的 `main`），开发、回归与 VEIL Lab 真实链路验证完成，**待独立审核、CI 与 Lan 体验；未合并、未部署**。
+> 更新：2026-11-28 +08:00 · `main = 90846bd`（PR #461 / S5、PR #462 / 工单 461、PR #463 / S6-2、PR #464 / S6-1 均已合并）· **工单 464（P6-S6-3 后台认知巩固与经验提炼）**在 `ticket/464-p6-s6-3-cognitive-consolidation`（默认关闭供灰度体验），开发、回归与 VEIL Lab 完整生产快照隔离验证完成，**待提交 PR、独立审核、CI 与 Lan 体验；未合并、未部署**。
 > **待你验收的事项与唯一验收状态统一在 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。** 本文只写进度，不另存验收状态。
 
 ## 一句话现状
 
-P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档归集（#457）、仓库目录重整（#458）、P6-S5（工单 460 / PR #461）、P5 巡检/S6 门禁（工单 461 / PR #462，`ead71b6`）与 **S6-2 自主闲暇自然联想（工单 463 / PR #463，`81dba35`，默认关闭）**均已合入 `main`。**工单 462 / P6-S6-1（本单，PR #464）** 开始 S6-1 功能：只在实际送达后激活 `last_active` 与强化计数，建立与活跃度独立的、带证据与版本的长期重要度重评，并实现只作用于 `importance<=6` 且未置顶记忆的保护性活跃度衰减；活跃度排序保持默认关闭。S5 延期的一条“隐式工作 trap 穿透 + 同轮判官联合门控”仍未关闭，但本单的送达记账不依赖它，未算作已关闭。
+P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档归集（#457）、仓库目录重整（#458）、P6-S5（工单 460 / PR #461）、P5 巡检/S6 门禁（工单 461 / PR #462，`ead71b6`）、S6-2 自主闲暇自然联想（工单 463 / PR #463，`81dba35`，默认关闭）与 **S6-1 记忆动态评价、强化与保护性衰减（工单 462 / PR #464，`90846bd`）**均已合入 `main`。**工单 464 / P6-S6-3（本单）**实现后台认知巩固与经验提炼：定期增量综合新旧经历、S6-2 审计后自主活动与既有认知，复用 S3 证据治理/版本链/主权拦截与 S6-1 `MemoryWeights.propose()`，并预留 P7 情境经验统一接口（不注入 `HEAD`），接入 Brain 与费用管理界面，默认关闭。S5 延期的一条“隐式工作 trap 穿透 + 同轮判官联合门控”仍未关闭，未算作已关闭。
 
 ## 近期工单真实状态
 
@@ -13,7 +13,8 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 
 | 工单 | PR | 合并提交 | 合并时间（UTC） | 部署 | 验收入口（以 ACCEPTANCE 为准） |
 | --- | --- | --- | --- | --- | --- |
-| 462 · P6-S6-1 记忆动态评价、强化与保护性衰减 | #464 | — | — | 未部署 | [`3 B-12](docs/ACCEPTANCE.md#b-12-p6-s6-1-记忆动态评价强化与保护性衰减工单-462--pr-464) |
+| 464 · P6-S6-3 后台认知巩固与经验提炼 | 待创建 PR | — | — | 未部署 | [§3 B-13](docs/ACCEPTANCE.md#b-13-p6-s6-3-后台认知巩固与经验提炼工单-464) |
+| 462 · P6-S6-1 记忆动态评价、强化与保护性衰减 | #464 | `90846bd` | 2026-11-27 23:15 UTC | 未部署 | [§3 B-12](docs/ACCEPTANCE.md#b-12-p6-s6-1-记忆动态评价强化与保护性衰减工单-462--pr-464) |
 | 463 · P6-S6-2 自主闲暇自然联想 | #463 | `81dba35` | 2026-11-27 17:05 UTC | 未部署 | [§3 B-11](docs/ACCEPTANCE.md#b-11-自主闲暇自然联想p6-s6-2--工单-463) |
 | 461 · P5 健康巡检补齐 + S6 开工门禁 | #462 | `ead71b6` | 2026-11-27 15:38 UTC | 未部署 | [§3 B-9 / B-10](docs/ACCEPTANCE.md#b-9-p5-健康巡检补齐工单-461) |
 | 460 · P6-S5 检索、判官与情境相关自然联想升级 | #461 | `504c0a7` | 2026-11-27 12:59 UTC | 未部署 | [§3 B-8](docs/ACCEPTANCE.md#b-8-检索判官与情境相关自然联想升级工单-460--pr-461) |
@@ -38,7 +39,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 ## 当前开发阶段
 
 - 产品阶段：A 陪伴核心（记忆注入与精修）施工中；B 的权限底座已具备；C1 手机、V 语音未进入正式施工。
-- 工程阶段：P6 记忆与检索精修。P6-S0/S1/S2/S3/S4/S5、S6 五项工程门禁与 **S6-2（工单 463 / PR #463，`81dba35`，默认关闭）**已合入 `main`；**S6-1（本单，工单 462 / PR #464）已完成开发与隔离验证，待审核/CI/体验**。S5 延期的一条隐式工作 `trap` 联合门控仍未关闭；S6-3 认知巩固与 S7 尚未开工，按 C-2 方向另行开单。
+- 工程阶段：P6 记忆与检索精修。P6-S0/S1/S2/S3/S4/S5、S6 五项工程门禁、S6-2（工单 463 / PR #463，`81dba35`，默认关闭）与 **S6-1（工单 462 / PR #464，`90846bd`）**均已合入 `main`；**S6-3（本单，工单 464，默认关闭）已完成开发与隔离验证，待审核/CI/体验**。S5 延期的一条隐式工作 `trap` 联合门控仍未关闭；P7 行为层与 S7 尚未开工。
 - 正式底座：`main`，本机正式目录跟随 `main`，用 `update-main.cmd` 一键更新；本单未启停正式 Peter、未写正式记忆、未部署。
 
 ## 更早（工单 460 · PR #461 · P6-S5）已合并
@@ -68,16 +69,21 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 - 跨语言否决：无共同文字锚点的翻译候选经受预算约束的语义核验；真实模型实验中翻译候选 `contradicted` 不注入，无关正例 `supported` 并注入；Lan 显式恢复旧认知有确定性测试。
 - 幂等：facts/growth 追加与修订、relationship 追加与修订、ongoing 新增/更新/完成/重开使用持久化回执；丢响应、并发重试、进程重启后同操作只落一次，返回原结果与原 ID，不额外写版本；Lan 删除/完成后旧回执不再伪装成功。
 
-## 本单（工单 462 · PR #464 · P6-S6-1）做了什么
+## 上一单（工单 462 · PR #464 · P6-S6-1）已合并
 
-- **送达记账（只在实际送达后）**：`veil/brain/memory_weights.py` 新增 `memory_delivery_events`（`request_id|memory_id` 幂等键）与 `memory_activation` 聚合；`Memory.confirm_delivery(request_id, session_key, regenerated)` 在 S5 确认送达后调用；失败/取消/回滚不写；重生成只更新最近活跃、不增加强化计数；并发、重启、重复确认均只记一次。`veil/core/veil_agent.py` 只增加会话键与重生成参数。
-- **保护性衰减**：`effective_score()` 只对 `importance<=6` 且未置顶的活跃度投影按半衰期衰减；`importance>=7`/`pinned` 永不衰减；衰减不改重要度、不删除、不隐藏，`last_active` 保持最后真实送达时间。
-- **长期重要度重评**：`memory_importance_proposals` 记录原因码、权重、证据引用与 `policy_version='s6-1.v1'`；自动只做 +1、上限 7、需证据且非锁定/置顶；降权与 8+ 只进待审；每次应用写单份 `versions`，可撤回；`hard_delete()` 同事务清理派生行。S6-3 用统一的 `MemoryWeights.propose()`。
-- **界面**：记忆监控首页新增“记忆权重与保护性衰减”面板（5 个开关 + 4 个参数，保存到 `data/<role>/memory-weights.json`，下一轮生效、重启保留）；记忆详情显示活跃度/送达/跨天会话/保护状态、待确认重评、重评历史与撤回；库支持“有待重评建议”过滤和“活跃度”排序。
-- **模块协作**：检索默认不启用活跃度排序（#455 AB-R5b 证据不足）；开关打开后只追加可选分数，无送达记录时严格无操作。判官、联想、召回预算逻辑未改。
-- **验证**：新增 `tests/test_p6_s6_memory_weights.py`（47 项）与 `desktop/tests/memory-weights.test.cjs`（4 项）；合流 S6-2 后桌面 65/65；完整 Python 套件失败集合与 `origin/main = 81dba35` 基线一致（详见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。VEIL Lab mock run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终 `s6-1-final-20261128T023357`（快照 r3，¥0）验证送达、幂等、回滚、重启、digest、保护性衰减与 5→6 自动重评；五次 `run verify` 均通过。
+- 合并提交 `90846bd`（2026-11-27 23:15 UTC），**未部署、没有 Lan 验收记录**；验收见 `docs/ACCEPTANCE.md` B-12。
+- **送达记账（只在实际送达后）**：`veil/brain/memory_weights.py` 新增 `memory_delivery_events`（`request_id|memory_id` 幂等键）与 `memory_activation` 聚合；`Memory.confirm_delivery(request_id, session_key, regenerated)` 在 S5 确认送达后调用；失败/取消/回滚不写；重生成只更新最近活跃、不增加强化计数。
+- **保护性衰减与版本化重要度重评**：`effective_score()` 只对 `importance<=6` 且未置顶的活跃度投影按半衰期衰减；`memory_importance_proposals` 经统一接口 `MemoryWeights.propose()` 记录原因码、证据与版本，支持撤回；活跃度排序默认关闭。
 
-## S6 开工门禁与 S6-1 状态
+## 本单（工单 464 · P6-S6-3 后台认知巩固与经验提炼）做了什么
+
+- **后台巩固引擎**：新增 `veil/brain/cognitive_consolidation.py` 与系统提示词 `veil/prompts/defaults/memory.consolidation.prompt.md`（`memory.consolidation.prompt`），采用近因+价值均衡增量选批、关联历史锚点、UTF-8 字节自适应裁剪、批次指纹去重与跨日状态持久化，默认关闭（`enabled=False`）。
+- **认知演进与 S3 严格治理**：零平行认知存储，全部新认知与冲突修订经 S3 `LearnedContext.submit_candidate()` / `reverify_relationship_evidence()` 与 `RelationshipSemanticWorker` 落库；幻觉引用与重复总结拦截、S6-2 不洁自主输出过滤、纯自主无用户原话降级 `uncertain`（防循环自证）、锁定与用户主权硬保护、冲突修订保留 `outdated` + `superseded_by` 历史版本。
+- **跨模块协作与 P7 接口**：接通 S6-1 `MemoryWeights.propose()`（含去重与拒绝尊重，默认不自动应用）、读取 S6-2 审计后 `autonomy.jsonl`，巩固结果经 `LearnedContext` 进入后续聊天与自主活动上下文；预留 `p7.experience.v1` 结构化情境经验接口与确认/否决治理（不注入 `HEAD`）。
+- **调度、预算、恢复与界面**：独立 `PeriodicBackgroundTick`、共享 `Budget` 类目 `cognitive_consolidation`（默认 `¥0.05/日`、24h/2次日上限，精确费率结算并在 `/cost` 单列）、`in_flight` 崩溃恢复与指数退避、脱敏运行日志；复用 Brain 首页/「关系与成长」页与费用管理页及 Electron `main.cjs` 路由白名单，配置持久化。
+- **验证**：新增 `tests/test_p6_s6_3_cognitive_consolidation.py`（7 项端到端场景）与 `desktop/tests/cognitive-consolidation.test.cjs`（4 项）；定向 15 个 Python 测试模块 **262/262** 通过，桌面 **69/69** 通过；VEIL Lab 完整生产快照 `peter-20261127T170245/r3` 隔离 run `p6-s6-3-final-20261128T074609`（mock，¥0，零触碰正式数据）完成跨日全链路演练且 `veil-lab run verify` 通过；报告见 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md`。
+
+## S6 开工门禁与 S6 子阶段状态
 
 | 工程事项 | 状态 | 证据 |
 | --- | --- | --- |
@@ -86,22 +92,22 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 | 追加重试持久化幂等 | **已关闭** | `tests/test_p6_s6_idempotent_writes.py`（丢响应/重启/4 线程并发/状态守卫） |
 | 反证长期积累有界、不丢相关否决 | **已关闭** | 超限按相关性分批；无关积累不阻断其他晋升；相关否决不丢 |
 | 任意跨语言同义否决与无关正例 | **已关闭（能力边界内）** | 单测 + DeepSeek 合成实验 `docs/reports/461-cross-language-live-20261127.md` |
-| 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期项，不在工单 461 范围） | 见 `docs/tickets/460-p6-s5-retrieval-judge-association.md`；S6-1 的送达记账不依赖它，S6-2 已合并，S6-3 开工前仍需处理 |
-| S6-1 送达激活、保护性衰减与版本化重评（工单 462 / PR #464） | **开发侧完成**（待审核/CI/体验） | `tests/test_p6_s6_memory_weights.py` 47 项；桌面 65/65；VEIL Lab run `s6-1-activation-20261128T004338`；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md` |
-| S6-2 自主闲暇联想（工单 463） | 已合并 `81dba35`，默认关闭；未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-11；S6-2 只改联想/自主路径，未改本单送达记账 |
-| S6-3 认知巩固 | 未开工 | 等 C-2 方向；本单已给出 `MemoryWeights.propose()` 接口 |
+| 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期项，不在本单范围） | 见 `docs/tickets/460-p6-s5-retrieval-judge-association.md`；仍待专项关闭 |
+| S6-1 送达激活、保护性衰减与版本化重评（工单 462 / PR #464） | 已合并 `90846bd`，未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-12；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md` |
+| S6-2 自主闲暇联想（工单 463 / PR #463） | 已合并 `81dba35`，默认关闭；未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-11 |
+| S6-3 后台认知巩固与经验提炼（工单 464） | **开发侧完成，默认关闭**（待 PR / 审核 / CI / 体验） | 262/262 Python + 69/69 桌面；VEIL Lab run `p6-s6-3-final-20261128T074609`；报告 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md` |
 
 ## 等 lan 定的事
 
-1. 体验 `docs/ACCEPTANCE.md` 中 B-8/B-9/B-10/B-11/B-12 与既有 A/B 项，逐条告诉开发 Agent 结果；B-11 是 S6-2 自主闲暇联想，B-12 是 S6-1 的权重面板、活跃度与重评历史。
-2. C-2：S6-3/S7 的方向与是否按 `docs/reports/p6-s4-decision-table-20261126.md` 继续；S6-2 已由 PR #463 合并，S6-1 已按本次直接授权开工，S6-3 仍未开工。
+1. 体验 `docs/ACCEPTANCE.md` 中 B-8 ~ B-13 与既有 A/B 项，逐条告诉开发 Agent 结果；B-13 是 S6-3 后台认知巩固的灰度开关、频率/预算与巩固结果核对。
+2. C-2：S7 与 P7 经验影响行为层的开工节奏，以及是否先关闭 S5 延期的隐式工作 `trap` 联合门控。
 3. B-3/B-4/H-1：三项**待授权**操作是否在下一个维护窗口执行。
 4. 本单 PR 审核/合并/部署顺序；本单不自行合并或部署。
 
 ## 下一步
 
-- 本单（工单 462 / PR #464）：独立审核 + CI；通过后停在可合并状态。已合流含 S6-2 的 `main = 81dba35`，并重跑完整套件对比与 VEIL Lab 真实链路验证。
-- 合并后：按 `docs/ACCEPTANCE.md` B-12 让 Lan 体验，再决定活跃度排序是否打开；S6-3 开工前先处理 S5 延期的隐式工作 `trap` 联合门控，并复用 `MemoryWeights.propose()`，不绕开锁定与版本策略。
+- 本单（工单 464）：推送分支创建 PR、独立审核 + CI；通过后停在可合并状态。
+- 合并并部署后：按 `docs/ACCEPTANCE.md` B-13 让 Lan 在灰度开关开启下实测真实多日巩固质量，再视体感决定频率与 P7 行为接入节奏；另行专项关闭 S5 延期的隐式工作 `trap` 联合门控。
 
 ## 验收入口
 
