@@ -453,10 +453,10 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
   // Stage 3 P4/P5 Brain, Themes, Detached Pin & Custom CSS E2E checks
   await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-home]").click()');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-home-view")?.hidden && document.querySelector("#brain-home-view .kpi-card") && !document.querySelector("#subnav-shell")?.hidden && document.querySelectorAll("#subnav-track .subnav-tab").length === 6'), 'brain-home or Nocturne 6-tab subnav did not render');
-  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=brain-health]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-home-view")?.hidden && document.querySelector("#brain-home-view .kpi-card") && !document.querySelector("#subnav-shell")?.hidden && document.querySelectorAll("#subnav-track .subnav-tab").length === 4'), 'brain-home or Nocturne 4-tab subnav did not render');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-health]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-health-view")?.hidden && document.querySelector("#brain-health-view .health-summary-banner") && document.querySelector("#brain-health-view details.tech-evidence")'), 'brain-health did not render summary or collapsible evidence');
-  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=workspace-events]").click()');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=workspace-events]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#workspace-events-view")?.hidden && document.querySelector("#workspace-events-view")?.textContent.includes("周末书店散步")'), 'workspace-events linked memories missing');
   await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=workspace-budget]").click()');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#workspace-budget-view")?.textContent.includes("29.82")'), 'workspace-budget did not render');
