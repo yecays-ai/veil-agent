@@ -421,9 +421,12 @@
 
       if (currentView === 'cumulative') {
         legendBox.append(
-          mkLegendItem('new', `累计活跃记忆（当前 ${sum.total_active ?? 0} 条）`),
+          mkLegendItem('new', `活跃存量（当前 ${sum.total_active ?? 0} 条 · 累计创建 ${sum.total_created ?? sum.total_active ?? 0} 条）`),
           mkLegendItem('soft', `区间净增长 ${sum.net_growth >= 0 ? '+' : ''}${sum.net_growth ?? 0}`),
         );
+        if (sum.history_incomplete && sum.history_incomplete_reason) {
+          legendBox.append(pill(`历史不完整：${sum.history_incomplete_reason}`, 'warn'));
+        }
         const vals = days.map(pt => pt.cumulative || 0);
         const minV = Math.max(0, Math.min(...vals, 0));
         const maxV = Math.max(minV + 1, ...vals);
@@ -1231,12 +1234,15 @@
     const openOngoing = ongoingItems.filter(it => !['done', 'closed', 'archived'].includes(it.status || 'active'));
     const closedOngoing = ongoingItems.filter(it => ['done', 'closed', 'archived'].includes(it.status || 'active'));
 
-    const usedBytes =
-      utf8Bytes(growthText) +
-      utf8Bytes(factsText) +
-      openOngoing.reduce((s, it) => s + utf8Bytes(it.text), 0) +
-      activeRel.reduce((s, it) => s + utf8Bytes(it.text), 0);
-    const maxBytes = learned.max_bytes || 4000;
+    const usedBytes = (learned.budget && typeof learned.budget.used_bytes === 'number')
+      ? learned.budget.used_bytes
+      : (utf8Bytes(growthText) +
+        utf8Bytes(factsText) +
+        openOngoing.reduce((s, it) => s + utf8Bytes(it.text), 0) +
+        activeRel.reduce((s, it) => s + utf8Bytes(it.text), 0));
+    const maxBytes = (learned.budget && typeof learned.budget.max_bytes === 'number')
+      ? learned.budget.max_bytes
+      : (learned.max_bytes || 4000);
     const pct = Math.min(100, Math.round((usedBytes / Math.max(1, maxBytes)) * 100));
 
     // Shared budget summary card
@@ -1439,7 +1445,8 @@
       const nextBtn = btn('下一页', 'sm');
       nextBtn.disabled = page * 20 >= total;
       nextBtn.addEventListener('click', () => { page += 1; loadTurns(); });
-      pager.append(prevBtn, el('span', 'muted', `第 ${page} 页 / 共 ${total} 轮`), nextBtn);
+      const covNote = res.data?.coverage_note ? ` · ${res.data.coverage_note}` : '';
+      pager.append(prevBtn, el('span', 'muted', `第 ${page} 页 / 共 ${total} 轮${covNote}`), nextBtn);
 
       const activeItem = items.find(it => it.request_id === selectedId) || items[0];
       if (activeItem) await showTurn(activeItem);
@@ -1491,16 +1498,16 @@
 
       const meta = el('p', 'muted', `${formatTime(item.time)} · ${item.model} · ${item.purpose_label || item.purpose}`);
 
-      // Flat metric strip (Token, Cache, Cost)
+      // Flat metric strip (Token, Cache, Cost) — never coerce missing cache to 0
       const metricStrip = el('div', 'flat-metric-strip');
       const cacheText = tk.cache_hit != null
         ? `${tk.cache_hit}${tk.cache_hit_rate != null ? ` (${tk.cache_hit_rate}%)` : ''}`
-        : '0';
+        : '未记录';
       const tCards = [
         ['快照预估 Token', tk.estimated != null ? String(tk.estimated) : '未记录'],
-        ['实际输入 / 输出', tk.actual_input != null ? `${tk.actual_input} / ${tk.actual_output ?? '-'}` : '未计量（本地估算）'],
+        ['实际输入 / 输出', tk.actual_input != null ? `${tk.actual_input} / ${tk.actual_output ?? '-'}` : '未计量（上游未返回）'],
         ['缓存命中', cacheText],
-        ['记忆注入 Token', tk.memory_tokens != null ? String(tk.memory_tokens) : '待核实'],
+        ['记忆注入 Token', tk.memory_tokens != null ? String(tk.memory_tokens) : '未记录'],
         ['结算费用', item.cost_cny != null ? `¥${item.cost_cny}` : '暂无结算'],
       ];
       for (const [lbl, val] of tCards) {
@@ -1509,18 +1516,22 @@
         metricStrip.append(c);
       }
 
-      // 1. Six-layer Recall Chain
+      // 1. Six-layer Recall Chain (distinguish hit / not_hit / not_run / missing)
       const chainBlock = el('div', 'recall-section-block');
       chainBlock.append(el('h4', '', '实际召回链路'));
       const chainGrid = el('div', 'recall-chain-grid');
       const chainSteps = item.recall_chain || [];
-      if (chainSteps.length) {
+      if (item.recall_evidence_state === 'missing') {
+        chainGrid.append(el('p', 'muted', '该轮未记录召回追踪证据（证据缺失，不等同于未命中）。'));
+      } else if (chainSteps.length) {
         for (const st of chainSteps) {
           const cell = el('div', 'recall-chain-step');
-          cell.append(
-            el('span', '', st.label),
-            pill(st.count > 0 ? `命中 ${st.count}` : '未命中', st.count > 0 ? 'good' : ''),
-          );
+          let badgeText = '未命中';
+          let badgeTone = '';
+          if (st.state === 'missing') { badgeText = '证据缺失'; badgeTone = 'warn'; }
+          else if (st.state === 'not_run') { badgeText = '未执行'; }
+          else if (st.state === 'hit' || (st.count != null && st.count > 0)) { badgeText = `命中 ${st.count}`; badgeTone = 'good'; }
+          cell.append(el('span', '', st.label), pill(badgeText, badgeTone));
           chainGrid.append(cell);
         }
       } else {
@@ -1551,7 +1562,7 @@
           injCol.append(row);
         }
       } else {
-        injCol.append(el('p', 'muted', '本轮无注入记忆'));
+        injCol.append(el('p', 'muted', item.recall_evidence_state === 'missing' ? '召回证据缺失' : '本轮无注入记忆'));
       }
 
       const dropCol = el('div', 'candidate-col');
@@ -1563,12 +1574,12 @@
           const scoreStr = m.score != null ? ` · 相关度 ${Number(m.score).toFixed(2)}` : '';
           row.append(
             el('strong', '', m.title || mid || '候选记忆'),
-            el('small', 'muted', `${m.drop_reason || '预算或相关性过滤未入选'}${scoreStr}`),
+            el('small', 'muted', `${m.drop_reason || '未记录未入选原因（证据缺失）'}${scoreStr}`),
           );
           dropCol.append(row);
         }
       } else {
-        dropCol.append(el('p', 'muted', '所有召回候选均已入选'));
+        dropCol.append(el('p', 'muted', item.recall_evidence_state === 'missing' ? '召回证据缺失' : '无未入选候选'));
       }
       diffGrid.append(injCol, dropCol);
       diffBlock.append(diffGrid);
@@ -1617,132 +1628,6 @@
     host.replaceChildren(filterBar, trendCard, split, pager);
     await loadTurns();
     return;
-  }
-
-  async function _legacyRenderRecallUnused(host, req, focusTurnId = null) {
-    const renderSeq = ++recallRenderSeq;
-    const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
-    if (renderSeq !== recallRenderSeq) return;
-    const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
-    const split = el('div', 'split-reader');
-    const listPane = el('div', 'index-pane');
-    const detailPane = el('article', 'veil-card reader-pane');
-    let selectedId = focusTurnId || (combined[0] && (combined[0].request_id || combined[0].id)) || '';
-    let detailSeq = 0;
-
-    async function showTurn(item) {
-      const tid = String(item.request_id || item.id || '');
-      selectedId = tid;
-      const seq = ++detailSeq;
-      for (const n of listPane.querySelectorAll('.index-item')) {
-        n.setAttribute('aria-current', String(n.dataset.turnId === tid));
-      }
-      detailPane.replaceChildren(el('p', '', '正在加载该轮召回层级详情…'));
-
-      let traceData = item;
-      if (tid) {
-        const traceRes = await reqJson(req, `/api/diagnostics/trace?request_id=${encodeURIComponent(tid)}`);
-        if (seq !== detailSeq) return;  // A -> B -> A: only the newest request owns the pane
-        if (traceRes.ok && traceRes.data) traceData = { ...item, ...traceRes.data };
-      }
-
-      detailPane.replaceChildren();
-      detailPane.append(el('h3', 'reader-title', `轮次 ${tid || '最近对话'}`));
-
-      const recall = traceData.recall || traceData.chain?.recall || traceData;
-      const costs = traceData.costs || traceData.chain?.costs;
-      const tags = el('div', 'index-tags');
-      if (recall.retrieval_mode) tags.append(pill(`模式: ${recall.retrieval_mode}`, 'rose'));
-      if (traceData.model) tags.append(pill(traceData.model));
-      if (Array.isArray(costs)) {
-        const settled = costs.filter(row => row && row.type === 'settle');
-        const settledTotal = settled.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-        if (settled.length) tags.append(pill(`费用 ¥${settledTotal.toFixed(2)}（已结算 ${settled.length} 笔）`, 'gold'));
-        else if (costs.length) tags.append(pill(`费用结算中（${costs.length} 条）`, 'warn'));
-      } else if (costs?.total_cost != null) {
-        tags.append(pill(`费用 ¥${costs.total_cost}`, 'gold'));
-      }
-      detailPane.append(tags);
-
-      // Layer breakdown
-      const layers = [
-        ['关系底座', recall.relationship_base],
-        ['开场记忆', recall.opening],
-        ['相关召回', recall.relevant_recall],
-        ['自然联想', recall.natural_association],
-        ['延续记忆', recall.carried],
-        ['向量召回', recall.vector],
-      ];
-      const layerGrid = el('div', 'layer-list');
-      layerGrid.style.margin = '12px 0';
-      for (const [label, val] of layers) {
-        if (!val && val !== 0) continue;
-        const card = el('div', 'layer-item');
-        const cnt = Array.isArray(val) ? val.length : (val?.count ?? val?.items?.length ?? '已注入');
-        card.append(el('strong', '', label), el('small', '', typeof val === 'string' ? val.slice(0, 80) : `命中 ${cnt}`));
-        layerGrid.append(card);
-      }
-      detailPane.append(layerGrid);
-
-      const hits = recall.items || recall.memories || [];
-      if (Array.isArray(hits) && hits.length) {
-        detailPane.append(el('h4', '', `命中记忆 (${hits.length})`));
-        const hitList = el('div', 'workspace-links');
-        for (const h of hits) {
-          const mid = h.memory_id || h.id;
-          const b = btn(`${h.title || mid || '记忆'}${h.score != null ? ` (${Number(h.score).toFixed(2)})` : ''}`, 'sm');
-          if (mid) b.addEventListener('click', () => window.veilWorkspace?.openMemory(mid));
-          hitList.append(b);
-        }
-        detailPane.append(hitList);
-      }
-
-      if (tid) {
-        const rawDetails = el('details', 'tech-evidence');
-        const sum = el('summary', '', '展开该轮完整 Prompt 分区快照（只读）');
-        const body = el('pre', 'diff-box', '点击展开后按需加载…');
-        rawDetails.append(sum, body);
-        rawDetails.addEventListener('toggle', async () => {
-          if (!rawDetails.open || rawDetails.dataset.loaded === 'true' || rawDetails.dataset.loading === 'true') return;
-          rawDetails.dataset.loading = 'true';
-          body.textContent = '正在读取完整快照…';
-          try {
-            const snapDetail = await reqJson(req, `/api/request-snapshot?id=${encodeURIComponent(tid)}`);
-            if (!snapDetail.ok || !snapDetail.data) {
-              throw new Error(snapDetail.data?.error || '快照读取失败，收起后再展开可重试。');
-            }
-            body.textContent = JSON.stringify(snapDetail.data, null, 2);
-            if (snapDetail.data.truncated) {
-              rawDetails.append(el('p', 'muted', '接口返回的快照已标记为截断。'));
-            }
-            rawDetails.dataset.loaded = 'true';
-          } catch (err) {
-            body.textContent = err?.message || '快照读取失败，收起后再展开可重试。';
-          } finally {
-            delete rawDetails.dataset.loading;
-          }
-        });
-        detailPane.append(rawDetails);
-      }
-    }
-
-    for (const item of combined) {
-      const tid = String(item.request_id || item.id || '');
-      const card = el('button', 'index-item');
-      card.type = 'button';
-      card.dataset.turnId = tid;
-      card.setAttribute('aria-current', String(tid === String(selectedId)));
-      const top = el('div', 'index-item-top');
-      top.append(el('strong', '', item.user_preview || item.title || `请求 ${tid.slice(0, 10)}`), el('small', '', formatTime(item.time || item.created_at).slice(11, 19)));
-      card.append(top, el('div', 'index-preview', item.model || item.recall?.retrieval_mode || '召回诊断记录'));
-      card.addEventListener('click', () => showTurn(item));
-      listPane.append(card);
-    }
-
-    split.append(listPane, detailPane);
-    host.replaceChildren(split);
-    const firstMatch = combined.find(x => String(x.request_id || x.id) === String(selectedId)) || combined[0];
-    if (firstMatch) await showTurn(firstMatch);
   }
 
   // =========================================================================

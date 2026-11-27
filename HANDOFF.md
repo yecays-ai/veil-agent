@@ -1,20 +1,15 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
+> 更新时间：2026-11-27T14:10:00+08:00 · 基线 `main` = `2a264a7` · 当前分支 `feat/p4-p5-brain-rework`（PR #459 已按独立复审 P0–P3 集中修复并补充 12 项后端 + 15 项前端回归测试，待 CI 与人工验收；未合并、未部署正式目录）
 
 ## 当前停点
 
-- **本单（工单 458 · 仓库目录结构重整）**：
-  - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
-  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
-  - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
-  - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
-  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
-  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
-  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
-  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
-  - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
-- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
+- **本单（PR #459 · P4/P5 记忆中心返工与复审修复）**：
+  - 已合并 `origin/main`（含 PR #458 `veil/` 新目录结构），改动落位在 `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/workspace-brain.js`、`desktop/workspace-shell.css`、`desktop/workspace-shell.js`、`desktop/peter-page.js`、`desktop/main.cjs`。
+  - **P0 修复**：`growth_analysis` 区分累计创建量、活跃存量、归档/删除存量与活跃净增长（`added + restored - archived - deleted`），排除失败/未完成事务并标记不完整历史；`recall_turns` 不再将缺失缓存显示为 `0`、区分召回证据缺失/未执行/未命中/命中、不再推测未入选原因、修复 `costs.jsonl` 中 `type=settle` 的 `amount` 结算统计，并明确标注 Prompt 分区估算来源。
+  - **P1 修复**：`generate_growth_report`（`full` 模式）取消 20 条/600 字符静默截断，补齐修改前/后内容、Diff、事件 ID/阶段变化与仅事件更新日明细，关闭正文时保留非正文技术明细；`recall_turns` 单遍索引支持全量分页与多步去重，`recall_turn_report` 按 `request_id` 直查；健康报告合并严格校验日期范围匹配并读取 `warn_count`/`error_count` 与 `incomplete`。
+  - **P2/P3 修复**：六层开关持久化落盘（`brain-layer-switches.json` / `experience-memory.json`）并对未就绪模块返回真实错误；`peter-page.js` 与 `workspace-brain.js` 共享后端 `_compute_cognition_budget` 同源预算；清理 `_legacyRenderRecallUnused`；消除 `brain_p4_api.py` 动态 SQL 拼接（改为静态白名单查询）；新增 4 组专项回归测试（共 12 项 Python + 15 项 Node 测试全通过）。
+- **状态**：已推送 `feat/p4-p5-brain-rework`，等待 CI 与人工验收，不自行合并。
 
 ## 下一个窗口第一步
 

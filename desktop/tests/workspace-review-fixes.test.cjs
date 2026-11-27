@@ -22,12 +22,12 @@ test('memory library sends panel_edit changes, keeps drafts and archives through
 });
 
 test('recall and health pages never silently drop or mislabel data', () => {
-  assert.match(brain, /Array\.isArray\(costs\)/);
+  assert.doesNotMatch(brain, /_legacyRenderRecallUnused/);
+  assert.match(brain, /recall_evidence_state === 'missing'/);
   assert.match(brain, /payload\.text/);
   assert.doesNotMatch(brain, /slice\(0, 6000\)/);
   assert.match(brain, /healthSettings = settings/);
   assert.match(brain, /report: res\.data\.report, settings: healthSettings/);
-  assert.match(brain, /dataset\.loading/);
 });
 
 test('detached pin bridge returns booleans with names chat.js actually calls', () => {

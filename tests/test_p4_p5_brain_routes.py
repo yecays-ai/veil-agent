@@ -226,3 +226,155 @@ class P4P5BrainRoutesTest(TestCase):
         self.assertIn('relationship_base', trace['recall'])
         self.assertIn('budget', trace['recall'])
         self.assertEqual(['u1'], trace['recall']['carried'])
+
+    def test_growth_analysis_lifecycle_and_invalid_tx_filtering(self):
+        from datetime import datetime, timedelta
+        from veil.brain import brain_p4_api
+        today = datetime.now().date().strftime('%Y-%m-%d')
+        yday = (datetime.now().date() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute(
+            "INSERT INTO memories(id, title, created, type, bucket, body, is_deleted) VALUES('m_del', '已删记忆', ?, 'fact', 'dynamic', '正文', 1)",
+            (f'{yday}T10:00:00+08:00',),
+        )
+        conn.execute(
+            "INSERT INTO memories(id, title, created, type, bucket, body) VALUES('m_arch', '归档记忆', ?, 'fact', 'archive', '正文')",
+            (f'{yday}T11:00:00+08:00',),
+        )
+        conn.execute(
+            "INSERT INTO write_journal(time, operation, memory_id, detail_json, status) VALUES(?, 'archive', 'm_arch', '{}', 'ok')",
+            (f'{today}T09:00:00+08:00',),
+        )
+        conn.execute(
+            "INSERT INTO write_journal(time, operation, memory_id, detail_json, status) VALUES(?, 'restore', 'm1', '{}', 'ok')",
+            (f'{today}T09:30:00+08:00',),
+        )
+        conn.execute(
+            "INSERT INTO write_journal(time, operation, memory_id, detail_json, status) VALUES(?, 'delete', 'm_del', '{}', 'ok')",
+            (f'{today}T10:00:00+08:00',),
+        )
+        # Failed transaction must be excluded
+        conn.execute(
+            "INSERT INTO write_journal(time, operation, memory_id, detail_json, status) VALUES(?, 'archive', 'm1', '{}', 'failed')",
+            (f'{today}T10:30:00+08:00',),
+        )
+        conn.commit()
+        conn.close()
+
+        res = brain_p4_api.growth_analysis(self.hub, range_key='7d')
+        s = res['summary']
+        self.assertEqual(3, s['total_created'])
+        self.assertEqual(1, s['total_active'])
+        self.assertEqual(1, s['total_archived'])
+        self.assertEqual(1, s['total_deleted'])
+        self.assertEqual(1, s['actual_archived'])
+        self.assertEqual(1, s['actual_restored'])
+        self.assertEqual(1, s['actual_deleted'])
+        self.assertFalse(s['history_incomplete'])
+        self.assertEqual(s['actual_added'] + s['actual_restored'] - s['actual_archived'] - s['actual_deleted'], s['net_growth'])
+
+    def test_growth_report_no_silent_truncation_and_event_only_day_and_health_date_match(self):
+        from datetime import datetime
+        from veil.brain import brain_p4_api
+        today = datetime.now().date().strftime('%Y-%m-%d')
+        long_body = '这是一段超过六百字的长记忆正文。' * 50  # > 700 chars
+        conn = sqlite3.connect(str(self.db_path))
+        for i in range(25):
+            conn.execute(
+                "INSERT INTO memories(id, title, created, type, bucket, body) VALUES(?, ?, ?, 'fact', 'dynamic', ?)",
+                (f'm_bulk_{i:02d}', f'批量记忆_{i:02d}', f'{today}T10:{i:02d}:00+08:00', long_body if i == 0 else f'正文{i}'),
+            )
+        conn.execute(
+            "INSERT INTO event_ledger(ledger_seq, kind, source_file, source_seq, at, event_id, stage_id, memory_id, payload_json) "
+            "VALUES(10, 'event-update', 'events.jsonl', 10, ?, 'ev1', 'st_9', 'm1', '{\"title\":\"旧书店避雨\",\"summary\":\"补充阶段\"}')",
+            (f'{today}T18:00:00+08:00',),
+        )
+        conn.commit()
+        conn.close()
+
+        # Run a health scan with a DIFFERENT date range to verify mismatch warning
+        brain_health.run_health_scan(self.data_root, 'peter', self.db_path, from_date='2026-01-01', to_date='2026-01-07')
+
+        rep_full = brain_p4_api.generate_growth_report(
+            self.hub, from_date=today, to_date=today, include_content=True, include_health=True, fmt='full',
+        )
+        md = rep_full['markdown']
+        self.assertIn('批量记忆_24', md)  # > 20 items not truncated
+        self.assertIn(long_body, md)     # > 600 chars not truncated
+        self.assertIn('ev1', md)
+        self.assertIn('日期范围不匹配', md)
+        self.assertIn('关注', md)
+
+        # include_content=False still retains non-content technical diagnostic details
+        rep_no_content = brain_p4_api.generate_growth_report(
+            self.hub, from_date=today, to_date=today, include_content=False, include_health=False, fmt='full',
+        )
+        self.assertIn('m_bulk_24', rep_no_content['markdown'])
+        self.assertNotIn(long_body, rep_no_content['markdown'])
+
+    def test_recall_turns_over_100_direct_report_and_missing_evidence_and_costs_amount(self):
+        from veil.brain import brain_p4_api
+        snap_path = diagnostics.snapshot_path(self.data_root, 'peter')
+        with snap_path.open('w', encoding='utf-8') as fh:
+            for i in range(120):
+                row = {
+                    'request_id': f'req_{i:03d}',
+                    'time': f'2026-11-25T10:{i // 60:02d}:{i % 60:02d}+08:00',
+                    'model': 'gemini-2.5-pro',
+                    'purpose': 'chat',
+                    'user_preview': f'问题 {i}',
+                }
+                if i == 0:
+                    # Missing recall & missing cache evidence
+                    pass
+                else:
+                    row['recall'] = {'injected': [{'memory_id': 'm1', 'title': '雨天旧书店'}], 'candidates': [{'memory_id': 'm1', 'title': '雨天旧书店'}, {'memory_id': 'm2', 'title': '候选2'}]}
+                fh.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+        with (self.data_root / 'costs.jsonl').open('w', encoding='utf-8') as fh:
+            fh.write(json.dumps({'id': 'req_000', 'type': 'settle', 'amount': 0.0456}, ensure_ascii=False) + '\n')
+
+        # Direct lookup for req_000 (which is #120 in reverse-time order, beyond page 1 / top 100)
+        rep = brain_p4_api.recall_turn_report(self.hub, 'req_000')
+        self.assertTrue(rep['ok'])
+        turn = rep['turn']
+        self.assertIsNone(turn['tokens']['cache_hit'])
+        self.assertEqual('missing', turn['recall_evidence_state'])
+        self.assertEqual('missing', turn['recall_chain'][0]['state'])
+        self.assertAlmostEqual(0.0456, turn['cost_cny'], places=4)
+        self.assertIn('未记录', rep['markdown'])
+        self.assertIn('召回追踪证据缺失', rep['markdown'])
+
+        # Missing drop_reason must not guess '预算/相关性筛选'
+        rep1 = brain_p4_api.recall_turn_report(self.hub, 'req_001')
+        self.assertIn('未记录未入选原因', rep1['markdown'])
+        self.assertNotIn('预算/相关性筛选', rep1['markdown'])
+
+    def test_layer_toggle_persistence_and_shared_budget_consistency(self):
+        from veil.brain import brain_p4_api
+        # short_notes persists to brain-layer-switches.json and survives reload
+        res = brain_p4_api.toggle_layer(self.hub, 'short_notes', True)
+        self.assertTrue(res['ok'])
+        self.assertTrue(res['persisted'])
+        ov = brain_p4_api.overview(self.hub)
+        sn = next(l for l in ov['layers'] if l['id'] == 'short_notes')
+        self.assertTrue(sn['enabled'])
+
+        # Unready experience module without set_enabled returns real error
+        res_err = brain_p4_api.toggle_layer(self.hub, 'experience', False)
+        self.assertFalse(res_err['ok'])
+        self.assertEqual(503, res_err['status_code'])
+
+        # Shared budget authority matches UTF-8 calculation
+        learned = {
+            'max_bytes': 4000,
+            'sections': {'facts': {'text': '事实A'}, 'growth': {'text': '成长B'}},
+            'ongoing': {'items': [{'text': '进行中', 'status': 'active'}, {'text': '已完成', 'status': 'done'}]},
+            'relationship': {'items': [{'text': '关系1', 'status': 'confirmed'}, {'text': '旧关系', 'status': 'outdated'}]},
+        }
+        b = brain_p4_api._compute_cognition_budget(learned)
+        expected = sum(len(s.encode('utf-8')) for s in ('事实A', '成长B', '进行中', '关系1'))
+        self.assertEqual(expected, b['used_bytes'])
+        # Strictly read-only DB invariant still holds
+        self.assertEqual(self.before_db_bytes, self.db_path.read_bytes())
