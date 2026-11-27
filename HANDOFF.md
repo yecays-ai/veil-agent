@@ -15,6 +15,14 @@
   - 旧本机失败对照 `2b03006` / `d5f8591` 均复现：Maintenance 在 CRLF 测试文件的暂存区检查失败（改 LF 后通过）；OpenCode 原用例缺输出文件，GitHub CI 因未安装而跳过；冷备份仅在 APPDATA 有桌面配置时增加 `desktop-data`，空 APPDATA 的两个用例均通过。本轮不改这些模块。
   - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
 
+## S6 开工门禁与证据边界
+
+1. [聊天历史全量读取](veil/brain/learned_context.py#L409)：日志变化后全量扫描和常驻缓存会增加长历史请求耗时与内存。验收：长历史连续追加不反复全扫、有明确缓存上限；旧引用按需核验，删除或替换后不命中旧缓存。
+2. [数据库读连接](veil/brain/learned_context.py#L481)与[实时核验](veil/brain/learned_context.py#L889)：多条引用的串行 SQLite 等待会累加。验收：锁库加多引用场景验证整次核验的统一墙钟预算，超限不误晋升、不阻断聊天。
+3. [认知追加](veil/brain/learned_context.py#L1564)与[待办新增](veil/brain/learned_context.py#L1765)：提交后丢响应时，重试可能重复写入。验收：持久化幂等键在丢回包、并发和重启场景下均返回原结果与原 ID，只落一条正文及相应版本。以上三项均已明确延期到 S6 开工前完成，不是已修复。
+4. [间接证据查询](veil/brain/learned_context.py#L535-L563)：每次解析至多读取 200 条匹配的 stage-evidence（账本序号倒序）、50 条用户引述及 50 条聊天来源（ord 顺序）；不分页。有效证据可能位于窗口外；若其余来源也无法证实，保持或降为 uncertain，不以截断、无命中或来源缺失断言证据不存在，也不放宽原话匹配。此为当前能力边界，未改查询。
+5. [迁移回滚反例](tests/test_pr460_storage.py#L161-L215)从缺少 vetoed 的旧格式实际迁移，断言 applied 并无条件调用 rollback；验证无用字段撤销、迁移后编辑/删除/锁定/完成状态及版本历史保留。[原有 CI 日志](https://github.com/yecays-ai/veil-agent/actions/runs/45967164223/job/140398494254)两例通过，本轮未重跑。
+
 ## 下一个窗口第一步
 
 1. 复核 PR #460 收口提交与对应 CI；不要合并或部署。S6 接入前读[证据与否决的能力边界](docs/tickets/459-p6-s3-relationship-governance.md#供-s6-使用的能力边界)。
