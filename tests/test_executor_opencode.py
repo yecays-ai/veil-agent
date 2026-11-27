@@ -1713,7 +1713,7 @@ class RealOpenCodeTests(unittest.TestCase):
                   'maintenance=True,container_name=sys.argv[4])')
         process = subprocess.Popen([sys.executable, '-c', script, str(base / 'bench'), str(base / 'home'),
                                     f'http://127.0.0.1:{server.server_address[1]}/v1', name],
-                                   cwd=str(Path(ex.__file__).resolve().parent),
+                                   cwd=str(Path(__file__).resolve().parents[1]),
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         def cleanup():
             if process.poll() is None:

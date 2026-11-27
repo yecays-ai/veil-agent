@@ -488,7 +488,7 @@ class MaintenanceTests(unittest.TestCase):
                   'print(json.dumps({"reason":t["development"]["reason"],'
                   '"denied":t["authorization"]["workbench"]["denied"]}))')
         child = subprocess.run([sys.executable, '-c', script, str(self.store.root), task['task_id']],
-                               cwd=str(Path(maintenance.__file__).resolve().parent),
+                               cwd=str(Path(__file__).resolve().parents[1]),
                                capture_output=True, text=True, timeout=30, check=True)
         restored = json.loads(child.stdout)
         self.assertEqual(restored['reason'], 'repeated_call')
@@ -619,7 +619,7 @@ class MaintenanceTests(unittest.TestCase):
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
-        source = Path(maintenance.__file__).resolve().parent
+        source = Path(__file__).resolve().parents[1]
         archive = subprocess.run(['git', '-c', f'safe.directory={source.as_posix()}', '-C', str(source),
                                   'archive', '--format=tar', 'HEAD'], capture_output=True, timeout=60, check=True)
         with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode='r:') as content:
