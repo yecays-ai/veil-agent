@@ -376,27 +376,113 @@ def overview(hub):
                     if p.get('pending_review'):
                         counts['events_pending_review'] += 1
 
+            mem_lookup = {r['id']: r for r in mem_rows} if mem_rows else {}
+            mem_bodies = {}
+            if 'memories' in tables:
+                for br in conn.execute('SELECT id, title, body, why_remembered FROM memories'):
+                    mem_bodies[br['id']] = {
+                        'title': br['title'] or br['id'],
+                        'body': (br['body'] or '').strip(),
+                        'why': (br['why_remembered'] or '').strip(),
+                    }
+
+            ver_history = {}
+            if 'versions' in tables:
+                v_cols = {c[1] for c in conn.execute('PRAGMA table_info(versions)')}
+                v_id_col = 'version_id' if 'version_id' in v_cols else 'seq'
+                v_txt_col = 'content' if 'content' in v_cols else 'old_content'
+                for vr in conn.execute(f'SELECT {v_id_col} AS vid, memory_id, time, operation_reason, {v_txt_col} AS content FROM versions ORDER BY time ASC'):
+                    ver_history.setdefault(vr['memory_id'], []).append({
+                        'version_id': vr['vid'],
+                        'time': vr['time'] or '',
+                        'reason': vr['operation_reason'] or '',
+                        'content': (vr['content'] or '').strip(),
+                    })
+
+            _OP_LABELS = {
+                'add': '新增记忆',
+                'create': '新增记忆',
+                'insert': '新增记忆',
+                'edit': '修订记忆',
+                'update': '修订记忆',
+                'panel_edit': '档案编辑',
+                'archive': '移入归档',
+                'unarchive': '恢复活跃',
+                'restore': '恢复活跃',
+                'merge': '合并记忆',
+                'dream': '夜间整理',
+                'experience': '经历提炼',
+            }
+            _STATUS_LABELS = {
+                'ok': '已完成',
+                'success': '已完成',
+                'done': '已完成',
+                'pending': '处理中',
+                'failed': '未完成',
+                'error': '异常',
+            }
+            _EVENT_KIND_LABELS = {
+                'event-op': '事件整理',
+                'event-update': '事件更新',
+                'event-dream-report': '经历梳理',
+            }
+
             if 'write_journal' in tables:
                 for jr in conn.execute('SELECT time, operation, memory_id, detail_json, status FROM write_journal ORDER BY seq DESC LIMIT 12'):
                     detail = _json_load(jr['detail_json'], {})
+                    op_raw = (jr['operation'] or '').strip()
+                    op_lower = op_raw.lower()
+                    if op_lower in ('noop', 'heartbeat', 'index_sync'):
+                        continue
+                    mid = jr['memory_id'] or ''
+                    m_info = mem_bodies.get(mid, {})
+                    title_text = detail.get('title') or m_info.get('title') or mid or '记忆变更'
+                    op_label = _OP_LABELS.get(op_lower, '记忆变更')
+                    status_label = _STATUS_LABELS.get(str(jr['status'] or '').lower(), '已完成')
+                    source_label = detail.get('source') or ('经历整理' if 'experience' in op_lower else ('档案编辑' if 'panel' in op_lower else '日常对话'))
+
+                    # Compute version diff if available
+                    diff_lines = []
+                    curr_content = detail.get('content') or m_info.get('body') or ''
+                    vers = ver_history.get(mid, [])
+                    if vers:
+                        prev_text = vers[-1]['content']
+                        if len(vers) >= 2 and prev_text == curr_content:
+                            prev_text = vers[-2]['content']
+                        if prev_text and curr_content and prev_text != curr_content:
+                            diff_lines = compute_line_diff(prev_text, curr_content)
+                    if not diff_lines and op_lower in ('add', 'create', 'insert') and curr_content:
+                        diff_lines = [f'+ {ln}' for ln in curr_content.splitlines()[:8]]
+
                     activities.append({
                         'time': jr['time'] or '',
-                        'kind': 'write',
-                        'title': f"{jr['operation']} · {detail.get('title') or jr['memory_id'] or ''}",
-                        'meta': f"status={jr['status']} · {jr['time'] or ''}",
-                        'memory_id': jr['memory_id'] or '',
-                        'detail': detail.get('reason') or jr['operation'],
+                        'kind': op_lower or 'write',
+                        'kind_label': op_label,
+                        'title': f"{op_label} · {title_text}",
+                        'meta': f"{source_label} · {status_label} · {jr['time'] or ''}",
+                        'memory_id': mid,
+                        'source': source_label,
+                        'detail': detail.get('reason') or m_info.get('why') or f'{op_label}已同步写入记忆库',
+                        'content': curr_content,
+                        'diff': diff_lines,
                     })
             if 'event_ledger' in tables:
-                for lr in conn.execute("SELECT at, kind, event_id, payload_json FROM event_ledger WHERE kind IN ('event-op','event-dream-report') ORDER BY id DESC LIMIT 6"):
+                for lr in conn.execute("SELECT at, kind, event_id, payload_json FROM event_ledger WHERE kind IN ('event-op','event-dream-report','event-update') ORDER BY id DESC LIMIT 6"):
                     payload = _json_load(lr['payload_json'], {})
+                    k_label = _EVENT_KIND_LABELS.get(lr['kind'], '事件记录')
+                    ev_title = payload.get('title') or lr['event_id'] or '共同经历'
+                    ev_summary = payload.get('summary') or payload.get('note') or payload.get('action') or '事件时间线已更新'
                     activities.append({
                         'time': lr['at'] or '',
                         'kind': 'event',
-                        'title': f"事件维护 ({lr['kind']}) · {lr['event_id'] or ''}",
-                        'meta': lr['at'] or '',
+                        'kind_label': k_label,
+                        'title': f"{k_label} · {ev_title}",
+                        'meta': f"共同经历 · 已完成 · {lr['at'] or ''}",
                         'event_id': lr['event_id'] or '',
-                        'detail': json.dumps(payload, ensure_ascii=False)[:180],
+                        'source': '共同经历整理',
+                        'detail': ev_summary,
+                        'content': payload.get('story') or ev_summary,
+                        'diff': [],
                     })
             activities.sort(key=lambda x: x.get('time', ''), reverse=True)
             activities = activities[:15]
@@ -417,15 +503,15 @@ def overview(hub):
     layers = [
         {
             'id': 'core',
-            'name': 'Brain 核心存储',
+            'name': '核心记忆存储',
             'enabled': True,
             'ready': db is not None and db.is_file(),
             'running': not frozen,
             'protected': True,
-            'protected_reason': '核心记忆存储权威，关闭将导致所有记忆读写不可用',
+            'protected_reason': '核心记忆存储底座，关闭将导致记忆读写不可用',
             'tone': 'warn' if frozen else 'good',
-            'status_text': '已冻结写入' if frozen else '核心存储 · 受保护',
-            'detail': 'brain.db 唯一读写权威' + (' · 当前处于写入冻结态' if frozen else ' · 写入正常'),
+            'status_text': '已冻结写入' if frozen else '受保护 · 运行中',
+            'detail': '主记忆库' + (' · 当前处于写入冻结态' if frozen else ' · 读写正常'),
         },
         {
             'id': 'vector',
@@ -434,10 +520,10 @@ def overview(hub):
             'ready': counts['pending_vector'] == 0,
             'running': True,
             'protected': True,
-            'protected_reason': '与混合检索管线绑定，向量异常时自动降级 BM25 保底',
+            'protected_reason': '与混合检索管线绑定，异常时自动切换关键词保底',
             'tone': 'warn' if counts['pending_vector'] else 'good',
-            'status_text': f"待补向量 {counts['pending_vector']} 条" if counts['pending_vector'] else '已启用 · 就绪 · 运行中',
-            'detail': 'BGE-M3 1024维 · 降级时自动保底 BM25',
+            'status_text': f"待补索引 {counts['pending_vector']} 条" if counts['pending_vector'] else '受保护 · 就绪',
+            'detail': '语义向量 + 关键词混合检索 · 降级自动保底',
         },
         {
             'id': 'experience',
@@ -448,7 +534,7 @@ def overview(hub):
             'protected': False,
             'tone': 'good' if exp_status.get('enabled') else '',
             'status_text': '已启用 · 就绪' if exp_status.get('enabled') else '已关闭',
-            'detail': f"待处理 {exp_status.get('pending_chars', 0)} / {exp_status.get('min_chars', 3000)} 字 · 今日 ¥{exp_status.get('spent_today', '0')}",
+            'detail': f"待整理 {exp_status.get('pending_chars', 0)} / {exp_status.get('min_chars', 3000)} 字 · 今日 ¥{exp_status.get('spent_today', '0')}",
             'toggle_key': 'experience',
         },
         {
@@ -460,7 +546,7 @@ def overview(hub):
             'protected': False,
             'tone': 'warn' if judge_status.get('breaker_open') else ('good' if judge_status.get('enabled') else ''),
             'status_text': '已熔断暂停' if judge_status.get('breaker_open') else ('已启用 · 运行中' if judge_status.get('enabled') else '已关闭'),
-            'detail': f"今日 ¥{judge_status.get('spent_today', '0')} · 连续失败={judge_status.get('breaker_open', False)}",
+            'detail': f"今日 ¥{judge_status.get('spent_today', '0')} · {'运行熔断中' if judge_status.get('breaker_open') else '状态正常'}",
             'toggle_key': 'judge',
         },
         {
@@ -683,11 +769,30 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
     try:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         before_count = 0
+        archived_in_window_mids = set()
+        if 'write_journal' in tables:
+            for jr in conn.execute('SELECT time, operation, memory_id FROM write_journal'):
+                jdt = _parse_dt(jr['time'])
+                if not jdt:
+                    continue
+                dk = jdt.date().strftime('%Y-%m-%d')
+                if dk not in day_map:
+                    continue
+                op = (jr['operation'] or '').lower()
+                if 'archive' in op and 'unarchive' not in op:
+                    day_map[dk]['archived'] += 1
+                    summary['actual_archived'] += 1
+                    if jr['memory_id']:
+                        archived_in_window_mids.add(jr['memory_id'])
+                elif op in ('restore', 'unarchive', 'delete', 'hard_delete', 'state'):
+                    day_map[dk]['other_state'] += 1
+
         if 'memories' in tables:
             for r in conn.execute('SELECT id, created, type, bucket, is_tombstone, is_deleted FROM memories'):
                 if r['is_tombstone'] or r['is_deleted']:
                     continue
-                if r['bucket'] == 'archive':
+                is_archived = (r['bucket'] == 'archive')
+                if is_archived:
                     summary['total_archived'] += 1
                 else:
                     summary['total_active'] += 1
@@ -701,11 +806,13 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
                     cd = cdt.date()
                     dk = cd.strftime('%Y-%m-%d')
                     if cd < d_from:
-                        before_count += 1
+                        if not is_archived or r['id'] in archived_in_window_mids:
+                            before_count += 1
                     elif dk in day_map:
-                        day_map[dk]['added'] += 1
-                        day_map[dk]['by_type'][t] = day_map[dk]['by_type'].get(t, 0) + 1
-                        summary['actual_added'] += 1
+                        if not is_archived or r['id'] in archived_in_window_mids:
+                            day_map[dk]['added'] += 1
+                            day_map[dk]['by_type'][t] = day_map[dk]['by_type'].get(t, 0) + 1
+                            summary['actual_added'] += 1
 
         if 'versions' in tables:
             for vr in conn.execute('SELECT time, operation_reason FROM versions'):
@@ -715,21 +822,6 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
                     if dk in day_map:
                         day_map[dk]['updated'] += 1
                         summary['actual_updated'] += 1
-
-        if 'write_journal' in tables:
-            for jr in conn.execute('SELECT time, operation FROM write_journal'):
-                jdt = _parse_dt(jr['time'])
-                if not jdt:
-                    continue
-                dk = jdt.date().strftime('%Y-%m-%d')
-                if dk not in day_map:
-                    continue
-                op = (jr['operation'] or '').lower()
-                if 'archive' in op and 'unarchive' not in op:
-                    day_map[dk]['archived'] += 1
-                    summary['actual_archived'] += 1
-                elif op in ('restore', 'unarchive', 'delete', 'hard_delete', 'state'):
-                    day_map[dk]['other_state'] += 1
 
         if 'events' in tables:
             for er in conn.execute('SELECT event_id, payload_json FROM events'):
@@ -754,8 +846,8 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
         running = before_count
         for d in days:
             d['net_growth'] = d['added'] - d['archived']
-            running += d['added']
-            d['cumulative'] = running
+            running += d['net_growth']
+            d['cumulative'] = max(0, running)
         summary['net_growth'] = summary['actual_added'] - summary['actual_archived']
     finally:
         conn.close()
@@ -776,7 +868,9 @@ def day_changes(hub, date_str):
     try:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'memories' in tables:
-            for mr in conn.execute('SELECT id, title, type, bucket, created, content FROM memories WHERE substr(created, 1, 10) = ?', (target,)):
+            m_cols = {c[1] for c in conn.execute('PRAGMA table_info(memories)')}
+            m_txt_col = 'body' if 'body' in m_cols else 'content'
+            for mr in conn.execute(f'SELECT id, title, type, bucket, created, {m_txt_col} AS content FROM memories WHERE substr(created, 1, 10) = ?', (target,)):
                 changes.append({
                     'kind': 'added',
                     'kind_label': '新增记忆',
@@ -789,7 +883,10 @@ def day_changes(hub, date_str):
                     'content': mr['content'] or '',
                 })
         if 'versions' in tables:
-            for vr in conn.execute('SELECT version_id, memory_id, time, operation_reason, content FROM versions WHERE substr(time, 1, 10) = ?', (target,)):
+            v_cols = {c[1] for c in conn.execute('PRAGMA table_info(versions)')}
+            v_id_col = 'version_id' if 'version_id' in v_cols else 'seq'
+            v_txt_col = 'content' if 'content' in v_cols else 'old_content'
+            for vr in conn.execute(f'SELECT {v_id_col} AS version_id, memory_id, time, operation_reason, {v_txt_col} AS content FROM versions WHERE substr(time, 1, 10) = ?', (target,)):
                 changes.append({
                     'kind': 'updated',
                     'kind_label': '修订记忆',
@@ -929,17 +1026,27 @@ def recall_turns(hub, page=1, limit=20, date='', purpose='', model='', status=''
         if model and model.lower() not in mdl.lower():
             continue
 
-        tr = diag.trace(data_root, cfg.id, request_id=rid) if rid else {}
-        prov = (tr.get('provider') or [{}])[-1] if tr.get('provider') else {}
+        tr = (diag.trace(data_root, cfg.id, request_id=rid) or {}) if rid else {}
+        prov_list = tr.get('provider') or tr.get('context') or []
+        prov = prov_list[-1] if prov_list else {}
+        row_usage = row.get('usage') or {}
         costs = tr.get('costs') or []
-        total_cost = sum(float(c.get('cost_cny') or 0) for c in costs if isinstance(c, dict))
-        est_tokens = row.get('estimated_tokens') or prov.get('estimated_input_tokens')
-        act_in = prov.get('actual_input_tokens')
-        act_out = prov.get('completion_tokens')
-        cache_hit = prov.get('cached_tokens') or prov.get('cache_read_input_tokens')
+        if costs:
+            total_cost = sum(float(c.get('cost_cny') or 0) for c in costs if isinstance(c, dict))
+        elif row.get('cost_cny') is not None:
+            total_cost = float(row.get('cost_cny'))
+            costs = [{'cost_cny': total_cost}]
+        else:
+            total_cost = 0.0
+        est_tokens = row.get('estimated_tokens') or prov.get('estimated_input_tokens') or row_usage.get('estimated_input_tokens')
+        act_in = prov.get('actual_input_tokens') if prov.get('actual_input_tokens') is not None else row_usage.get('actual_input_tokens')
+        act_out = prov.get('completion_tokens') if prov.get('completion_tokens') is not None else row_usage.get('completion_tokens')
+        cache_hit = prov.get('cached_tokens') or prov.get('cache_read_input_tokens') or row_usage.get('cached_tokens')
 
-        # Deduplicate memory IDs across stages
-        recall_info = row.get('recall') or {}
+        # Deduplicate memory IDs across stages & extract full chain, candidates vs injected, prompt sections
+        recall_info = row.get('recall') or tr.get('recall') or {}
+        if not isinstance(recall_info, dict):
+            recall_info = {}
         mem_tokens = recall_info.get('memory_tokens')
         has_recall = bool(recall_info)
         if status == 'hit' and not has_recall:
@@ -947,22 +1054,63 @@ def recall_turns(hub, page=1, limit=20, date='', purpose='', model='', status=''
         if status == 'miss' and has_recall:
             continue
 
+        # 6-stage recall chain
+        def _stage_count(val):
+            if isinstance(val, list):
+                return len(val)
+            if isinstance(val, dict):
+                if isinstance(val.get('items'), list):
+                    return len(val['items'])
+                return int(val.get('count') or 0)
+            if isinstance(val, (int, float)):
+                return int(val)
+            return 1 if val else 0
+
+        recall_chain = [
+            {'key': 'relationship_base', 'label': '关系底座', 'count': _stage_count(recall_info.get('relationship_base')), 'detail': recall_info.get('relationship_base')},
+            {'key': 'opening', 'label': '开场记忆', 'count': _stage_count(recall_info.get('opening')), 'detail': recall_info.get('opening')},
+            {'key': 'relevant_recall', 'label': '相关召回', 'count': _stage_count(recall_info.get('relevant_recall')), 'detail': recall_info.get('relevant_recall')},
+            {'key': 'natural_association', 'label': '自然联想', 'count': _stage_count(recall_info.get('natural_association')), 'detail': recall_info.get('natural_association')},
+            {'key': 'carried', 'label': '延续记忆', 'count': _stage_count(recall_info.get('carried')), 'detail': recall_info.get('carried')},
+            {'key': 'vector', 'label': '向量召回', 'count': _stage_count(recall_info.get('vector')), 'detail': recall_info.get('vector')},
+        ]
+
+        candidates = recall_info.get('candidates') or row.get('recall_candidates') or []
+        injected = recall_info.get('injected') or recall_info.get('items') or recall_info.get('memories') or []
+        injected_ids = {str(it.get('memory_id') or it.get('id') or '') for it in injected if isinstance(it, dict)}
+        dropped_candidates = recall_info.get('dropped') or [
+            c for c in candidates
+            if isinstance(c, dict) and str(c.get('memory_id') or c.get('id') or '') not in injected_ids
+        ]
+
+        prompt_sections = row.get('prompt_sections') or row.get('sections') or tr.get('sections') or []
+        cache_hit_rate = None
+        if isinstance(cache_hit, (int, float)) and isinstance(act_in, (int, float)) and act_in > 0:
+            cache_hit_rate = round((cache_hit / act_in) * 100, 1)
+
         turns.append({
             'request_id': rid,
             'time': ts,
-            'model': mdl or '未知模型',
+            'model': mdl or '未指定模型',
             'purpose': purp,
+            'purpose_label': {'chat': '日常对话', 'experience': '经历整理', 'judge': '想起判官'}.get(purp, purp),
             'summary': str(row.get('user_preview') or row.get('summary') or row.get('prompt_preview') or '对话轮次'),
             'tokens': {
                 'estimated': est_tokens,
                 'actual_input': act_in,
                 'actual_output': act_out,
                 'cache_hit': cache_hit,
+                'cache_hit_rate': cache_hit_rate,
                 'memory_tokens': mem_tokens,
                 'is_estimated_only': act_in is None,
             },
             'cost_cny': round(total_cost, 6) if costs else None,
             'recall': recall_info,
+            'recall_chain': recall_chain,
+            'candidates': candidates,
+            'injected': injected,
+            'dropped_candidates': dropped_candidates,
+            'prompt_sections': prompt_sections,
             'raw_available': bool(row),
         })
 
@@ -977,6 +1125,7 @@ def recall_turns(hub, page=1, limit=20, date='', purpose='', model='', status=''
             if isinstance(mem_tokens, (int, float)):
                 td['mem_tokens_sum'] += mem_tokens
 
+    turns.sort(key=lambda x: x.get('time', ''), reverse=True)
     total = len(turns)
     p = max(1, int(page))
     lim = max(1, min(100, int(limit)))
@@ -995,20 +1144,51 @@ def recall_turn_report(hub, request_id):
     res = recall_turns(hub, page=1, limit=100)
     match = next((t for t in res['items'] if t['request_id'] == request_id), None)
     if not match:
-        return {'ok': False, 'error': f'未找到 Request ID={request_id} 的轮次记录'}
+        return {'ok': False, 'error': f'未找到对应的轮次记录'}
     tk = match['tokens']
     lines = [
-        f"# VEIL Brain · 单轮召回与注入诊断报告",
+        '# VEIL Brain · 单轮召回与注入诊断报告',
         f"- 时间：{match['time']}",
-        f"- 模型：{match['model']} · 用途：{match['purpose']}",
-        f"- Request ID：`{match['request_id']}`",
+        f"- 模型：{match['model']} · 用途：{match.get('purpose_label') or match['purpose']}",
+        f"- 请求标识：`{match['request_id']}`",
         f"- 对话摘要：{match['summary']}",
         '',
-        '## Token 与成本证据',
+        '## 1. Token、缓存与成本证据',
         f"- 快照预估 Token：{tk['estimated'] if tk['estimated'] is not None else '未记录'}",
-        f"- 实际输入 Token：{tk['actual_input'] if tk['actual_input'] is not None else '未计量（缺失原因：上游未返回 usage）'}",
+        f"- 实际输入 Token：{tk['actual_input'] if tk['actual_input'] is not None else '未计量（上游未返回 usage）'}",
         f"- 实际输出 Token：{tk['actual_output'] if tk['actual_output'] is not None else '未计量'}",
+        f"- 缓存命中 Token：{tk['cache_hit'] if tk['cache_hit'] is not None else 0}" + (f"（命中率 {tk['cache_hit_rate']}%）" if tk.get('cache_hit_rate') is not None else ''),
         f"- 记忆注入 Token：{tk['memory_tokens'] if tk['memory_tokens'] is not None else '待核实'}",
         f"- 结算费用：{('¥' + str(match['cost_cny'])) if match['cost_cny'] is not None else '暂无结算记录'}",
     ]
+
+    p_secs = match.get('prompt_sections') or []
+    if p_secs:
+        lines.extend(['', '## 2. Prompt 分区 Token 分布'])
+        for sec in p_secs:
+            if isinstance(sec, dict):
+                lines.append(f"- {sec.get('label') or sec.get('name')}: {sec.get('tokens', 0)} tokens")
+
+    chain = match.get('recall_chain') or []
+    if chain:
+        lines.extend(['', '## 3. 六层召回链路'])
+        for st in chain:
+            lines.append(f"- {st['label']}: 命中 {st['count']} 项")
+
+    cands = match.get('candidates') or []
+    inj = match.get('injected') or []
+    dropped = match.get('dropped_candidates') or []
+    lines.extend([
+        '',
+        '## 4. 候选检索与最终注入对比',
+        f"- 候选召回：{len(cands)} 条 · 最终注入：{len(inj)} 条 · 未入选：{len(dropped)} 条",
+    ])
+    if inj:
+        lines.append('- 最终注入记忆：' + '、'.join(str(x.get('title') or x.get('memory_id') or '') for x in inj if isinstance(x, dict)))
+    if dropped:
+        lines.append('- 未入选候选：' + '、'.join(
+            f"{x.get('title') or x.get('memory_id') or ''}({x.get('drop_reason') or '预算/相关性筛选'})"
+            for x in dropped if isinstance(x, dict)
+        ))
+
     return {'ok': True, 'markdown': '\n'.join(lines), 'turn': match}
