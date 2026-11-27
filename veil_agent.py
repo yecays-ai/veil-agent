@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-import ledger_recovery
+from veil.system import ledger_recovery
 from veil.persona import persona_versions
 import prompts
 from veil.tools import tool_failures
@@ -2274,7 +2274,7 @@ class Chat:
         self.maintenance = None
         executor = getattr(cfg, 'executor', None) or {}
         if executor.get('enabled') and self.tool_mode and cfg.id == 'peter':
-            from maintenance import MaintenanceManager
+            from veil.system.maintenance import MaintenanceManager
             self.maintenance = MaintenanceManager(
                 store, cfg.id, repo_path=executor.get('maintenance_repo') or ROOT,
                 worktree_root=executor.get('worktree_root'),
@@ -2468,7 +2468,7 @@ class Chat:
             from veil.tools.executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
             schemas.append({'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])})
         if self.maintenance is not None and not self.glance_mode:
-            from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
+            from veil.system.maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
             schema = {'type': 'function', 'function': dict(MAINTENANCE_TOOL['function'])}
             active = self.maintenance.active_summary()
             if active:
@@ -4516,7 +4516,7 @@ class Chat:
                           bound(history))
         # Ticket 403: one snapshot per real model request (a turn with tools has several). Writes never
         # feed back into the request and never break it.
-        import request_snapshots
+        from veil.system import request_snapshots
         snapshot_kind = request_kind(self, text, autonomy)
         system_labels = [label_list[index] for index, message in enumerate(messages)
                          if message.get('role') == 'system' and label_list[index]]

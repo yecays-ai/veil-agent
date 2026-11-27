@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from veil.brain.recall import brain_retrieval
 from veil.brain.storage import brain_writer
-import diagnostics
+from veil.system import diagnostics
 from veil.brain.storage import veil_brain
 from veil.brain.storage.brain_read import BrainRead
 from veil.brain.memory_agent import Memory

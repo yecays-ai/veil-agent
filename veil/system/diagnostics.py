@@ -1077,7 +1077,8 @@ def _dir_size(root, limit=4000):
 
 
 def service_info(root, role, hub=None):
-    git_dir = Path(__file__).resolve().parent / '.git'
+    from veil.paths import PROJECT_ROOT
+    git_dir = PROJECT_ROOT / '.git'
     head = ''
     try:
         head = (git_dir / 'HEAD').read_text(encoding='utf-8').strip()

@@ -484,7 +484,11 @@ class AcceptanceInstance:
 
     def start(self):
         self._prepare()
-        command = [str(self.python), str(self.code / 'web_agent.py'), '--acceptance',
+        if (self.code / 'veil' / 'server' / 'web_agent.py').is_file():
+            entry = ['-m', 'veil.server.web_agent']
+        else:
+            entry = [str(self.code / 'web_agent.py')]
+        command = [str(self.python), *entry, '--acceptance',
                    '--config-root', str(self.config), '--data-dir', str(self.data), '--port', '0']
         backend = subprocess.Popen(
             command, cwd=str(self.code), env=_clean_env({'PYTHONUTF8': '1'}),

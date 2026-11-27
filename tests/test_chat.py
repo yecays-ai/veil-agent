@@ -123,7 +123,7 @@ output_cny_per_million = "8"
         self.chat = Chat(self.cfg, self.store, self.budget, self.model)
 
     def test_send_writes_a_request_snapshot_with_labels(self):
-        import request_snapshots
+        from veil.system import request_snapshots
         self.chat.send('first message')
         self.chat.send('hello snapshot')
         items = request_snapshots.recent(self.store.root, 'test')
@@ -135,7 +135,7 @@ output_cny_per_million = "8"
         self.assertGreaterEqual(record['cache_prefix'], 1)
 
     def test_tool_loop_snapshot_records_every_model_request(self):
-        import request_snapshots
+        from veil.system import request_snapshots
         tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(
             name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
         first = SimpleNamespace(content=None, tool_calls=[tool_call],

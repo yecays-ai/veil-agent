@@ -39,7 +39,7 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         safe_tool_activity_detail)
 from veil.tools import workbench_switch
 from veil.persona import persona_versions
-import diagnostics
+from veil.system import diagnostics
 from veil.autonomy.autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
 from veil.autonomy.codex_watch import CodexWatchController
@@ -2438,7 +2438,7 @@ def make_handler(hub, token):
             if budget is None:
                 self._send(503, {'error': '预算账本尚未就绪。'})
                 return
-            from ledger_recovery import is_unverified
+            from veil.system.ledger_recovery import is_unverified
             try:
                 with budget.mutex:
                     stamp = budget.clock()
@@ -3151,7 +3151,7 @@ def make_handler(hub, token):
         def _get_request_snapshots(self, query):
             if not self._guard(self.headers.get('X-Token')):
                 return
-            import request_snapshots
+            from veil.system import request_snapshots
             chat = hub.chat
             if chat is None:
                 self._send(503, {'error': '服务还没准备好。'})
@@ -3163,7 +3163,7 @@ def make_handler(hub, token):
         def _get_request_snapshot(self, query):
             if not self._guard(self.headers.get('X-Token')):
                 return
-            import request_snapshots
+            from veil.system import request_snapshots
             chat = hub.chat
             if chat is None:
                 self._send(503, {'error': '服务还没准备好。'})
@@ -3995,7 +3995,7 @@ def main(argv=None):
                 channel for channel in (EmailChannel.from_env(config_root, cfg, store.root),
                                         QQChannel.from_env(config_root, cfg, store.root)) if channel]
             activity = ActivityState(store.root / cfg.id / 'resident-state.json')
-            from runtime_monitor import RuntimeMonitor
+            from veil.system.runtime_monitor import RuntimeMonitor
             runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
             use_memory = memory_available(cfg)
             hub = Hub(cfg.name, activity, None, store.root / cfg.id / 'media',

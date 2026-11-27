@@ -48,7 +48,7 @@ if "%BEHIND%"=="0" goto backup_done
 if /i "%~3"=="--skip-backup" goto backup_skipped
 if not exist ".venv\Scripts\python.exe" goto no_venv
 echo       New version found. Backing up your data first...
-".venv\Scripts\python.exe" backup_restore.py pre-update
+".venv\Scripts\python.exe" -m veil.system.backup_restore pre-update
 if errorlevel 1 goto backup_failed
 goto backup_done
 :backup_skipped

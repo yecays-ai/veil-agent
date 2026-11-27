@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-import diagnostics
-from diagnostics import (classify_denial, config_findings, links, module_states, overview,
+from veil.system import diagnostics
+from veil.system.diagnostics import (classify_denial, config_findings, links, module_states, overview,
                          recent_issues, report_text)
 
 

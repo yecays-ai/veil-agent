@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import backup_restore
+from veil.system import backup_restore
 from veil.autonomy.autonomy import AutonomyController
 from veil_agent import AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, load_character, run_chat
 from web_agent import Hub, serve_chat, start_server

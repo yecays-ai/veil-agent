@@ -13,7 +13,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import maintenance
+from veil.system import maintenance
 
 
 def _git(repo, *args):

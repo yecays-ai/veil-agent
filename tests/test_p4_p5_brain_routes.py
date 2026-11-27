@@ -9,8 +9,8 @@ import json
 import sqlite3
 
 from veil.brain import brain_health
-import diagnostics
-import request_snapshots
+from veil.system import diagnostics
+from veil.system import request_snapshots
 import web_agent
 
 

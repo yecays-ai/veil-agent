@@ -9,9 +9,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-import backup_restore
-import data_repair
-import ledger_recovery as ledger
+from veil.system import backup_restore
+from veil.system import data_repair
+from veil.system import ledger_recovery as ledger
 from veil_agent import Budget, BudgetExceeded, Store, UserError
 
 DAY = '2026-11-01T10:00:00+08:00'

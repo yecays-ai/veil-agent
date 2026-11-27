@@ -4,7 +4,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from maintenance import TOKEN_FILE_NAME, TOKEN_PATTERN
+from veil.system.maintenance import TOKEN_FILE_NAME, TOKEN_PATTERN
 from veil.paths import PROJECT_ROOT as ROOT
 
 

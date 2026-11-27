@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 
-import backup_restore
+from veil.system import backup_restore
 from veil.autonomy.long_tasks import LongTaskStore
 from veil_agent import Store, UserError
 
@@ -37,7 +37,7 @@ def _child_code():
 import json, os, sys, time
 import traceback
 from pathlib import Path
-import backup_restore
+from veil.system import backup_restore
 from veil.autonomy.long_tasks import LongTaskStore
 from veil_agent import Store
 
