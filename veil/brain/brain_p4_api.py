@@ -596,17 +596,35 @@ def overview(hub):
         assoc_status = mem.association_status()
     else:
         from veil.brain.recall.recall_rotation import settings as load_rot_settings
-        rot_base = load_rot_settings(getattr(cfg, 'memory', None) if cfg is not None else {})
-        a_on = bool(saved_switches.get('association', rot_base.get('association_enabled', True)))
-        a_ctx = bool(saved_switches.get('association_contextual', rot_base.get('association_contextual_enabled', False)))
-        a_leisure = bool(saved_switches.get('association_leisure', rot_base.get('leisure_association_enabled', False)))
+        mem_cfg = getattr(cfg, 'memory', None) if cfg is not None else {}
+        rot_base = load_rot_settings(mem_cfg)
+        raw_recall = (mem_cfg or {}).get('recall') if isinstance((mem_cfg or {}).get('recall'), dict) else {}
+        recall_enabled = bool((mem_cfg or {}).get('enabled', True)) and raw_recall.get('enabled') is not False
+        # Read the same persistence file (`recall-association.json`) used by Memory._save_association_switches.
+        persisted_assoc = {}
+        if store is not None and cfg is not None:
+            try:
+                p_path = Path(store.root) / f'{cfg.id}/recall-association.json'
+                if p_path.is_file():
+                    raw_p = json.loads(p_path.read_text(encoding='utf-8'))
+                    if isinstance(raw_p, dict):
+                        persisted_assoc = raw_p
+            except (OSError, ValueError):
+                persisted_assoc = {}
+        a_on = bool(persisted_assoc.get('association_enabled',
+                                        saved_switches.get('association', rot_base.get('association_enabled', True))))
+        a_ctx = bool(persisted_assoc.get('association_contextual_enabled',
+                                         saved_switches.get('association_contextual', rot_base.get('association_contextual_enabled', False))))
+        a_leisure = bool(persisted_assoc.get('leisure_association_enabled',
+                                             saved_switches.get('association_leisure', rot_base.get('leisure_association_enabled', False))))
         assoc_status = {
             'available': True,
+            'recall_enabled': recall_enabled,
             'enabled': a_on,
             'contextual_enabled': a_ctx,
             'leisure_enabled': a_leisure,
-            'leisure_effective': bool(a_on and a_leisure),
-            'effective_mode': 'disabled' if not a_on else ('contextual' if a_ctx else 'legacy'),
+            'leisure_effective': bool(recall_enabled and a_on and a_leisure),
+            'effective_mode': 'disabled' if not (recall_enabled and a_on) else ('contextual' if a_ctx else 'legacy'),
             'min_similarity': float(rot_base.get('association_min_similarity', 0.52)),
             'pool_size': int(rot_base.get('association_pool_size', 32)),
             'leisure_min_similarity': float(rot_base.get('leisure_association_min_similarity', 0.38)),
@@ -614,8 +632,9 @@ def overview(hub):
             'leisure_cooldown_turns': int(rot_base.get('leisure_association_cooldown_turns', 12)),
             'leisure_pool_size': int(rot_base.get('leisure_association_pool_size', 36)),
         }
+    recall_on = bool(assoc_status.get('recall_enabled', True))
     leisure_on = bool(assoc_status.get('leisure_enabled', False))
-    leisure_eff = bool(assoc_status.get('leisure_effective', assoc_status['enabled'] and leisure_on))
+    leisure_eff = bool(assoc_status.get('leisure_effective', recall_on and assoc_status['enabled'] and leisure_on))
     leisure_diag = {
         'recent_wakes': 0,
         'leisure_wakes': 0,
@@ -668,8 +687,9 @@ def overview(hub):
     )
     leisure_status_text = (
         '已启用 · 下次自主闲暇唤醒生效' if leisure_eff
-        else ('已保存开启（受总开关关闭抑制）' if leisure_on
-              else '已关闭 · 自主唤醒不触发联想')
+        else ('已保存开启（受记忆召回总开关关闭抑制）' if (leisure_on and not recall_on)
+              else ('已保存开启（受自然联想总开关关闭抑制）' if leisure_on
+                    else '已关闭 · 自主唤醒不触发联想'))
     )
     leisure_detail = (
         f"独立灰度开关（默认关闭）· 仅在自主闲暇态触发，任务态零干扰"

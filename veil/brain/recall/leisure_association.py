@@ -43,9 +43,12 @@ _LEISURE_CUE = re.compile(
 )
 
 # Third-person stage directions / narrative actions that violate Peter's grounded first-person persona.
+# Avoids flagging ordinary Markdown emphasis (e.g. `*really*` or `*important*`) by requiring
+# recognizable stage-direction action verbs inside asterisk spans.
 _THIRD_PERSON_ACTION = re.compile(
     r'(?:'
-    r'\*[^*\n]{2,80}\*'
+    r'\*(?:(?:he|peter)\s+)?(?:looks?|glances?|leans?|sighs?|smiles?|grins?|nods?|shakes?|sits?|stands?|walks?|pauses?|opens?|checks?|types?|taps?|stretches?|blinks?|chuckles?|laughs?|frowns?|shrugs?|takes?\s+a\s+sip|pours?|turns?|stares?)\b[^*\n]{0,70}\*'
+    r'|\*(?:他|彼得)?(?:起身|转头|看了看|叹了口气|叹气|笑了笑|微笑|坐下来|打开|点开|伸了个懒腰|眨了眨眼|摇了摇头|点了点头|静静地|环顾)[^*\n]{0,40}\*'
     r'|（(?:他|彼得|Peter)[^）\n]{1,40}）'
     r'|\((?:he|peter)\s+(?:looks?|glances?|leans?|sighs?|smiles?|sits?|stands?|walks?|pauses?|opens?|checks?|types?|taps?|nods?|shakes?)\b[^)\n]{0,60}\)'
     r'|(?:^|\n)\s*(?:Peter|He)\s+(?:looks?|glances?|leans?|sighs?|smiles?|sits?|stands?|walks?|pauses?|opens?|checks?|types?|taps?|decides?\s+to)\b'
@@ -54,13 +57,37 @@ _THIRD_PERSON_ACTION = re.compile(
     re.I,
 )
 
-# Claims of concrete tool-backed actions when no tool actually succeeded in this wake.
-_UNBACKED_ACTION_CLAIM = re.compile(
-    r'(?:'
-    r'(?:我(?:已经|刚刚|刚才|刚)|已(?:经)?)(?:查看了|检查了|打开了|读取了|翻看了|搜索了|查了|修改了|写入了|保存了|更新了|创建了|删除了|发送了|发了消息|整理了桌面|画好了)'
-    r'|\bI\s+(?:just\s+)?(?:checked|opened|read|inspected|searched|updated|wrote|saved|edited|created|deleted|sent\s+(?:a\s+message|her)|tidied|drew|ran)\b'
-    r')',
-    re.I,
+# Category-specific action claims mapped to concrete tool categories so an unrelated tool call
+# cannot mask an unbacked action claim.
+_ACTION_CLAIM_CATEGORIES = (
+    (
+        'send_message',
+        re.compile(r'(?:(?:我(?:已经|刚刚|刚才|刚)|已(?:经)?)(?:发送了|发了消息|给她发了|留言了)|\bI\s+(?:just\s+)?sent\s+(?:a\s+message|her|lan)\b)', re.I),
+        lambda name: name in ('send_message', 'screen_pop'),
+    ),
+    (
+        'write_or_edit',
+        re.compile(r'(?:(?:我(?:已经|刚刚|刚才|刚)|已(?:经)?)(?:修改了|写入了|保存了|更新了|创建了|删除了)|\bI\s+(?:just\s+)?(?:updated|wrote|saved|edited|created|deleted)\b)', re.I),
+        lambda name: (name in ('write_file', 'append_file', 'edit_file', 'create_directory', 'delete_file',
+                               'move_lab_file', 'hold', 'thought', 'long_task_update', 'set_next_wake',
+                               'set_wake_rhythm', 'life_record', 'ongoing_update')
+                      or name.startswith(('write_', 'edit_', 'save_', 'create_', 'delete_', 'update_'))),
+    ),
+    (
+        'read_or_inspect',
+        re.compile(r'(?:(?:我(?:已经|刚刚|刚才|刚)|已(?:经)?)(?:查看了|检查了|打开了|读取了|翻看了|搜索了|查了)|\bI\s+(?:just\s+)?(?:checked|opened|read|inspected|searched)\b)', re.I),
+        lambda name: (name in ('read_text_file', 'read_multiple_files', 'list_directory', 'search_files',
+                               'autonomy_history', 'memory_read', 'memory_catalog', 'memory_history',
+                               'memory_timeline', 'breath_search', 'thought', 'long_task_status')
+                      or name.startswith(('read_', 'list_', 'search_', 'get_', 'find_', 'web_', 'browser_',
+                                          'window', 'desktop', 'mcp_'))),
+    ),
+    (
+        'desktop_or_canvas',
+        re.compile(r'(?:(?:我(?:已经|刚刚|刚才|刚)|已(?:经)?)(?:整理了桌面|画好了)|\bI\s+(?:just\s+)?(?:tidied|drew)\b)', re.I),
+        lambda name: (name in ('draw_on_canvas', 'windows_canvas_action')
+                      or name.startswith(('windows_', 'desktop_'))),
+    ),
 )
 
 # Pure technical/error memory filter so work incident logs do not intrude on quiet leisure wakes.
@@ -108,20 +135,43 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
       - reasons: list[str]
       - leisure_signals: list[str]
     """
-    ctx = wake_context if isinstance(wake_context, dict) else {}
-    reasons = []
-    leisure_signals = []
-
-    wake_kind = str(ctx.get('wake_kind') or 'autonomy').strip().lower()
-    if wake_kind not in ('autonomy', 'scheduled', 'natural', ''):
+    if not isinstance(wake_context, dict) or not wake_context:
         return {
             'is_leisure': False,
-            'mode': 'non_autonomy_wake',
-            'reasons': [f'wake_kind:{wake_kind}'],
+            'mode': 'unknown_wake_context',
+            'reasons': ['missing_or_invalid_wake_context'],
             'leisure_signals': [],
         }
 
-    # 1. Active checkpoint (work or investigation) always blocks leisure association.
+    ctx = wake_context
+    reasons = []
+    leisure_signals = []
+
+    wake_kind = str(ctx.get('wake_kind') or '').strip().lower()
+    # Scheduled wakes (alarms/reminders) are always excluded from idle leisure association.
+    if wake_kind == 'scheduled' or bool(ctx.get('scheduled_reason')):
+        return {
+            'is_leisure': False,
+            'mode': 'scheduled_task_wake',
+            'reasons': ['scheduled_wake_excluded'],
+            'leisure_signals': [],
+        }
+    if wake_kind not in ('autonomy', 'natural'):
+        return {
+            'is_leisure': False,
+            'mode': 'non_autonomy_wake',
+            'reasons': [f'wake_kind:{wake_kind or "missing"}'],
+            'leisure_signals': [],
+        }
+
+    # 1. Active checkpoint (work or investigation) or checkpoint probe failure always blocks.
+    if ctx.get('checkpoint_probe_failed'):
+        return {
+            'is_leisure': False,
+            'mode': 'checkpoint_active',
+            'reasons': ['checkpoint_probe_failed'],
+            'leisure_signals': [],
+        }
     if ctx.get('has_work_checkpoint') or ctx.get('has_investigation_checkpoint'):
         if ctx.get('has_work_checkpoint'):
             reasons.append('active_work_checkpoint')
@@ -154,7 +204,7 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
                 'reasons': reasons,
                 'leisure_signals': [],
             }
-        # Even a paused task with explicit work cues is treated carefully if scheduled to resume it.
+        # Even a paused task with explicit work cues is treated carefully.
         if task_title and _WAKE_WORK_CUE.search(task_title):
             reasons.append('paused_work_task_present')
 
@@ -169,22 +219,7 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
             'leisure_signals': [],
         }
 
-    # 4. Scheduled alarm wake with work/task reason.
-    sched = ctx.get('scheduled_reason')
-    sched_text = ' '.join(sched) if isinstance(sched, list) else str(sched or '')
-    if sched_text.strip():
-        sched_sig = analyze_context(sched_text, recent=None)
-        if sched_sig.get('is_work_task') or _WAKE_WORK_CUE.search(sched_text):
-            return {
-                'is_leisure': False,
-                'mode': 'scheduled_task_wake',
-                'reasons': ['scheduled_work_alarm'],
-                'leisure_signals': [],
-            }
-        if _LEISURE_CUE.search(sched_text):
-            leisure_signals.append('scheduled_leisure_note')
-
-    # 5. Inspect previous wake focus / next_step and structured recall query for active technical tasks.
+    # 4. Inspect previous wake focus / next_step and structured recall query for active technical tasks.
     prev_focus = str(ctx.get('previous_focus') or '').strip()
     prev_next = str(ctx.get('previous_next_step') or '').strip()
     focus_blob = '\n'.join(part for part in (prev_focus, prev_next) if part)
@@ -198,7 +233,6 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
             }
         focus_sig = analyze_context(focus_blob, recent=None)
         if focus_sig.get('has_tech_cmd') or _WAKE_WORK_CUE.search(focus_blob):
-            # Only allow if it is clearly a leisure creative note without concrete engineering task cues.
             if not (_LEISURE_CUE.search(focus_blob) and not focus_sig.get('has_tech_cmd')):
                 return {
                     'is_leisure': False,
@@ -206,11 +240,12 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
                     'reasons': ['previous_focus_or_next_step_work'],
                     'leisure_signals': [],
                 }
+        if _LEISURE_CUE.search(focus_blob):
+            leisure_signals.append('previous_leisure_focus')
 
-    # 6. Check the recall query itself (excluding boilerplate headings).
+    # 5. Check the recall query itself (excluding boilerplate headings).
     q_text = str(query or '').strip()
     if q_text:
-        # Strip fixed boilerplate lines from _recall_query so "(none)" never misleads.
         meaningful_lines = []
         for line in q_text.splitlines():
             stripped = line.strip()
@@ -251,8 +286,15 @@ def classify_wake_mode(wake_context=None, query='', recent=None) -> dict:
         leisure_signals.append('active_thoughts')
     if ctx.get('has_life_state'):
         leisure_signals.append('life_state_present')
+
+    # Require at least one positive leisure/personal-context signal before allowing injection.
     if not leisure_signals:
-        leisure_signals.append('open_idle_wake')
+        return {
+            'is_leisure': False,
+            'mode': 'insufficient_leisure_signal',
+            'reasons': ['no_positive_leisure_signal'],
+            'leisure_signals': [],
+        }
 
     return {
         'is_leisure': True,
@@ -455,14 +497,19 @@ def choose_leisure(query, candidates, metas, last_shown, turn, already, recall_c
 def audit_autonomy_output(answer: str, tool_summaries=None) -> dict:
     """Detect third-person narration or unbacked tool-action roleplay in autonomous wake output.
 
-    Pure diagnostic audit (never alters or deletes user content); recorded in `autonomy.jsonl`
-    and recall diagnostics so Lan and VEIL Lab can verify grounded autonomous behaviour.
+    Matches each claimed action category against concrete successful tool results so an unrelated
+    successful tool call can never mask an unbacked claim.
     """
     text = str(answer or '')
     tools = [item for item in (tool_summaries or ()) if isinstance(item, dict)]
     successful = [item for item in tools if item.get('state') == '成功']
+    success_names = [str(item.get('tool') or '').strip().lower() for item in successful]
     third_person = bool(_THIRD_PERSON_ACTION.search(text))
-    unbacked_claim = bool(not successful and _UNBACKED_ACTION_CLAIM.search(text))
+    unbacked_categories = []
+    for category, pattern, matcher in _ACTION_CLAIM_CATEGORIES:
+        if pattern.search(text) and not any(matcher(name) for name in success_names):
+            unbacked_categories.append(category)
+    unbacked_claim = bool(unbacked_categories)
     flags = []
     if third_person:
         flags.append('third_person_narration')
@@ -472,6 +519,7 @@ def audit_autonomy_output(answer: str, tool_summaries=None) -> dict:
         'clean': not flags,
         'third_person_narration': third_person,
         'unbacked_tool_claim': unbacked_claim,
+        'unbacked_categories': unbacked_categories,
         'flags': flags,
         'successful_tools': len(successful),
     }

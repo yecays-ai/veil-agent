@@ -1112,25 +1112,26 @@ class AutonomyController:
             if previous else 0
         )
         work_cp = getattr(self.chat, 'work_checkpoint', None)
-        inv_cp = getattr(self.chat, 'investigation_checkpoint', None)
+        inv_cp = getattr(self.chat, 'investigation', None)
         has_work_cp = False
         has_inv_cp = False
+        checkpoint_probe_failed = False
         try:
-            if work_cp is not None and hasattr(work_cp, 'active'):
-                has_work_cp = bool(work_cp.active())
-            elif work_cp is not None and hasattr(work_cp, 'read'):
+            if work_cp is not None and hasattr(work_cp, 'read'):
                 cp_data = work_cp.read()
-                has_work_cp = bool(isinstance(cp_data, dict) and cp_data.get('status') == 'active')
+                has_work_cp = bool(isinstance(cp_data, dict) and cp_data.get('status') in ('open', 'active'))
         except Exception:
-            has_work_cp = False
+            # Fail closed: unknown checkpoint state must never be treated as idle leisure.
+            has_work_cp = True
+            checkpoint_probe_failed = True
         try:
-            if inv_cp is not None and hasattr(inv_cp, 'active'):
-                has_inv_cp = bool(inv_cp.active())
-            elif inv_cp is not None and hasattr(inv_cp, 'read'):
+            if inv_cp is not None and hasattr(inv_cp, 'read'):
                 inv_data = inv_cp.read()
-                has_inv_cp = bool(isinstance(inv_data, dict) and inv_data.get('status') == 'active')
+                has_inv_cp = bool(isinstance(inv_data, dict)
+                                  and inv_data.get('status') in ('active', 'interrupted', 'open'))
         except Exception:
-            has_inv_cp = False
+            has_inv_cp = True
+            checkpoint_probe_failed = True
         thoughts = getattr(self.chat, 'thoughts', None)
         thought_preview = ''
         if thoughts is not None:
@@ -1159,6 +1160,7 @@ class AutonomyController:
             'has_pending_action': bool((active_task or {}).get('pending_action')),
             'has_work_checkpoint': has_work_cp,
             'has_investigation_checkpoint': has_inv_cp,
+            'checkpoint_probe_failed': checkpoint_probe_failed,
             'previous_result': str((previous or {}).get('result') or ''),
             'previous_unconfirmed_tools': prev_unconfirmed,
             'previous_focus': _short_context_value((previous or {}).get('current_focus'), 120) if previous else '',
@@ -1383,29 +1385,39 @@ class AutonomyController:
             wake_situation = self._wake_situation(wake_reason)
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
+                import inspect
+                send_kwargs = {'autonomy': True, 'memory_query': self._recall_query()}
                 try:
-                    answer = self.chat.send(self._context(wake_reason), autonomy=True,
-                                            memory_query=self._recall_query(),
-                                            wake_context=wake_situation)
-                except TypeError:
-                    answer = self.chat.send(self._context(wake_reason), autonomy=True,
-                                            memory_query=self._recall_query())
+                    sig = inspect.signature(self.chat.send)
+                    if ('wake_context' in sig.parameters
+                            or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())):
+                        send_kwargs['wake_context'] = wake_situation
+                except (TypeError, ValueError):
+                    pass
+                answer = self.chat.send(self._context(wake_reason), **send_kwargs)
                 self._mark_missed_reported()
                 self.chat.apply_pending_recall()
             from veil.brain.recall.leisure_association import audit_autonomy_output
-            record['output_audit'] = audit_autonomy_output(answer, self.chat.last_tool_summaries)
-            mem_debug = getattr(getattr(self.chat, 'memory', None), 'last_recall_debug', None)
-            if isinstance(mem_debug, dict) and isinstance(mem_debug.get('leisure_association'), dict):
-                la = mem_debug['leisure_association']
-                record['leisure_association'] = {
-                    'effective': bool(la.get('effective', False)),
-                    'wake_mode': str((la.get('wake_gate') or {}).get('mode') or la.get('context_mode') or ''),
-                    'is_leisure': bool((la.get('wake_gate') or {}).get('is_leisure', False)),
-                    'picked': list(la.get('picked') or []),
-                    'reason': str(la.get('reason') or ''),
-                    'similarity': la.get('similarity'),
-                    'meaning_bonus': la.get('meaning_bonus', 0.0),
-                }
+            snaps = getattr(self.chat, '_autonomy_snapshots', None)
+            run_snap = snaps.pop(started_at, None) if isinstance(snaps, dict) else None
+            snap_tools = run_snap['tools'] if isinstance(run_snap, dict) else self.chat.last_tool_summaries
+            record['output_audit'] = audit_autonomy_output(answer, snap_tools)
+            if isinstance(run_snap, dict) and isinstance(run_snap.get('leisure_association'), dict):
+                record['leisure_association'] = dict(run_snap['leisure_association'])
+            else:
+                mem_debug = getattr(getattr(self.chat, 'memory', None), 'last_recall_debug', None)
+                if isinstance(mem_debug, dict) and isinstance(mem_debug.get('leisure_association'), dict):
+                    la = mem_debug['leisure_association']
+                    record['leisure_association'] = {
+                        'effective': bool(la.get('effective', False)),
+                        'wake_mode': str((la.get('wake_gate') or {}).get('mode') or la.get('context_mode') or ''),
+                        'is_leisure': bool((la.get('wake_gate') or {}).get('is_leisure', False)),
+                        'picked': list(la.get('picked') or []),
+                        'reason': str(la.get('reason') or ''),
+                        'similarity': la.get('similarity'),
+                        'meaning_bonus': la.get('meaning_bonus', 0.0),
+                        'budget_dropped': bool(la.get('budget_dropped', False)),
+                    }
             record['decision'] = answer.strip()[:1000]
             record['reason'] = answer.strip()[:1000]
             for line in answer.splitlines():

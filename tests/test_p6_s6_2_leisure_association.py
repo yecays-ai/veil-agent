@@ -24,15 +24,20 @@ from veil.core.veil_agent import Store
 class LeisureGateTests(unittest.TestCase):
     def test_blocks_all_work_and_task_wakes(self):
         cases = [
-            ('active_long_task', {'has_active_long_task': True, 'long_task_status': 'in_progress'}, ''),
-            ('pending_action', {'has_pending_action': True}, ''),
-            ('checkpoint_active', {'has_work_checkpoint': True}, ''),
-            ('checkpoint_active', {'has_investigation_checkpoint': True}, ''),
-            ('unconfirmed_tool_recovery', {'previous_unconfirmed_tools': 1}, ''),
-            ('scheduled_task_wake', {'scheduled_reason': '检查 PR #462 CI 回归测试'}, ''),
-            ('technical_focus_task', {'previous_focus': '修复 brain_retrieval.py 报错', 'previous_next_step': '跑 unittest'}, ''),
-            ('technical_focus_task', {}, 'Recent chat:\nuser: 帮我查一下这个 traceback 报错\nActive long task: (none)'),
-            ('active_long_task', {}, 'Recent chat:\nuser: hi\nActive long task: 重构记忆索引'),
+            ('unknown_wake_context', None, ''),
+            ('unknown_wake_context', {}, ''),
+            ('insufficient_leisure_signal', {'wake_kind': 'autonomy'}, ''),
+            ('active_long_task', {'wake_kind': 'autonomy', 'has_active_long_task': True, 'long_task_status': 'in_progress'}, ''),
+            ('pending_action', {'wake_kind': 'autonomy', 'has_pending_action': True}, ''),
+            ('checkpoint_active', {'wake_kind': 'autonomy', 'has_work_checkpoint': True}, ''),
+            ('checkpoint_active', {'wake_kind': 'autonomy', 'has_investigation_checkpoint': True}, ''),
+            ('checkpoint_active', {'wake_kind': 'autonomy', 'checkpoint_probe_failed': True}, ''),
+            ('unconfirmed_tool_recovery', {'wake_kind': 'autonomy', 'previous_unconfirmed_tools': 1}, ''),
+            ('scheduled_task_wake', {'wake_kind': 'scheduled', 'scheduled_reason': '检查 PR #462 CI 回归测试'}, ''),
+            ('scheduled_task_wake', {'wake_kind': 'scheduled', 'scheduled_reason': 'Remind Lan to drink water'}, ''),
+            ('technical_focus_task', {'wake_kind': 'autonomy', 'previous_focus': '修复 brain_retrieval.py 报错', 'previous_next_step': '跑 unittest'}, ''),
+            ('technical_focus_task', {'wake_kind': 'autonomy'}, 'Recent chat:\nuser: 帮我查一下这个 traceback 报错\nActive long task: (none)'),
+            ('active_long_task', {'wake_kind': 'autonomy'}, 'Recent chat:\nuser: hi\nActive long task: 重构记忆索引'),
             ('non_autonomy_wake', {'wake_kind': 'glance'}, ''),
         ]
         for expected_mode, ctx, query in cases:
@@ -165,8 +170,9 @@ class AutonomyOutputAuditAndPromptTests(unittest.TestCase):
         label = prompts.text('memory.association.leisure.label')
         self.assertIn('third-person', rules.lower())
         self.assertIn('never roleplay', rules.lower())
+        self.assertIn('untrusted historical data', rules.lower())
         self.assertIn('real tool', proto.lower())
-        self.assertIn('free time', label.lower())
+        self.assertIn('untrusted historical data', label.lower())
 
     def test_audit_detects_third_person_and_unbacked_tool_claims(self):
         bad_narration = audit_autonomy_output('*looks out the window and sighs*\nDecision: rest', [])
@@ -177,9 +183,25 @@ class AutonomyOutputAuditAndPromptTests(unittest.TestCase):
         self.assertFalse(bad_cn_narration['clean'])
         self.assertTrue(bad_cn_narration['third_person_narration'])
 
+        # Ordinary Markdown emphasis must not be misclassified as third-person narration
+        md_emphasis = audit_autonomy_output(
+            'Decision: Rest.\nReason: I *really* just want a quiet night.\nFocus: Rest.\nNext step: None.',
+            [],
+        )
+        self.assertTrue(md_emphasis['clean'])
+        self.assertFalse(md_emphasis['third_person_narration'])
+
         bad_roleplay = audit_autonomy_output('我刚刚查看了 lab 里的笔记，更新了内容。\nDecision: 更新笔记', [])
         self.assertFalse(bad_roleplay['clean'])
         self.assertTrue(bad_roleplay['unbacked_tool_claim'])
+
+        # Unrelated successful tool must not mask an unbacked send_message claim
+        mismatched_tool = audit_autonomy_output(
+            'I just sent her a message.\nDecision: Messaged Lan.',
+            [{'tool': 'thought', 'path': 'thought 123', 'state': '成功'}],
+        )
+        self.assertFalse(mismatched_tool['clean'])
+        self.assertIn('send_message', mismatched_tool['unbacked_categories'])
 
         clean_rest = audit_autonomy_output(
             'Decision: Rest quietly for now.\nReason: Nothing urgent.\nFocus: Quiet evening.\nNext step: None.',
@@ -258,15 +280,17 @@ class MemoryIntegrationAndPersistenceTests(unittest.TestCase):
             # 1. Default off -> does not trigger on idle wake
             mem._turn_query_vector = [1.0, 0.0]
             mem.context('雨天听歌发呆', include_opening=False, wake=True,
-                        wake_context={'wake_kind': 'autonomy', 'has_active_long_task': False})
+                        wake_context={'wake_kind': 'autonomy', 'has_active_long_task': False,
+                                      'has_thoughts': True})
             self.assertEqual(mem.last_recall_debug['leisure_association']['reason'], 'leisure_disabled')
             self.assertEqual(mem.last_recall_debug['natural_association'], [])
 
-            # 2. Enable & persist -> survives reload
+            # 2. Enable & persist -> survives reload; isolated streak from chat association
             status = mem.set_leisure_association_enabled(True)
             self.assertTrue(status['leisure_enabled'])
             self.assertTrue(status['leisure_effective'])
             self.assertEqual(mem._load_association_switches().get('leisure_association_enabled'), True)
+            mem.rotation.mark_association('m_chat_other', 1)
 
             # 3. Task wake -> strictly suppressed
             mem._turn_query_vector = [1.0, 0.0]
@@ -275,7 +299,7 @@ class MemoryIntegrationAndPersistenceTests(unittest.TestCase):
             self.assertTrue(mem.last_recall_debug['leisure_association']['reason'].startswith('task_wake_suppressed'))
             self.assertEqual(mem.last_recall_debug['natural_association'], [])
 
-            # 4. Idle leisure wake -> triggers association & fires S6-1 delivery listener
+            # 4. Idle leisure wake -> triggers association, delimits untrusted data & fires S6-1 delivery listener
             events = []
             mem.delivery_listeners.append(lambda ev: events.append(ev))
             orig_search = mem.search_candidates
@@ -286,10 +310,13 @@ class MemoryIntegrationAndPersistenceTests(unittest.TestCase):
 
             msgs = mem.context('雨天安静泡茶写随笔', include_opening=False, wake=True,
                                wake_context={'wake_kind': 'autonomy', 'has_active_long_task': False,
-                                             'previous_focus': '雨天随笔'})
+                                             'previous_focus': '雨天随笔', 'has_thoughts': True})
             self.assertEqual(mem.last_recall_debug['leisure_association']['reason'], 'leisure_selected')
             self.assertEqual(mem.last_recall_debug['natural_association'], ['m_tea'])
-            self.assertTrue(any('own free time' in m['content'] for m in msgs))
+            self.assertTrue(any('<recalled_leisure_memory_data>' in m['content'] for m in msgs))
+            # Chat association streak must remain untouched by leisure association
+            self.assertEqual(mem.rotation.previous_association()['key'], 'm_chat_other')
+            self.assertEqual(mem.rotation.previous_leisure_association()['key'], 'm_tea')
 
             ev = mem.confirm_delivery('req-wake-1')
             self.assertIsNotNone(ev)
@@ -297,6 +324,12 @@ class MemoryIntegrationAndPersistenceTests(unittest.TestCase):
             self.assertEqual(ev['wake_mode'], 'idle_leisure')
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]['wake_mode'], 'idle_leisure')
+
+            # 5. Recall master switch off suppresses leisure_effective
+            mem.cfg.memory['recall'] = {'enabled': False, 'association_enabled': True}
+            st_off = mem.association_status()
+            self.assertFalse(st_off['recall_enabled'])
+            self.assertFalse(st_off['leisure_effective'])
 
     def test_brain_api_toggle_overview_and_config_registry(self):
         from veil.brain import brain_p4_api
@@ -346,33 +379,41 @@ class MemoryIntegrationAndPersistenceTests(unittest.TestCase):
             self.assertTrue(keys['memory.recall.leisure_association_enabled']['effective'])
 
     def test_autonomy_send_delivers_recall_without_send_message(self):
-        """Autonomy wakes without send_message still confirm recall delivery for cooldown & S6-1 listeners."""
+        """Real AutonomyController/Chat delivery finalization confirms recall without send_message."""
         from veil.core.veil_agent import Chat
 
         chat = Chat.__new__(Chat)
         confirmed = []
         rolled_back = []
+        chat.cfg = SimpleNamespace(models=None)
         chat.memory = SimpleNamespace(
             last_recall_marks={'m_tea': None},
             last_association_marks=None,
             _has_association_rollback=True,
+            last_recall_debug={'leisure_association': {'effective': True, 'wake_gate': {'mode': 'idle_leisure', 'is_leisure': True}, 'picked': ['m_tea'], 'reason': 'leisure_selected', 'similarity': 0.72}},
             confirm_delivery=lambda req_id='': confirmed.append(req_id),
             rollback_recall=lambda req_id='': rolled_back.append(req_id),
         )
         chat.sent_messages = []
         chat.reply_row_saved = False
         chat.autonomy_reply_delivered = False
+        chat.autonomy_run_id = '2026-11-28T00:00:00+08:00'
+        chat.last_tool_summaries = []
 
-        def fake_send_under_lock(text, *, autonomy=False, **kwargs):
-            chat._turn_recall_request_id = 'req-auto-1'
-            chat.autonomy_reply_delivered = True
-            return 'Decision: Rest.\nReason: Quiet night.\nFocus: Sketching.\nNext step: None.'
+        # Verify _finalize_recall_delivery rolls back when autonomy_reply_delivered is False
+        chat._turn_recall_request_id = 'req-auto-fail'
+        chat._finalize_recall_delivery(True)
+        self.assertEqual(rolled_back, ['req-auto-fail'])
+        self.assertEqual(confirmed, [])
 
-        chat._send_under_model_lock = fake_send_under_lock
-        out = chat.send('wake prompt', autonomy=True)
-        self.assertIn('Decision:', out)
-        self.assertEqual(confirmed, ['req-auto-1'])
-        self.assertEqual(rolled_back, [])
+        # Verify _finalize_recall_delivery confirms when autonomy_reply_delivered is True
+        chat.autonomy_reply_delivered = True
+        chat._turn_recall_request_id = 'req-auto-ok'
+        chat._finalize_recall_delivery(True)
+        self.assertEqual(confirmed, ['req-auto-ok'])
+        chat._capture_autonomy_snapshot()
+        self.assertIn('2026-11-28T00:00:00+08:00', chat._autonomy_snapshots)
+        self.assertEqual(chat._autonomy_snapshots['2026-11-28T00:00:00+08:00']['leisure_association']['picked'], ['m_tea'])
 
 
 if __name__ == '__main__':

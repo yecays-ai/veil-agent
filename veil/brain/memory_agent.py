@@ -992,14 +992,18 @@ class Memory:
 
     def association_status(self):
         eff = self.effective_recall_settings()
-        enabled = bool(eff.get('association_enabled', True))
+        mem_cfg = getattr(getattr(self, 'cfg', None), 'memory', None) or {}
+        raw_recall = mem_cfg.get('recall') if isinstance(mem_cfg.get('recall'), dict) else {}
+        recall_enabled = bool(mem_cfg.get('enabled', True)) and raw_recall.get('enabled') is not False and eff.get('enabled') is not False
+        enabled = bool(recall_enabled and eff.get('association_enabled', True))
         contextual = bool(eff.get('association_contextual_enabled', False))
         leisure = bool(eff.get('leisure_association_enabled', False))
         mode = 'disabled' if not enabled else ('contextual' if contextual else 'legacy')
-        leisure_effective = bool(enabled and leisure)
+        leisure_effective = bool(recall_enabled and enabled and leisure)
         return {
             'available': True,
-            'enabled': enabled,
+            'recall_enabled': recall_enabled,
+            'enabled': bool(eff.get('association_enabled', True)),
             'contextual_enabled': contextual,
             'leisure_enabled': leisure,
             'leisure_effective': leisure_effective,
@@ -1211,6 +1215,15 @@ class Memory:
                             'embedding_wait_ms': embedding_wait_ms, **meta}
                         return text
                 embedder = self.embedder()
+                # P6-S6-2: capture the query vector produced by the non-prefetched Brain search path
+                # so leisure/contextual association can reuse it without a second embedding call
+                # even when the recall judge is disabled or its circuit breaker is open.
+                def _capturing_embedder(text_arg):
+                    vec = embedder(text_arg)
+                    if vec is not None:
+                        self._turn_query_vector = vec
+                    return vec
+
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
                 if getattr(self, 'budget', None) is not None:
@@ -1219,7 +1232,7 @@ class Memory:
                     settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
                 try:
                     text, meta = brain_retrieval_search(
-                        brain_db, query, limit=asked, embedder=embedder,
+                        brain_db, query, limit=asked, embedder=_capturing_embedder,
                         settings=settings, model=model)
                     reported = getattr(embedder, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
@@ -1489,10 +1502,20 @@ class Memory:
                     lifecycle['delivered'] = False
                     lifecycle['rolled_back'] = True
             restored_assoc = False
-            if (has_assoc_rollback or association is not None) and hasattr(self.rotation, 'restore_association'):
-                # The association never reached her (error, stop, empty answer), so its cooldown
-                # streak must not grow as if it had been shown — even on the very first association.
-                self.rotation.restore_association(association if isinstance(association, dict) else {})
+            assoc_is_leisure = bool(
+                pending_entry.get('association_is_leisure', False)
+                if isinstance(pending_entry, dict)
+                else getattr(self, '_last_association_is_leisure', False)
+            )
+            if has_assoc_rollback or association is not None:
+                if assoc_is_leisure and hasattr(self.rotation, 'restore_leisure_association'):
+                    self.rotation.restore_leisure_association(association if isinstance(association, dict) else {})
+                    restored_assoc = True
+                elif hasattr(self.rotation, 'restore_association'):
+                    # The association never reached her (error, stop, empty answer), so its cooldown
+                    # streak must not grow as if it had been shown — even on the very first association.
+                    self.rotation.restore_association(association if isinstance(association, dict) else {})
+                    restored_assoc = True
                 restored_assoc = True
             self.last_injected_refs = prev_injected
             if marks:
@@ -1604,7 +1627,11 @@ class Memory:
                         'long_tail': 0, 'recent': 0, 'ordinary': 0}
         try:
             stat = brain_db.stat()
-            sig = (stat.st_mtime_ns, stat.st_size)
+            wal_path = Path(str(brain_db) + '-wal')
+            shm_path = Path(str(brain_db) + '-shm')
+            wal_sig = (wal_path.stat().st_mtime_ns, wal_path.stat().st_size) if wal_path.is_file() else (0, 0)
+            shm_sig = (shm_path.stat().st_mtime_ns, shm_path.stat().st_size) if shm_path.is_file() else (0, 0)
+            sig = (stat.st_mtime_ns, stat.st_size, wal_sig, shm_sig)
         except OSError:
             return [], {'source': 'unavailable', 'refreshed': False,
                         'long_tail': 0, 'recent': 0, 'ordinary': 0}
@@ -2184,6 +2211,7 @@ class Memory:
             elif widen:
                 kinds[key] = 'rotation'
         pending_association_key = ''
+        pending_association_is_leisure = False
         if not wake and not widen and not explicit and not followup:
             # Ticket 422 + P6-S5: natural association. When association_contextual_enabled is False
             # (default), preserves the Ticket 422 baseline over breath_blocks. When enabled, draws
@@ -2311,8 +2339,10 @@ class Memory:
                             qvec = None
                     if qvec is not None:
                         similarities = self._association_similarities(qvec, [key for key, _ in considered])
-            previous = (self.rotation.previous_association()
-                        if hasattr(self.rotation, 'previous_association') else None)
+            previous = (self.rotation.previous_leisure_association()
+                        if hasattr(self.rotation, 'previous_leisure_association')
+                        else (self.rotation.previous_association()
+                              if hasattr(self.rotation, 'previous_association') else None))
             choice = choose_leisure(
                 query, considered, metas, self.rotation.last, self.rotation.turn, shown,
                 recall_cfg, wake_context=wake_context, similarities=similarities,
@@ -2344,11 +2374,17 @@ class Memory:
             self.last_recall_debug['association'] = dict(leisure_diag)
             self.last_recall_debug['leisure_association'] = dict(leisure_diag)
             if choice['key']:
-                kept.append((choice['key'],
-                             prompts.text('memory.association.leisure.label') + '\n' + choice['body']))
+                delimited_body = (
+                    prompts.text('memory.association.leisure.label')
+                    + '\n<recalled_leisure_memory_data>\n'
+                    + choice['body']
+                    + '\n</recalled_leisure_memory_data>'
+                )
+                kept.append((choice['key'], delimited_body))
                 sources[choice['key']] = 'association'
                 kinds[choice['key']] = 'association'
                 pending_association_key = choice['key']
+                pending_association_is_leisure = True
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
@@ -2422,7 +2458,8 @@ class Memory:
                                'kind': 'opening'})
         self.last_recall_debug['reused'] = []   # ticket 419 review: no prefix-only reuse claims
         self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening,
-                                'association_key': pending_association_key}
+                                'association_key': pending_association_key,
+                                'association_is_leisure': pending_association_is_leisure}
         if defer:
             return []
         return self.finish_recall()
@@ -2551,24 +2588,43 @@ class Memory:
         self.mark_surfaced(self.last_context_refs)
         injected_assoc = [item['id'] for item in recall_items if item.get('kind') == 'association']
         pending_assoc_key = pending.get('association_key') or ''
+        pending_assoc_is_leisure = bool(pending.get('association_is_leisure', False))
+        # P6-S6-2: reconcile leisure_association diagnostics with post-budget injected IDs so a
+        # budget-dropped memory is never reported as a hit.
+        if pending_assoc_is_leisure and isinstance(debug.get('leisure_association'), dict):
+            if pending_assoc_key and pending_assoc_key not in injected_assoc:
+                debug['leisure_association']['picked'] = []
+                debug['leisure_association']['reason'] = 'budget_dropped'
+                debug['leisure_association']['budget_dropped'] = True
+                if isinstance(debug.get('association'), dict):
+                    debug['association']['picked'] = []
+                    debug['association']['reason'] = 'budget_dropped'
         req_id = str(request_id or getattr(self, '_pending_recall_request_id', '') or '').strip()
         with self.mutex:
             # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
             recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
             self.last_recall_marks = recall_marks
             self.rotation.mark(self.last_context_refs)
-            # P6-S5: commit association streak in memory only when the association actually survived budget fitting;
-            # disk persistence is deferred until confirm_delivery() so crashes/cancellations never pollute disk.
+            # P6-S5 / P6-S6-2: commit association streak in memory only when the association actually
+            # survived budget fitting; keep leisure streak isolated from ordinary chat association.
             has_assoc_rollback = False
             assoc_marks = None
-            if pending_assoc_key and pending_assoc_key in injected_assoc and hasattr(self.rotation, 'mark_association'):
-                assoc_marks = (
-                    self.rotation.previous_association()
-                    if hasattr(self.rotation, 'previous_association') else None)
-                has_assoc_rollback = True
-                self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
+            if pending_assoc_key and pending_assoc_key in injected_assoc:
+                if pending_assoc_is_leisure and hasattr(self.rotation, 'mark_leisure_association'):
+                    assoc_marks = (
+                        self.rotation.previous_leisure_association()
+                        if hasattr(self.rotation, 'previous_leisure_association') else None)
+                    has_assoc_rollback = True
+                    self.rotation.mark_leisure_association(pending_assoc_key, self.rotation.turn)
+                elif hasattr(self.rotation, 'mark_association'):
+                    assoc_marks = (
+                        self.rotation.previous_association()
+                        if hasattr(self.rotation, 'previous_association') else None)
+                    has_assoc_rollback = True
+                    self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
             self._has_association_rollback = has_assoc_rollback
             self.last_association_marks = assoc_marks
+            self._last_association_is_leisure = pending_assoc_is_leisure
             self._last_newly_surfaced = list(newly_surfaced)
             self._pending_recall_request_id = req_id
             pending_entry = {
@@ -2583,6 +2639,7 @@ class Memory:
                 'wake_mode': str(debug.get('wake_mode') or ''),
                 'recall_marks': recall_marks,
                 'association_marks': assoc_marks,
+                'association_is_leisure': pending_assoc_is_leisure,
                 'has_association_rollback': has_assoc_rollback,
                 'newly_surfaced': list(newly_surfaced),
                 'previous_injected_refs': list(self._previous_injected_refs),

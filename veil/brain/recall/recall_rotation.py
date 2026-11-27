@@ -391,6 +391,15 @@ class Cooldown:
             'turn': association.get('turn') if type(association.get('turn')) is int else -1,
             'repeat': association.get('repeat')
             if type(association.get('repeat')) is int and 0 <= association.get('repeat') <= 8 else 0}
+        # P6-S6-2: independent streak state for autonomous leisure association so ordinary chat
+        # associations never overwrite or reset leisure backoff.
+        leisure = state.get('leisure_association')
+        leisure = leisure if isinstance(leisure, dict) else {}
+        self.leisure_association = {
+            'key': leisure.get('key') if isinstance(leisure.get('key'), str) else '',
+            'turn': leisure.get('turn') if type(leisure.get('turn')) is int else -1,
+            'repeat': leisure.get('repeat')
+            if type(leisure.get('repeat')) is int and 0 <= leisure.get('repeat') <= 8 else 0}
 
     def cooled(self, key, turns):
         return bool(turns) and key in self.last and self.turn - self.last[key] <= turns
@@ -426,5 +435,29 @@ class Cooldown:
         self.association['key'] = key or ''
         self.association['turn'] = turn
 
+    def previous_leisure_association(self):
+        return dict(self.leisure_association)
+
+    def restore_leisure_association(self, state):
+        state = state if isinstance(state, dict) else {}
+        self.leisure_association = {
+            'key': state.get('key') if isinstance(state.get('key'), str) else '',
+            'turn': state.get('turn') if type(state.get('turn')) is int else -1,
+            'repeat': state.get('repeat')
+            if type(state.get('repeat')) is int and 0 <= state.get('repeat') <= 8 else 0}
+
+    def mark_leisure_association(self, key, turn):
+        if key and key == self.leisure_association.get('key'):
+            self.leisure_association['repeat'] = min(self.leisure_association['repeat'] + 1, 8)
+        else:
+            self.leisure_association['repeat'] = 1 if key else 0
+        self.leisure_association['key'] = key or ''
+        self.leisure_association['turn'] = turn
+
     def snapshot(self):
-        return {'turn': self.turn, 'last': dict(self.last), 'association': dict(self.association)}
+        return {
+            'turn': self.turn,
+            'last': dict(self.last),
+            'association': dict(self.association),
+            'leisure_association': dict(self.leisure_association),
+        }
