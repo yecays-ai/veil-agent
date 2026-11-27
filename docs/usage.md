@@ -19,7 +19,7 @@
 | `/delete 编号` | 先显示这一条，再 `/delete 编号 确认` 才执行；删除不可恢复 |
 | `/quit` | 退出（回复先落盘再显示） |
 
-不进入聊天查花费：在项目目录运行 `.venv\Scripts\python.exe veil_agent.py --cost`。
+不进入聊天查花费：在项目目录运行 `.venv\Scripts\python.exe -m veil --cost`（根目录 `veil_agent.py` 兼容入口同样可用）。
 
 ## 记忆
 
@@ -55,10 +55,12 @@
 ## 备份与恢复
 
 ```powershell
-.venv\Scripts\python.exe backup_restore.py create --destination "X:\VEIL-backups"
-.venv\Scripts\python.exe backup_restore.py verify   --backup "X:\VEIL-backups\<时间戳>"
-.venv\Scripts\python.exe backup_restore.py restore  --backup "X:\VEIL-backups\<时间戳>" --target "D:\VEIL-recovery" --replace
+.venv\Scripts\python.exe -m veil.system.backup_restore create --destination "X:\VEIL-backups"
+.venv\Scripts\python.exe -m veil.system.backup_restore verify   --backup "X:\VEIL-backups\<时间戳>"
+.venv\Scripts\python.exe -m veil.system.backup_restore restore  --backup "X:\VEIL-backups\<时间戳>" --target "D:\VEIL-recovery" --replace
 ```
+
+（根目录 `backup_restore.py` 过渡兼容入口同样支持上述子命令。）
 
 备份含明文人设、记忆和可能含密钥的 `.env`，程序不加密也不上传：只放在加密磁盘或受控离线介质，不放云同步目录。恢复前会校验每个文件的哈希；`--replace` 需要输入 `RESTORE`，原数据整体移到 `*.before-restore-*`。
 

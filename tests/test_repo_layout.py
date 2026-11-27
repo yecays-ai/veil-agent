@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAP_PATH = ROOT / 'scripts' / 'dev' / 'module_map.json'
 
 # Flipped to True in batch B7 once all modules have migrated into veil/.
-STRICT_LAYOUT = False
+STRICT_LAYOUT = True
 
 
 def _tracked_files() -> list[str]:

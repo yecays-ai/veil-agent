@@ -73,12 +73,15 @@
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | 桌面壳 | `desktop/` | Electron 主进程、页面前端、窗口与置顶、请求守卫 |
-| 本机服务 | `web_agent.py`、`veil_agent.py` | 聊天编排、工具循环、状态与花费展示 |
-| 记忆 | `brain_*.py`、`event_memory.py`、`recall_*.py` | 写入事务、检索、判官、事件与证据、健康巡检 |
-| 自主与生活 | `autonomy.py`、`life_*.py`、`long_tasks.py` | 醒来自主活动、日历、长期任务、工作检查点 |
-| 工具与接入 | `tools/`、`mcp_services.py`、`browser_tools.py`、`*_channel.py` | 文件、桌面、浏览器、MCP、QQ/邮件通道 |
-| 规则与配置 | `characters/`、`persona/`、`instructions.py` | 角色配置、人设、可编辑提示词 |
-| 数据 | `data/<角色>/` | 聊天、账本、记忆库、workspace（全部本机、全部不进仓库） |
+| 核心与服务 | `veil/core/`、`veil/server/` | 聊天编排、工具循环、类型与配置、本机 HTTP 服务与启动器 |
+| 记忆（Brain） | `veil/brain/`（含 `storage/`、`recall/`） | 写入事务、检索、判官、事件与证据、健康巡检、P4/P5 接口 |
+| 自主与生活 | `veil/autonomy/`、`veil/life/` | 醒来自主活动、长任务、日历、生活记录、Lab、Nowhere |
+| 聊天与人设 | `veil/chat/`、`veil/persona/`、`veil/prompts/` | 气泡/附件/语音/表情包、人设版本、提示词注册表与默认文本 |
+| 工具与接入 | `veil/tools/`、`veil/integrations/`、`veil/windows/` | 文件与工作台、权限分组、浏览器/MCP/QQ/邮件、Windows 观察与交互 |
+| 系统维护 | `veil/system/`、`scripts/` | 维护、诊断、冷备份恢复、数据修复、独立离线回滚与运维脚本 |
+| 本机配置与数据 | `characters/`、`persona/`、`data/<角色>/` | 角色配置、本机人设、聊天/账本/记忆库/workspace（全部本机、不进仓库） |
+
+完整目录树、模块对照与离线回滚说明见 **[`docs/architecture/repo-layout.md`](docs/architecture/repo-layout.md)**。
 
 ## 当前开发阶段
 

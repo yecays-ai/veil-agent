@@ -18,7 +18,7 @@ class UndoVoiceRulesTests(unittest.TestCase):
     def make_root(self, tmp, body):
         root = Path(tmp)
         (root / 'persona').mkdir()
-        shutil.copy(ROOT / 'undo-voice-rules.ps1', root)
+        shutil.copy(ROOT / 'scripts' / 'windows' / 'undo-voice-rules.ps1', root)
         (root / 'persona' / 'peter.md').write_bytes(body.encode('utf-8'))
         return root
 

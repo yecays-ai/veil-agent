@@ -16,6 +16,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [architecture/repo-layout.md](architecture/repo-layout.md) | 仓库目录结构、模块归属对照、兼容入口与离线回滚流程 |
 | [PRODUCT_PREMISE.md](PRODUCT_PREMISE.md) | 产品纲领：核心理念、五条线、两条验收场景、阶段顺序 |
 | [../AGENTS.md](../AGENTS.md) | 开发 Agent 施工规则 |
 | [RELIABILITY.md](RELIABILITY.md) | 长期可靠性计划的阶段、契约与退出条件 |

@@ -59,6 +59,16 @@ EMBED_API_KEY=你的硅基流动密钥      # 记忆向量召回用
 
 更新脚本不会 stash 或丢弃你的数据；`data/`、`persona/`、`.env` 不受影响。项目换目录后需要重建 `.venv`，并保留 `data`、`.env`、`persona`。
 
+### 离线版本回滚与重新打包
+
+如需退回某个历史提交，**不要运行 `update.bat` / `update-main.cmd`**（它们会再次拉取最新 `main`），而是退出 Peter 后运行独立脚本：
+
+```powershell
+.\scripts\windows\rollback-version.cmd <目标提交或标签>
+```
+
+脚本绝不执行 `git fetch` 或 `git pull`，回滚前自动建立本地恢复分支，切回目标提交并本地重新打包 `VEIL.exe`，不触碰本机数据。其他低频工具（如 GitHub Token、小红书登录、工作台开关、人设版本还原、隔离预览）也统一存放在 `scripts/windows/`。
+
 ## 6. 模型与预算
 
 默认角色配置在 `characters/peter/character.toml`，把 `provider = "deepseek"` 改成 `"gpt"` 会同时切换模型、接口、密钥名称与价格配置（GPT 需在 `.env` 填 `OPENAI_API_KEY`）。
