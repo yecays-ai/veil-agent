@@ -93,3 +93,34 @@
 | **F6** | `memory_agent._association_pool()` 改为轻量元数据缓存（不缓存全库正文），按选定 ID 批量取正文，均衡覆盖长尾 `imp>=7` + 近期 + 普通生活；`s5_eval.py` 改为真实生产 `Memory` 回放 | 单测验证缓存不含 `body`；回放覆盖长尾/近期/普通三层 |
 | **F7** | `finish_recall`/`bind_recall_request`/`confirm_delivery`/`rollback_recall` 补齐 `request_id` 归属核验与 `_has_association_rollback` 显式标记，修复首次联想旧状态为 `None` 时的回滚遗漏 | 单测验证首次联想回滚及 `req-A`/`req-B` 错配拦截 |
 | **F8** | 以 S3 最新已提交 HEAD `de2cc06` + S5 代码执行隔离 `git worktree` 真实合流演练：`veil_agent.py`、`brain_p4_api.py`、`workspace-brain.js` **0 冲突**自动合并（注：检查时 S3 工作区正处于自身合并/修复中，待 S3 最终 HEAD 确定并合流后须再执行一次最终联合回归） | S3(`de2cc06`)+S5 联合 40 项测试 + 前端语法检查全部通过，演练目录已清理 |
+
+---
+
+## 十、VEIL Lab 正式日用模型三路盲评（`gemini-4-hydrogen`）
+
+- **实验环境**：VEIL Lab 统一隔离环境（`veil-lab.cmd`），正式只读快照 `peter-20261127T170245/r2` + S5 分支代码。
+- **配置一致性**：三路（`off` / `legacy_breath8` / `contextual_s5`）仅改变自然联想开关，主回复模型统一为正式日用 `gemini-4-hydrogen`，判官与 Embedding 沿用正式配置并复用缓存；每轮请求均经校验包含完整人设、说话样例、背景、关系底座（`relationship_base`）、Learned Context 与正常召回记忆，三路正常召回完全一致（0 判官异常），3 组 × 3 路 = 9 条有效回复，总成本 ¥1.10，`veil-lab run verify` 全项 `all_checks_ok=true`。
+- **Lan 匿名盲评结果（揭盲映射）**：
+
+| 组别 | 场景类型 | Lan 盲评选择 | 揭盲对应 | 备注 |
+| --- | --- | --- | --- | --- |
+| 第 1 组（`S2-001`） | 情绪倾诉 | **A、C 平局**（A 有安抚感，C 更有生活连续性） | A=`contextual_s5`、C=`legacy_breath8`、B=`off` | 两者各有优势，均优于关闭 |
+| 第 2 组（`S2-002`） | 情绪倾诉 | **B** | B=`contextual_s5`、A=`legacy_breath8`、C=`off` | 情境相关联想获选 |
+| 第 3 组（`S4-001`） | 极短噪声/表情 | **A（弱偏好）** | A=`contextual_s5`、B=`off`、C=`legacy_breath8` | Lan 明确说明三条回复均不错，属硬挑出的弱偏好 |
+
+- **统计口径与边界**：3 组小样本下 `contextual_s5` 2 胜（含 1 组弱偏好）1 平 0 负，`legacy_breath8` 0 胜 1 平 2 负，`off` 0 胜 0 平 3 负。**明确不将 3 组小样本及第 3 组弱偏好表述为显著优势**。
+
+---
+
+## 十一、自然联想界面双开关、默认关闭决策与 S6 前置待办
+
+1. **默认配置与界面可操作开关**：
+   - 保持 `association_contextual_enabled = False`（默认关闭）、`association_enabled = True`（默认启用现行机制）、`stopwords_enabled = False`、`candidate_k = 8`。
+   - 在现有「VEIL Brain → 记忆监控 → 六层记忆系统」卡片内新增「自然联想控制」区块（不另建页面，保持六层网格结构不变），复用 `/api/brain/layer-toggle` 与 `recall-association.json` 持久化：
+     - **自然联想总开关**（`association`）
+     - **情境相关自然联想开关**（`association_contextual`）
+     - 实时展示当前实际生效状态（`已关闭` / `已启用 · 现行联想机制` / `已启用 · 情境相关机制`），修改后持久化保存、下一轮聊天生效、重启保留；关闭情境相关联想后确定性恢复现行联想机制，全程无需手动编辑配置文件。
+2. **S6 前置待办（不纳入本单默认放行）**：
+   - `contextual_s5` 离线回放中仍存在 **2 条隐式 `trap` 穿透**（工作场景下高相似度旧事在无显式技术关键词时被联想放行），待 **S6 前置阶段**结合「同轮判官联合判断」方案（利用同轮判官语义结论门控自然联想，避免纯向量相似度穿透）修复并重新通过门禁后，再评估是否默认启用。
+3. **与最新 `main`（`f979ca2`，含 PR #459 与 PR #460 S3）合流验证**：
+   - 已将最新 `origin/main`（`f979ca2`）合入本分支，解决 `veil/core/veil_agent.py`、`desktop/workspace-brain.js` 与状态文档冲突，完成 S3 + S5 + P4/P5 路由 + 配置注册 + 检索底座 + 桌面端联合回归验证。

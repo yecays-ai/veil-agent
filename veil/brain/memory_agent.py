@@ -957,6 +957,69 @@ class Memory:
                                    if key not in dropped}
         self.last_injected_refs = [key for key in self.last_injected_refs if key not in dropped]
 
+    def _association_switch_path(self):
+        return f'{self.cfg.id}/recall-association.json'
+
+    def _load_association_switches(self):
+        """Read persisted UI/API overrides for natural association switches (survives restart)."""
+        store = getattr(self, 'store', None)
+        cfg = getattr(self, 'cfg', None)
+        if store is None or cfg is None:
+            return {}
+        try:
+            raw = (Path(store.root) / self._association_switch_path()).read_text(encoding='utf-8')
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return {}
+            out = {}
+            if type(data.get('association_enabled')) is bool:
+                out['association_enabled'] = data['association_enabled']
+            if type(data.get('association_contextual_enabled')) is bool:
+                out['association_contextual_enabled'] = data['association_contextual_enabled']
+            return out
+        except (OSError, ValueError):
+            return {}
+
+    def effective_recall_settings(self):
+        """Current recall settings with persisted association switches applied (next-turn effective)."""
+        base = dict(getattr(self, 'recall_settings', None) or {})
+        overrides = self._load_association_switches()
+        if overrides:
+            base.update(overrides)
+        return base
+
+    def association_status(self):
+        eff = self.effective_recall_settings()
+        enabled = bool(eff.get('association_enabled', True))
+        contextual = bool(eff.get('association_contextual_enabled', False))
+        mode = 'disabled' if not enabled else ('contextual' if contextual else 'legacy')
+        return {
+            'available': True,
+            'enabled': enabled,
+            'contextual_enabled': contextual,
+            'effective_mode': mode,
+            'min_similarity': float(eff.get('association_min_similarity', 0.52)),
+            'pool_size': int(eff.get('association_pool_size', 32)),
+            'persistence_path': self._association_switch_path(),
+        }
+
+    def _save_association_switches(self, **updates):
+        with self.mutex:
+            current = self._load_association_switches()
+            for key, value in updates.items():
+                if key in ('association_enabled', 'association_contextual_enabled') and type(value) is bool:
+                    current[key] = value
+            self.store.replace(self._association_switch_path(), current)
+            if isinstance(getattr(self, 'recall_settings', None), dict):
+                self.recall_settings.update(current)
+        return self.association_status()
+
+    def set_association_enabled(self, enabled):
+        return self._save_association_switches(association_enabled=bool(enabled))
+
+    def set_association_contextual_enabled(self, enabled):
+        return self._save_association_switches(association_contextual_enabled=bool(enabled))
+
     def bind_recall_request(self, request_id):
         """P6-S5: bind the active turn's pending delivery/rollback state to an explicit request_id."""
         req_id = str(request_id or '').strip()
@@ -1387,9 +1450,6 @@ class Memory:
                 return None
             self._pending_delivery = None
             self._pending_recall_request_id = ''
-            self._has_association_rollback = False
-            self.last_association_marks = None
-            self.last_recall_marks = None
             event = {
                 'request_id': req_id or bound_req,
                 'turn': pending.get('turn', self.rotation.turn),
@@ -1753,7 +1813,7 @@ class Memory:
             'association': {}, 'carried': [], 'retrieval': {}, 'degraded': '',
             # P6-S5: situational classification and explicit lifecycle separation for S6.
             'context_signal': {}, 'lifecycle': {}, 'followup_released_reason': ''}
-        recall_cfg = self.recall_settings
+        recall_cfg = self.effective_recall_settings()
         ret_cfg = getattr(self, 'retrieval_settings', None) or {}
         explicit = asks_about_past(query) and not (rotate or wake)
         cooldown = 0 if explicit else recall_cfg['cooldown_turns']

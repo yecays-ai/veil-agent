@@ -1,11 +1,11 @@
 # 当前状态
 
-> 更新时间：2026-11-27T15:56:00+08:00 · 基线 `main` = `2a264a7`（PR #458 已合并），当前并行施工 **P6-S5（工单 460 · PR #461，`ticket/460-p6-s5-retrieval-judge-association`）** 与 **P6-S3（工单 459）**；S5 已完成二次复审收口（含 18 轮真实 `Chat.send()` 完整生产链路验证、`contextual_s5` 误触根因分析与验证范围分层），**待独立复审与 Lan 盲评验收；尚未合并、尚未部署正式目录**。
+> 更新：2026-11-27 +08:00 · `main` = `f979ca2` · 工单 460 / PR #461：P6-S5 检索、判官与情境相关自然联想升级（含 VEIL Lab `gemini-4-hydrogen` 盲评记录、界面双开关持久化、同步 `main` 含 S3）；待最终复核，未合并、未部署。
 > **待你验收的事项与唯一验收状态统一在 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。** 本文只写进度，不另存验收状态。
 
 ## 一句话现状
 
-P3、P4/P5（#456）、P6-S0/S1/S2/S4（#449–#455）、文档归集（#457）与仓库目录结构重整（#458，`2a264a7`）均已合并。**工单 460（PR #461 · P6-S5 检索、判官与情境相关自然联想升级）** 已完成二次复审收口：最终默认配置确定为 `stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官（空查询 FPR `-18.2pp`、工作 trap FPR `-33.3pp`，并在 18 轮真实 `Chat.send()` 完整生产链路验证中实现 18/18 关系底座/快照/送达确认通过）；`stopwords_enabled`（联合负交互）、`K=12`、`association_contextual_enabled`（**待验证候选**：生产组件回放覆盖 `2→11` 条但 2 条隐式 `trap` 穿透，未过 0 干扰门禁，不标记为体验目标完成）及 Qwen3-Reranker（本机无推理依赖）均严格保持默认关闭；基于 S3 已提交 HEAD `de2cc06` 的隔离合流 0 代码冲突且 40 项联合回归通过（待 S3 最终 HEAD 确定合流后再跑最终联合回归）；完整证据见 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](docs/reports/p6-s5-retrieval-judge-association-20261127.md)。**待独立复审与 Lan 三路盲评验收；未合并、未部署。**
+P3、P4/P5（#456 / #459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档归集（#457）与仓库目录重整（#458）已合并至 `main`（`f979ca2`）。**PR #461（工单 460 · P6-S5）**：已完成检索/停用词候选门控、情境判官升级、自然联想双开关持久化界面控制、VEIL Lab `gemini-4-hydrogen` 正式日用模型三路盲评及与最新 `main`（含 PR #459 与 PR #460 S3）的合流回归；`association_contextual_enabled` 保持默认关闭，待最终复核与合并，未部署。
 
 ## 近期工单真实状态
 
@@ -13,8 +13,10 @@ P3、P4/P5（#456）、P6-S0/S1/S2/S4（#449–#455）、文档归集（#457）�
 
 | 工单 | PR | 合并提交 | 合并时间（UTC） | 部署 | 验收入口（以 ACCEPTANCE 为准） |
 | --- | --- | --- | --- | --- | --- |
-| 460 · P6-S5 检索、判官与情境相关自然联想升级 | #461 | 复审 F1–F8 修复完成待复审（`ticket/460-p6-s5-retrieval-judge-association`） | — | 未部署 | [§3 B-7](docs/ACCEPTANCE.md#b-7-p6-s5-检索判官与情境自然联想工单-460) |
-| 458 · 仓库目录结构重整（`veil/` 源码包与离线回滚） | #458 | `2a264a7` | 2026-11-27 UTC | 待部署 | [§8 G-4](docs/ACCEPTANCE.md#g-4-仓库目录结构重整工单-458) |
+| 460 · P6-S5 检索、判官与情境相关自然联想升级 | #461 | — | — | 未部署 | [§3 B-8](docs/ACCEPTANCE.md#b-8-检索判官与情境相关自然联想升级工单-460--pr-461) |
+| 459 · P6-S3 关系底座解耦、证据链晋升与认知治理 | #460 | `f979ca2` | 2026-11-27 UTC | 未部署 | [§3 B-7](docs/ACCEPTANCE.md#b-7-关系底座四区独立预算证据链晋升与认知治理工单-459) |
+| P4/P5 记忆中心返工与复审修复 | #459 | `2b03006` | 2026-11-27 06:33 UTC | 未确认部署 | [§1 A-9](docs/ACCEPTANCE.md#a-9-p4p5-记忆中心返工与诊断加固pr-459) |
+| 458 · 仓库目录结构重整（`veil/` 源码包与离线回滚） | #458 | `2a264a7` | 2026-11-27 05:40 UTC | 未部署 | [§8 G-4](docs/ACCEPTANCE.md#g-4-仓库目录结构重整工单-458) |
 | 457 · 文档、状态与待验收清单归集 | #457 | `d78a8b7` | 2026-11-27 00:00 UTC | 文档类 | — |
 | 451 · P4/P5 管理中心、全局工作区、日常聊天 | #456 | `95dc26a` | 2026-11-26 22:35 UTC | 已部署 | [§1 A-1 ~ A-8](docs/ACCEPTANCE.md#1-桌面与全局工作区工单-451--pr-456) |
 | 454 · P6-S4 消融实验与决策 | #455 | `a1f2255` | 2026-11-26 14:18 UTC | 已部署 | [§4 C-1 ~ C-2](docs/ACCEPTANCE.md#4-p6-s4-消融实验的结论工单-454--pr-455) |
@@ -33,16 +35,15 @@ P3、P4/P5（#456）、P6-S0/S1/S2/S4（#449–#455）、文档归集（#457）�
 ## 当前开发阶段
 
 - 产品阶段：A 陪伴核心（记忆注入与精修）施工中；B 的权限底座已具备；C1 手机、V 语音未进入正式施工。
-- 工程阶段：P6 记忆与检索精修。P6-S0/S1/S2/S4 已完成；**S3/S5/S6/S7 未开工，等 C-2 拍板。**
+- 工程阶段：P6 记忆与检索精修。P6-S0/S1/S2/S4 已完成；S3 待独立复审。
 - 正式底座：`main`，本机正式目录跟随 `main`，用 `update-main.cmd` 一键更新；本单未启停正式 Peter、未写正式记忆。
 
-## 本单（文档维护）做了什么
+## 本单收口（工单 460 · PR #461 · P6-S5）
 
-- 新增 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)：全量归集待验收/待确认/待授权/待拍板事项，按模块分类，含工单、PR、状态、操作步骤与复选框。
-- 重写本文件与 [`HANDOFF.md`](HANDOFF.md)，核对全部近期工单的 PR 号、合并提交与部署状态。
-- 重写 [`README.md`](README.md) 为项目首页，安装与使用细节迁入 [`docs/installation.md`](docs/installation.md)、[`docs/usage.md`](docs/usage.md)，导航见 [`docs/README.md`](docs/README.md)。
-- 同步 [`AGENTS.md`](AGENTS.md)、`.agents/skills/` 与 PR 模板的施工规则（四类工单、并行 worktree、审查器切换、合并边界）。
-- 复查修订：补齐 184/185、186、195、201、207/209、210/211、212/213/214、254、PERF-05 的真实状态与本机使用痕迹；新增 §14 全量工单覆盖索引（354 张全部归类）；把事项分成「必须你亲自体验 / 条件性待授权 / 暂缓 / 开发侧可自验」四类；删除此前擅自加入的排查时间盒，恢复 worktree 清理、集中修复一次推送、Sourcery 双职责、并行合并或 rebase、跨模块复查与隔离数据验收等规则。
+- 默认配置维持 `stopwords_enabled=False`、`candidate_k=8`、S5 情境判官启用、`association_enabled=True`、`association_contextual_enabled=False`。
+- VEIL Lab 正式只读快照 `peter-20261127T170245/r2` + 日用模型 `gemini-4-hydrogen` 三路盲评（3 组 9 回复，¥1.10，`all_checks_ok=true`）：第 1 组 `contextual_s5` 与 `legacy_breath8` 平局、第 2 组 `contextual_s5` 胜、第 3 组 `contextual_s5` 弱偏好（三条均佳，不作显著优势结论）。
+- 已在现有「VEIL Brain → 记忆监控」界面补齐「自然联想总开关」与「情境相关自然联想开关」独立可操作开关，展示当前实际生效状态，经 `/api/brain/layer-toggle` 持久化至 `recall-association.json`，下一轮生效、重启保留，关闭情境联想后确定性恢复现行联想机制。
+- 已合入最新 `origin/main`（`f979ca2`，含 PR #459 与 PR #460 S3），未触碰正式运行目录与正式 `data/peter`。
 
 ## 等 lan 定的事
 
@@ -50,9 +51,20 @@ P3、P4/P5（#456）、P6-S0/S1/S2/S4（#449–#455）、文档归集（#457）�
 2. C-2：P6-S3/S5/S6/S7 的方向是否按 `docs/reports/p6-s4-decision-table-20261126.md` 的推荐开工。
 3. B-3/B-4/H-1：三项**待授权**操作是否在下一个维护窗口执行。
 
+## S6 开工前必须完成（PR #460 接受延期，未修复）
+
+| 工程事项 | 源码 / 风险 | 验收要求 |
+| --- | --- | --- |
+| 聊天历史全量读取 | [_chat_user_index()](veil/brain/learned_context.py#L455)：文件变化后全量扫描并缓存，长历史拖慢请求并增加内存。 | 对长历史连续追加时不反复全量扫描，缓存有明确上限；旧引用仍可按需核验，删除或替换后不得命中旧缓存。 |
+| 实时证据时间预算 | [_open_brain_ro()](veil/brain/learned_context.py#L481)、[_apply_live_evidence_check()](veil/brain/learned_context.py#L1195)：数据库争用时逐引用等待累加。 | 数据库锁定及多条引用组合场景下，全次核验受单一可测量的墙钟预算约束；超限保守降级，不误晋升、不阻断聊天。 |
+| 追加重试幂等 | [_invoke_profile()](veil/brain/learned_context.py#L1895)、[_invoke_ongoing()](veil/brain/learned_context.py#L2130)：写入已提交但响应丢失时，重试可能重复追加认知或待办。 | facts/growth 追加及 ongoing 新增使用持久化幂等键；模拟响应丢失、并发重试和进程重启，同键只落一次且返回原结果与原 ID，不额外写版本。 |
+| 反证长期积累 | [反证快照](veil/brain/learned_context.py#L806)：历史积累可能触发请求上限。 | 长历史下验证相关反证查询与载荷有界；不得通过截断遗漏用户否决，无法完整核验时安全降级且说明原因。 |
+| 任意跨语言同义否决 | [原文拦截](veil/brain/learned_context.py#L164)仅覆盖可核验的来源与文字锚点。 | 加入无共享锚点的多语言同义反例、无关主题正例及显式恢复对照；模型不能单独解除可疑否决。 |
+| 情境自然联想隐式 `trap` 穿透与同轮判官联合判断（PR #461 延期） | [natural_association.py](veil/brain/recall/natural_association.py) 离线回放仍有 2 条隐式工作 `trap` 穿透，当前保持默认关闭。 | 在 S6 前置中结合同轮判官语义结论进行联合门控，清除隐式工作 `trap` 穿透并重新过门禁后再评估默认启用。 |
+
 ## 下一步
 
-你确认清单后，开发 Agent 按确认结果更新各工单的验收记录与本文，再开 P6-S3 第一张工单。
+PR #461（工单 460 · P6-S5）停在待最终复核与合并状态，不自行合并或部署。S6 不得在上述前置事项通过验收前开工。
 
 ## 验收入口
 

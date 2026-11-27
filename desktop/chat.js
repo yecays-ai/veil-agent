@@ -1584,11 +1584,13 @@ function recallDetails(r){
   const hasBase=Object.prototype.hasOwnProperty.call(r,'relationship_base');
   const base=r.relationship_base||{},baseItems=Array.isArray(base.items)?base.items:[];
   const baseState=!hasBase?'未记录（这条诊断早于关系底色功能）'
-    :baseItems.length
-      ?`${baseItems.length} 条（${base.chars||0} 字，${base.tokens||0} tokens）：${baseItems.join(', ')}`
-      :`0 条${base.reason?`（${base.reason}）`:''}`;
+    :`存储 ${base.stored_count??'?'} / 有效 ${base.active_count??'?'} / 初选 ${Array.isArray(base.preselected_items)?n(base.preselected_items):'?'} / 选中 ${Array.isArray(base.selected_items)?n(base.selected_items):'?'} / 注入 ${baseItems.length}`
+      +(baseItems.length?`：${baseItems.join(', ')}（${base.chars||0} 字，${base.tokens||0} tokens）`:'')
+      +(base.reason?`（${base.reason}）`:'');
   lines.push(`关系底色：${baseState}`);
-  if(base.degraded)lines.push(`关系底色没全放进去：${base.reason||'空间不足'}`+(n(base.dropped)?`；舍弃 ${base.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；')}`:''));
+  if(n(base.compressed_items))lines.push(`关系底色保义压缩：${ids(base.compressed_items)}`);
+  if(n(base.cross_section_conflicts))lines.push(`跨区冲突提示：${ids(base.cross_section_conflicts)}`);
+  if(n(base.dropped))lines.push('关系底色未注入：'+base.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；'));
   if(base.space_tokens!==null&&base.space_tokens!==undefined)lines.push(`本轮必需块之后剩 ${base.space_tokens} tokens 给记忆`);
   if(n(r.relevant_recall))lines.push('相关召回：'+ids(r.relevant_recall));
   // Review: a follow-up carry is still pasted into this request; only a block dropped because the
@@ -2857,7 +2859,7 @@ configOverviewRefresh.onclick=async()=>{
       const li=document.createElement('li'), title=document.createElement('strong'), detail=document.createElement('p');
       title.textContent=entry.label;
       const ready=entry.readiness==='configured'?'凭据已配置（未探测）':entry.readiness==='missing'?'缺少凭据':'凭据未核实';
-      detail.textContent=`配置：${describe(entry.configured)}；实际生效：${describe(entry.effective)}；生效时机：${timing[entry.apply_mode]||'未核实'}；${ready}${entry.pending_restart===true?'；待重启':''}`;
+      detail.textContent=`配置：${describe(entry.configured)}；实际生效：${describe(entry.effective)}；生效时机：${timing[entry.apply_mode]||'未核实'}${entry.readiness?'；'+ready:''}${entry.pending_restart===true?'；待重启':''}`;
       li.append(title,detail);rows.append(li);
     }
     status.textContent=view.entries.length?`已读取 ${view.entries.length} 项。`:'没有可显示的配置项。';

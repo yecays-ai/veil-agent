@@ -14,6 +14,9 @@ class ConfigOverviewRouteTests(TestCase):
             'use_explicit': {'background': True},
             'endpoints': [{'key_hint': 'fixture-secret-hint'}],
         }
+        self.models.semantic_verification_observation.return_value = (
+            {'daily_cap_cny': '0.06', 'timeout_seconds': 6}, False,
+        )
         hub = SimpleNamespace(chat=SimpleNamespace(cfg=SimpleNamespace(id='fixture', models=self.models)),
                               background_running='builtin:current')
         handler = make_handler(hub, 'fixture-token')
@@ -29,7 +32,10 @@ class ConfigOverviewRouteTests(TestCase):
         self.assertEqual(200, status)
         self.assertEqual({'role_id': 'fixture'}, view['scope'])
         self.assertNotIn('fixture-secret-hint', str(view))
-        self.assertEqual(['public'], [call[0] for call in self.models.method_calls])
+        self.assertEqual(['public', 'semantic_verification_observation'],
+                         [call[0] for call in self.models.method_calls])
+        self.assertIn('budget.relationship_semantic.daily_cap_cny', str(view))
+        self.assertIn('budget.relationship_semantic.timeout_seconds', str(view))
 
     def test_cannot_select_another_role(self):
         self.request.path += '?role=another'

@@ -42,6 +42,46 @@
     return b;
   }
 
+  const MEMORY_TYPE_LABELS = {
+    preference: '偏好习惯',
+    fact: '事实记忆',
+    experience: '经历故事',
+    event: '共同事件',
+    todo: '待办约定',
+    reflection: '成长反思',
+    relationship: '关系认知',
+    memory: '日常记忆',
+  };
+
+  function labelMemoryType(key) {
+    return MEMORY_TYPE_LABELS[String(key || '').toLowerCase()] || String(key || '其他');
+  }
+
+  async function copyText(text) {
+    const str = String(text || '');
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(str);
+        return true;
+      } catch {
+        // fallback below
+      }
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = str;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
   function formatTime(iso) {
     if (!iso) return '—';
     return String(iso).replace('T', ' ').slice(0, 19);
@@ -77,6 +117,75 @@
     return box;
   }
 
+  function buildReadableDiffNode(diffLines, oldText = '', newText = '') {
+    const wrap = el('div', 'stack-sm');
+    let beforeLines = [];
+    let afterLines = [];
+    if (Array.isArray(diffLines) && diffLines.length) {
+      for (const ln of diffLines) {
+        if (ln.startsWith('---') || ln.startsWith('+++') || ln.startsWith('@@')) continue;
+        if (ln.startsWith('-')) beforeLines.push(ln.slice(1).trimStart());
+        else if (ln.startsWith('+')) afterLines.push(ln.slice(1).trimStart());
+        else {
+          const clean = ln.startsWith(' ') ? ln.slice(1) : ln;
+          beforeLines.push(clean);
+          afterLines.push(clean);
+        }
+      }
+    }
+    const beforeStr = beforeLines.join('\n').trim() || String(oldText || '').trim();
+    const afterStr = afterLines.join('\n').trim() || String(newText || '').trim();
+
+    if (beforeStr || afterStr) {
+      const grid = el('div', 'diff-compare-grid');
+      const colB = el('div', 'diff-compare-col before');
+      colB.append(el('span', 'diff-compare-label', '修改前'), document.createTextNode(beforeStr || '（新增内容，此前无记录）'));
+      const colA = el('div', 'diff-compare-col after');
+      colA.append(el('span', 'diff-compare-label', '修改后'), document.createTextNode(afterStr || '（已清空或移除）'));
+      grid.append(colB, colA);
+      wrap.append(grid);
+    }
+    if (Array.isArray(diffLines) && diffLines.length) {
+      const rawDet = el('details', 'tech-evidence');
+      rawDet.append(el('summary', '', '查看原始行级 Diff'), buildLineDiffNode(diffLines));
+      wrap.append(rawDet);
+    }
+    return wrap;
+  }
+
+  function openBrainModal(title, subtitle, buildContent) {
+    const existing = document.getElementById('veil-brain-modal');
+    if (existing) existing.remove();
+
+    const backdrop = el('div', 'veil-modal-backdrop');
+    backdrop.id = 'veil-brain-modal';
+    const card = el('div', 'veil-modal-card wide');
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+
+    const head = el('div', 'veil-modal-head');
+    const titleBox = el('div');
+    titleBox.append(el('h3', '', title));
+    if (subtitle) titleBox.append(el('small', 'muted', subtitle));
+    const closeBtn = btn('关闭', 'sm');
+    const closeModal = () => {
+      backdrop.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = e => { if (e.key === 'Escape') closeModal(); };
+    closeBtn.addEventListener('click', closeModal);
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+    document.addEventListener('keydown', onKey);
+
+    head.append(titleBox, closeBtn);
+    const body = el('div', 'stack-sm');
+    buildContent(body, closeModal);
+    card.append(head, body);
+    backdrop.append(card);
+    document.body.append(backdrop);
+    return closeModal;
+  }
+
   function renderEmptyState(title, subtitle) {
     const box = el('div', 'empty-pane');
     box.append(el('span', 'empty-pane-mark'), el('strong', '', title), el('small', '', subtitle));
@@ -87,10 +196,13 @@
   // 1. P4 Memory Overview (brain-home)
   // =========================================================================
   async function renderBrainHome(host, req) {
-    host.replaceChildren(el('p', '', '正在汇总 VEIL Brain 概览数据…'));
-    const { ok, data } = await reqJson(req, '/api/brain/overview');
+    host.replaceChildren(el('p', '', '正在汇总 VEIL Brain 记忆监控数据…'));
+    const [{ ok, data }, { ok: gOk, data: gData }] = await Promise.all([
+      reqJson(req, '/api/brain/overview'),
+      reqJson(req, '/api/brain/growth?range=7d'),
+    ]);
     if (!ok || !data || !data.counts) {
-      host.replaceChildren(renderEmptyState('暂时无法读取记忆概览', '请确认当前角色目录与后端服务正常。'));
+      host.replaceChildren(renderEmptyState('暂时无法读取记忆监控数据', '请确认当前角色目录与后端服务正常。'));
       return;
     }
 
@@ -98,126 +210,625 @@
     const hSum = data.health_summary;
     healthWarnFlag = Boolean(hSum && (hSum.warn_count || hSum.error_count));
 
+    // 1. Top KPI row
     const kpiGrid = el('div', 'kpi-grid');
     const kpiDefs = [
       { label: '活跃记忆', val: c.active ?? 0, sub: `置顶 ${c.pinned ?? 0} · 归档 ${c.archived ?? 0}`, page: 'memory' },
-      { label: '共同经历', val: c.events_total ?? 0, sub: `待重整 ${c.events_pending_story ?? 0} · 待复核 ${c.events_pending_review ?? 0}`, page: 'workspace-events' },
-      { label: '本周动态', val: `+${c.week_added ?? 0} / 改${c.week_updated ?? 0}`, sub: `待补向量 ${c.pending_vector ?? 0} · 墓碑 ${c.tombstones ?? 0}`, page: 'brain-recall' },
-      {
-        label: '健康巡检',
-        val: hSum ? (hSum.error_count ? `异常 ${hSum.error_count}` : (hSum.warn_count ? `关注 ${hSum.warn_count}` : '良好')) : '待首次检查',
-        sub: data.health_scanned_at ? `最近 ${formatTime(data.health_scanned_at)}` : '点击进入只读巡检',
-        page: 'brain-health',
-      },
+      { label: '共同经历', val: c.events_total ?? 0, sub: `待重整 ${c.events_pending_story ?? 0} · 待复核 ${c.events_pending_review ?? 0}`, page: 'memory' },
+      { label: '本周新增', val: `+${c.week_added ?? 0}`, sub: `待补向量 ${c.pending_vector ?? 0} · 墓碑 ${c.tombstones ?? 0}` },
+      { label: '本周修订', val: `${c.week_updated ?? 0}`, sub: `最后更新 ${formatTime((gData && gData.summary && gData.summary.last_updated_at) || new Date().toISOString())}` },
     ];
     for (const k of kpiDefs) {
       const card = el('article', 'veil-card kpi-card');
       const top = el('div', 'kpi-top');
-      top.append(el('span', '', k.label), el('span', 'kpi-arrow', '→'));
+      top.append(el('span', '', k.label), k.page ? el('span', 'kpi-arrow', '→') : el('span', '', ''));
       card.append(top, el('div', 'kpi-val', k.val), el('div', 'kpi-sub', k.sub));
-      card.addEventListener('click', () => window.veilWorkspace?.go(k.page));
+      if (k.page) card.addEventListener('click', () => window.veilWorkspace?.go(k.page));
       kpiGrid.append(card);
     }
 
-    const overviewGrid = el('div', 'overview-grid');
-
-    // Left: Dual-stack trend chart + 6 layers
-    const leftCol = el('div', 'workspace-content');
-    const chartCard = el('article', 'veil-card');
-    const chartHead = el('div', 'veil-card-head');
-    chartHead.append(el('h3', '', '记忆增长与修订趋势'));
-    const seg = el('div', 'seg-tabs');
-    const btn7d = el('button', '', '近 7 天');
-    const btn30d = el('button', '', '近 4 周');
-    btn7d.type = btn30d.type = 'button';
-    seg.append(btn7d, btn30d);
-    chartHead.append(seg);
-
-    const legend = el('div', 'chart-legend');
-    const l1 = el('span');
-    l1.append(el('i', 'legend-dot new'), '新增记忆');
-    const l2 = el('span');
-    l2.append(el('i', 'legend-dot revised'), '修订更新');
-    legend.append(l1, l2);
-
-    const barsWrap = el('div', 'growth-bars-wrap');
-    const axisX = el('div', 'growth-axis-x');
-    const drawTrend = mode => {
-      btn7d.setAttribute('aria-pressed', String(mode === '7d'));
-      btn30d.setAttribute('aria-pressed', String(mode === '30d'));
-      const series = (data.trends && data.trends[mode]) || [];
-      const maxVal = Math.max(1, ...series.map(pt => (pt.added || 0) + (pt.updated || 0)));
-      barsWrap.replaceChildren();
-      axisX.replaceChildren();
-      for (const pt of series) {
-        const col = el('div', 'growth-col');
-        const stack = el('div', 'bar-stack');
-        const hAdded = Math.round(((pt.added || 0) / maxVal) * 116);
-        const hUpd = Math.round(((pt.updated || 0) / maxVal) * 116);
-        const segNew = el('div', 'bar-seg-new');
-        segNew.style.height = `${hAdded}px`;
-        segNew.title = `${pt.label} 新增 ${pt.added || 0}`;
-        const segRev = el('div', 'bar-seg-revised');
-        segRev.style.height = `${hUpd}px`;
-        segRev.title = `${pt.label} 修订 ${pt.updated || 0}`;
-        stack.append(segNew, segRev);
-        col.append(stack);
-        barsWrap.append(col);
-        axisX.append(el('span', '', pt.label));
-      }
-    };
-    btn7d.addEventListener('click', () => drawTrend('7d'));
-    btn30d.addEventListener('click', () => drawTrend('30d'));
-    drawTrend('7d');
-    chartCard.append(chartHead, legend, barsWrap, axisX);
-
-    // 6-layer statuses
+    // 2. Six-Layer Memory System (Compact 3x2 grid & real toggles)
     const layerCard = el('article', 'veil-card');
     const layerHead = el('div', 'veil-card-head');
-    layerHead.append(el('h3', '', '六层记忆系统运行态'), pill('实时状态'));
-    const layerGrid = el('div', 'layer-list');
+    layerHead.append(el('h3', '', '六层记忆系统'), el('span', 'muted', '运行状态与控制'));
+    const layerGrid = el('div', 'six-layer-grid');
     for (const layer of data.layers || []) {
       const item = el('div', 'layer-item');
       const top = el('div', 'layer-item-top');
-      top.append(el('strong', '', layer.name), pill(layer.status_text || '未知', layer.tone || ''));
-      item.append(top, el('small', '', layer.detail || ''));
+      top.append(el('strong', '', layer.name));
+      if (layer.toggle_key && !layer.protected) {
+        const sw = el('button', 'workspace-switch');
+        sw.type = 'button';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', String(Boolean(layer.enabled)));
+        sw.setAttribute('aria-label', `${layer.name}开关`);
+        sw.title = layer.enabled ? '点击关闭' : '点击启用';
+        sw.addEventListener('click', async () => {
+          const nextVal = !Boolean(layer.enabled);
+          sw.disabled = true;
+          const res = await reqJson(req, '/api/brain/layer-toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layer_id: layer.id, enabled: nextVal }),
+          });
+          sw.disabled = false;
+          if (!res.ok || !res.data?.ok) {
+            alert(res.data?.error || '切换失败，已恢复原状态');
+            return;
+          }
+          layer.enabled = Boolean(res.data.enabled);
+          sw.setAttribute('aria-checked', String(layer.enabled));
+          renderBrainHome(host, req);
+        });
+        top.append(sw);
+      } else {
+        top.append(pill(layer.status_text || '受保护', layer.tone || 'good'));
+      }
+      item.append(top);
+      if (layer.toggle_key && !layer.protected && layer.status_text) {
+        item.append(pill(layer.status_text, layer.tone || ''));
+      }
+      item.append(el('small', '', layer.detail || ''));
+      if (layer.protected && layer.protected_reason) {
+        item.append(el('small', 'muted', layer.protected_reason));
+      }
+      if (layer.id === 'cognition' && typeof layer.budget_max === 'number') {
+        const meter = el('div', 'budget-meter');
+        const fill = el('div');
+        const pct = Math.min(100, Math.round(((layer.budget_used || 0) / Math.max(1, layer.budget_max)) * 100));
+        fill.style.width = `${pct}%`;
+        fill.style.background = pct > 90 ? 'var(--bad, #c0392b)' : 'var(--veil-accent)';
+        meter.append(fill);
+        item.append(meter);
+      }
       layerGrid.append(item);
     }
     layerCard.append(layerHead, layerGrid);
-    leftCol.append(chartCard, layerCard);
 
-    // Right: Recent Brain timeline
-    const rightCol = el('article', 'veil-card');
-    const tlHead = el('div', 'veil-card-head');
-    tlHead.append(el('h3', '', '最近记忆与事件轨迹'));
-    const tlBtn = btn('打开记忆库', 'sm');
-    tlBtn.addEventListener('click', () => window.veilWorkspace?.go('memory'));
-    tlHead.append(tlBtn);
-    rightCol.append(tlHead);
-    const tl = el('ul', 'veil-timeline');
-    const acts = data.activities || [];
-    if (!acts.length) {
-      rightCol.append(renderEmptyState('近期暂无写入动态', '新的对话整理和事件记录会按时间出现在这里。'));
-    } else {
-      for (const act of acts) {
-        const li = el('li', 'tl-item');
-        li.append(el('span', act.kind === 'event' ? 'tl-dot gold' : 'tl-dot'));
-        const card = el('button', 'tl-card');
-        card.type = 'button';
-        card.append(el('div', 'tl-title', act.title || act.kind), el('div', 'tl-meta', act.meta || formatTime(act.time)));
-        if (act.detail) card.append(el('div', 'tl-detail', act.detail));
-        card.addEventListener('click', () => {
-          if (act.event_id) window.veilWorkspace?.openEvent(act.event_id);
-          else if (act.memory_id) window.veilWorkspace?.openMemory(act.memory_id);
+    // 2b. Natural Association Controls (inside existing memory config card, persisted via /api/brain/layer-toggle)
+    if (data.recall_association && Array.isArray(data.recall_association.controls) && data.recall_association.controls.length) {
+      const assoc = data.recall_association;
+      const assocSub = el('div', 'veil-subpanel');
+      assocSub.style.marginTop = '10px';
+      const assocHead = el('div', 'veil-card-head');
+      const modeTone = assoc.effective_mode === 'disabled' ? '' : 'good';
+      assocHead.append(
+        el('strong', '', '自然联想控制'),
+        pill(`当前生效：${assoc.status_text || assoc.effective_mode}`, modeTone),
+      );
+      const assocGrid = el('div', 'six-layer-grid');
+      assocGrid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
+      for (const ctrl of assoc.controls) {
+        const item = el('div', 'layer-item');
+        const top = el('div', 'layer-item-top');
+        top.append(el('strong', '', ctrl.name));
+        const sw = el('button', 'workspace-switch');
+        sw.type = 'button';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', String(Boolean(ctrl.enabled)));
+        sw.setAttribute('aria-label', `${ctrl.name}开关`);
+        sw.title = ctrl.enabled ? '点击关闭' : '点击启用';
+        sw.addEventListener('click', async () => {
+          const nextVal = !Boolean(ctrl.enabled);
+          sw.disabled = true;
+          const res = await reqJson(req, '/api/brain/layer-toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layer_id: ctrl.id, enabled: nextVal }),
+          });
+          sw.disabled = false;
+          if (!res.ok || !res.data?.ok) {
+            alert(res.data?.error || '切换失败，已恢复原状态');
+            return;
+          }
+          ctrl.enabled = Boolean(res.data.enabled);
+          sw.setAttribute('aria-checked', String(ctrl.enabled));
+          renderBrainHome(host, req);
         });
-        li.append(card);
-        tl.append(li);
+        top.append(sw);
+        item.append(top);
+        if (ctrl.status_text) {
+          item.append(pill(ctrl.status_text, ctrl.tone || ''));
+        }
+        item.append(el('small', '', ctrl.detail || ''));
+        assocGrid.append(item);
       }
-      rightCol.append(tl);
+      assocSub.append(assocHead, assocGrid);
+      layerCard.append(assocSub);
     }
 
-    overviewGrid.append(leftCol, rightCol);
-    host.replaceChildren(kpiGrid, overviewGrid);
+    // 3. Memory Growth Analysis & One-Click Report
+    const chartCard = el('article', 'veil-card');
+    const chartHead = el('div', 'veil-card-head');
+    chartHead.append(el('h3', '', '记忆增长分析'));
+    const rangeSeg = el('div', 'seg-tabs');
+    const rangeBtns = [
+      { key: 'today', label: '今日' },
+      { key: '7d', label: '近 7 天' },
+      { key: '30d', label: '近 30 天' },
+      { key: 'custom', label: '自定义' },
+    ];
+    let currentRange = '7d';
+    let currentView = 'added_updated';
+    let currentGrowth = gData || { summary: {}, days: [] };
+    let selectedChartDate = '';
+
+    const customWrap = el('div', 'inline-controls');
+    customWrap.hidden = true;
+    const fromInp = el('input', 'veil-input');
+    fromInp.type = 'date';
+    const toInp = el('input', 'veil-input');
+    toInp.type = 'date';
+    const applyCustom = btn('应用', 'sm');
+    customWrap.append(fromInp, el('span', '', '至'), toInp, applyCustom);
+
+    const viewSeg = el('div', 'seg-tabs');
+    const viewDefs = [
+      { key: 'added_updated', label: '新增与修订' },
+      { key: 'cumulative', label: '累计与净增长' },
+      { key: 'events', label: '事件新建与更新' },
+      { key: 'types', label: '类型分布' },
+    ];
+
+    const legendBox = el('div', 'chart-legend');
+    const chartFrame = el('div', 'growth-chart-frame');
+    const axisY = el('div', 'growth-axis-y');
+    const plotArea = el('div', 'growth-plot');
+    const axisX = el('div', 'growth-axis-x');
+    chartFrame.append(axisY, plotArea, axisX);
+
+    const dayDrillBox = el('div', 'veil-subpanel');
+    dayDrillBox.hidden = true;
+
+    let dayChangeSeq = 0;
+    const loadDayChanges = async dateStr => {
+      const seq = ++dayChangeSeq;
+      selectedChartDate = dateStr;
+      drawGrowthChart();
+      dayDrillBox.hidden = false;
+      dayDrillBox.replaceChildren(el('p', 'muted', `正在加载 ${dateStr} 的实际记忆变更…`));
+      const res = await reqJson(req, `/api/brain/day-changes?date=${encodeURIComponent(dateStr)}`);
+      if (seq !== dayChangeSeq) return;
+      if (!res.ok || !res.data) {
+        dayDrillBox.replaceChildren(el('p', 'muted', '无法加载当日变更明细。'));
+        return;
+      }
+      const head = el('div', 'veil-card-head');
+      head.append(el('strong', '', `${dateStr} 实际变更明细（${res.data.changes.length} 条）`));
+      const closeBtn = btn('收起', 'sm');
+      closeBtn.addEventListener('click', () => {
+        selectedChartDate = '';
+        dayDrillBox.hidden = true;
+        drawGrowthChart();
+      });
+      head.append(closeBtn);
+      const list = el('div', 'stack-sm');
+      if (!res.data.changes.length) {
+        list.append(el('p', 'muted', '当天无实际记忆或事件内容变更。'));
+      } else {
+        for (const ch of res.data.changes.slice(0, 20)) {
+          const row = el('div', 'flat-entry');
+          row.append(
+            el('strong', '', `${ch.kind_label || '变更'} · ${ch.title || ch.memory_id}`),
+            el('small', 'muted', `${formatTime(ch.time)} · ${ch.summary || ''}`),
+          );
+          list.append(row);
+        }
+      }
+      if (res.data.maintenance_logs && res.data.maintenance_logs.length) {
+        const det = el('details');
+        det.append(el('summary', '', `已折叠 ${res.data.maintenance_logs.length} 条无内容变更的系统维护日志`));
+        for (const m of res.data.maintenance_logs) {
+          det.append(el('div', 'muted', `${formatTime(m.time)} · ${m.operation} (${m.status})`));
+        }
+        list.append(det);
+      }
+      dayDrillBox.replaceChildren(head, list);
+    };
+
+    const mkLegendItem = (dotCls, text) => {
+      const item = el('span', 'legend-item');
+      item.append(el('span', `legend-dot ${dotCls}`), el('span', '', text));
+      return item;
+    };
+
+    const drawGrowthChart = () => {
+      const days = currentGrowth.days || [];
+      const sum = currentGrowth.summary || {};
+      legendBox.replaceChildren();
+      axisY.replaceChildren();
+      plotArea.replaceChildren();
+      axisX.replaceChildren();
+
+      if (currentView === 'types') {
+        const byType = sum.by_type || {};
+        const entries = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+        const totalCnt = entries.reduce((acc, [, v]) => acc + v, 0) || 1;
+        legendBox.append(
+          mkLegendItem('new', `记忆类型分布（共 ${entries.length} 类 · ${totalCnt} 条）`),
+        );
+        chartFrame.style.display = 'block';
+        axisY.hidden = true;
+        axisX.hidden = true;
+        if (!entries.length) {
+          plotArea.append(el('p', 'muted', '暂无记忆类型分布数据'));
+          return;
+        }
+        const maxT = Math.max(1, ...entries.map(([, v]) => v));
+        const list = el('div', 'type-dist-list');
+        for (const [k, v] of entries) {
+          const row = el('div', 'type-dist-row');
+          const track = el('div', 'type-dist-track');
+          const fill = el('div', 'type-dist-fill');
+          fill.style.width = `${Math.max(4, Math.round((v / maxT) * 100))}%`;
+          track.append(fill);
+          const pct = Math.round((v / totalCnt) * 100);
+          row.append(
+            el('span', '', labelMemoryType(k)),
+            track,
+            el('span', 'type-dist-val', `${v} 条 (${pct}%)`),
+          );
+          list.append(row);
+        }
+        plotArea.append(list);
+        return;
+      }
+
+      chartFrame.style.display = 'grid';
+      axisY.hidden = false;
+      axisX.hidden = false;
+
+      if (currentView === 'cumulative') {
+        legendBox.append(
+          mkLegendItem('new', `活跃存量（当前 ${sum.total_active ?? 0} 条 · 累计创建 ${sum.total_created ?? sum.total_active ?? 0} 条）`),
+          mkLegendItem('soft', `区间净增长 ${sum.net_growth >= 0 ? '+' : ''}${sum.net_growth ?? 0}`),
+        );
+        if (sum.history_incomplete && sum.history_incomplete_reason) {
+          legendBox.append(pill(`历史不完整：${sum.history_incomplete_reason}`, 'warn'));
+        }
+        const vals = days.map(pt => pt.cumulative || 0);
+        const minV = Math.max(0, Math.min(...vals, 0));
+        const maxV = Math.max(minV + 1, ...vals);
+        const midV = Math.round((minV + maxV) / 2);
+        axisY.append(el('span', '', `${maxV}`), el('span', '', `${midV}`), el('span', '', `${minV}`));
+
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('class', 'growth-line-svg');
+        svg.setAttribute('viewBox', '0 0 600 164');
+        svg.setAttribute('preserveAspectRatio', 'none');
+
+        const n = Math.max(1, days.length);
+        const coords = days.map((pt, idx) => {
+          const x = n === 1 ? 300 : 28 + (idx / (n - 1)) * 544;
+          const ratio = ((pt.cumulative || 0) - minV) / Math.max(1, maxV - minV);
+          const y = 144 - ratio * 114;
+          return { x, y, pt };
+        });
+
+        if (coords.length >= 2) {
+          const areaD = `M ${coords[0].x} 152 ` + coords.map(c => `L ${c.x} ${c.y}`).join(' ') + ` L ${coords[coords.length - 1].x} 152 Z`;
+          const areaPath = document.createElementNS(svgNS, 'path');
+          areaPath.setAttribute('class', 'growth-line-area');
+          areaPath.setAttribute('d', areaD);
+          svg.appendChild(areaPath);
+
+          const lineD = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x} ${c.y}`).join(' ');
+          const linePath = document.createElementNS(svgNS, 'path');
+          linePath.setAttribute('class', 'growth-line-stroke');
+          linePath.setAttribute('d', lineD);
+          svg.appendChild(linePath);
+        }
+
+        const labelStep = n > 14 ? Math.ceil(n / 7) : 1;
+        coords.forEach(({ x, y, pt }, idx) => {
+          const g = document.createElementNS(svgNS, 'g');
+          g.setAttribute('class', 'growth-point-group');
+          g.setAttribute('aria-selected', String(pt.date === selectedChartDate));
+          g.addEventListener('click', () => loadDayChanges(pt.date));
+
+          const dot = document.createElementNS(svgNS, 'circle');
+          dot.setAttribute('class', 'growth-point-dot');
+          dot.setAttribute('cx', String(x));
+          dot.setAttribute('cy', String(y));
+          dot.setAttribute('r', pt.date === selectedChartDate ? '6' : '4.5');
+          g.appendChild(dot);
+
+          if (idx % labelStep === 0 || idx === n - 1 || pt.date === selectedChartDate) {
+            const txt = document.createElementNS(svgNS, 'text');
+            txt.setAttribute('class', 'growth-point-label');
+            txt.setAttribute('x', String(x));
+            txt.setAttribute('y', String(Math.max(14, y - 10)));
+            const netStr = pt.net_growth ? ` (${pt.net_growth >= 0 ? '+' : ''}${pt.net_growth})` : '';
+            txt.textContent = `${pt.cumulative || 0}${n <= 10 ? netStr : ''}`;
+            g.appendChild(txt);
+          }
+
+          const titleEl = document.createElementNS(svgNS, 'title');
+          titleEl.textContent = `${pt.date} 累计 ${pt.cumulative || 0}（净增长 ${pt.net_growth >= 0 ? '+' : ''}${pt.net_growth || 0}）`;
+          g.appendChild(titleEl);
+          svg.appendChild(g);
+
+          const xLbl = el('span', '', (idx % labelStep === 0 || idx === n - 1) ? pt.label : '');
+          axisX.append(xLbl);
+        });
+        plotArea.append(svg);
+        return;
+      }
+
+      if (currentView === 'events') {
+        legendBox.append(
+          mkLegendItem('new', `新建事件 (${sum.events_created ?? 0})`),
+          mkLegendItem('revised', `事件更新 (${sum.events_updated ?? 0})`),
+        );
+      } else {
+        legendBox.append(
+          mkLegendItem('new', `新增记忆 (${sum.actual_added ?? 0})`),
+          mkLegendItem('revised', `修订次数 (${sum.actual_updated ?? 0})`),
+        );
+      }
+
+      const maxVal = Math.max(
+        1,
+        ...days.map(pt => (currentView === 'events'
+          ? (pt.events_created || 0) + (pt.events_updated || 0)
+          : (pt.added || 0) + (pt.updated || 0))),
+      );
+      axisY.append(el('span', '', `${maxVal}`), el('span', '', `${Math.round(maxVal / 2)}`), el('span', '', '0'));
+
+      const barsWrap = el('div', 'growth-bars-wrap');
+      const labelStep = days.length > 14 ? Math.ceil(days.length / 7) : 1;
+      days.forEach((pt, idx) => {
+        const col = el('div', 'growth-col');
+        col.setAttribute('role', 'button');
+        col.setAttribute('tabindex', '0');
+        col.setAttribute('aria-selected', String(pt.date === selectedChartDate));
+        col.dataset.date = pt.date;
+        col.title = `点击查看 ${pt.date} 变更明细`;
+        col.addEventListener('click', () => loadDayChanges(pt.date));
+        col.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadDayChanges(pt.date); }
+        });
+
+        const v1 = currentView === 'events' ? (pt.events_created || 0) : (pt.added || 0);
+        const v2 = currentView === 'events' ? (pt.events_updated || 0) : (pt.updated || 0);
+        const totalDay = v1 + v2;
+        if (totalDay > 0 || days.length <= 10) {
+          col.append(el('span', 'bar-val-label', `${totalDay}`));
+        }
+
+        const stack = el('div', 'bar-stack');
+        const h1 = Math.round((v1 / maxVal) * 118);
+        const h2 = Math.round((v2 / maxVal) * 118);
+        const segNew = el('div', 'bar-seg-new');
+        segNew.style.height = `${h1}px`;
+        segNew.title = currentView === 'events' ? `${pt.date} 新建事件 ${v1}` : `${pt.date} 新增 ${v1}`;
+        const segRev = el('div', 'bar-seg-revised');
+        segRev.style.height = `${h2}px`;
+        segRev.title = currentView === 'events' ? `${pt.date} 更新事件 ${v2}` : `${pt.date} 修订 ${v2}`;
+        stack.append(segNew, segRev);
+        col.append(stack);
+        barsWrap.append(col);
+
+        axisX.append(el('span', '', (idx % labelStep === 0 || idx === days.length - 1) ? pt.label : ''));
+      });
+      plotArea.append(barsWrap);
+    };
+
+    let growthSeq = 0;
+    const reloadGrowth = async (rangeKey, fDate = '', tDate = '') => {
+      const seq = ++growthSeq;
+      currentRange = rangeKey;
+      for (const b of rangeSeg.children) {
+        b.setAttribute('aria-pressed', String(b.dataset.range === rangeKey));
+      }
+      customWrap.hidden = rangeKey !== 'custom';
+      const qs = new URLSearchParams({ range: rangeKey });
+      if (fDate) qs.set('from_date', fDate);
+      if (tDate) qs.set('to_date', tDate);
+      const res = await reqJson(req, `/api/brain/growth?${qs.toString()}`);
+      if (seq !== growthSeq) return;
+      if (res.ok && res.data) {
+        currentGrowth = res.data;
+        drawGrowthChart();
+      }
+    };
+
+    for (const rb of rangeBtns) {
+      const b = el('button', '', rb.label);
+      b.type = 'button';
+      b.dataset.range = rb.key;
+      b.setAttribute('aria-pressed', String(rb.key === currentRange));
+      b.addEventListener('click', () => {
+        if (rb.key === 'custom') {
+          currentRange = 'custom';
+          customWrap.hidden = false;
+          for (const ch of rangeSeg.children) ch.setAttribute('aria-pressed', String(ch.dataset.range === 'custom'));
+        } else {
+          reloadGrowth(rb.key);
+        }
+      });
+      rangeSeg.append(b);
+    }
+    applyCustom.addEventListener('click', () => reloadGrowth('custom', fromInp.value, toInp.value));
+    chartHead.append(rangeSeg);
+
+    for (const vd of viewDefs) {
+      const b = el('button', '', vd.label);
+      b.type = 'button';
+      b.dataset.view = vd.key;
+      b.setAttribute('aria-pressed', String(vd.key === currentView));
+      b.addEventListener('click', () => {
+        currentView = vd.key;
+        for (const ch of viewSeg.children) ch.setAttribute('aria-pressed', String(ch.dataset.view === currentView));
+        drawGrowthChart();
+      });
+      viewSeg.append(b);
+    }
+
+    // One-click Growth & Change Report controls
+    const reportBar = el('div', 'inline-controls');
+    const chkContent = el('input');
+    chkContent.type = 'checkbox';
+    chkContent.checked = true;
+    const lblContent = el('label', 'inline-check');
+    lblContent.append(chkContent, '包含记忆正文');
+    const chkHealth = el('input');
+    chkHealth.type = 'checkbox';
+    const lblHealth = el('label', 'inline-check');
+    lblHealth.append(chkHealth, '合并健康巡检');
+
+    const copySummaryBtn = btn('复制摘要报告', 'sm');
+    const copyFullBtn = btn('复制完整诊断报告', 'primary sm');
+    const previewReportBtn = btn('预览报告', 'sm');
+    previewReportBtn.hidden = true;
+    const exportBtn = btn('导出报告', 'sm');
+    const reportStatus = el('span', 'muted');
+    let lastReportMarkdown = '';
+
+    const fetchAndCopyReport = async (fmt, download = false) => {
+      const s = currentGrowth.summary || {};
+      const qs = new URLSearchParams({
+        from_date: s.from_date || '',
+        to_date: s.to_date || '',
+        include_content: chkContent.checked ? '1' : '0',
+        include_health: chkHealth.checked ? '1' : '0',
+        format: fmt,
+      });
+      reportStatus.textContent = '生成中…';
+      const res = await reqJson(req, `/api/brain/growth-report?${qs.toString()}`);
+      if (!res.ok || !res.data?.markdown) {
+        reportStatus.textContent = '生成失败';
+        return;
+      }
+      lastReportMarkdown = res.data.markdown;
+      previewReportBtn.hidden = false;
+      if (download) {
+        const blob = new Blob([res.data.markdown], { type: 'text/markdown;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `veil-brain-growth-${s.from_date || 'report'}.md`;
+        a.click();
+        reportStatus.textContent = '已导出报告';
+      } else {
+        const copied = await copyText(res.data.markdown);
+        reportStatus.textContent = copied
+          ? (fmt === 'summary' ? '已复制摘要报告 ✓' : '已复制完整报告 ✓')
+          : '已生成（点击预览报告查看）';
+      }
+    };
+    copySummaryBtn.addEventListener('click', () => fetchAndCopyReport('summary', false));
+    copyFullBtn.addEventListener('click', () => fetchAndCopyReport('full', false));
+    previewReportBtn.addEventListener('click', () => {
+      if (!lastReportMarkdown) return;
+      openBrainModal('记忆增长与变更诊断报告', '本地确定性统计 · 只读快照', body => {
+        const copyInModal = btn('复制全文', 'sm primary');
+        copyInModal.addEventListener('click', async () => {
+          await copyText(lastReportMarkdown);
+          copyInModal.textContent = '已复制 ✓';
+        });
+        body.append(copyInModal, el('pre', 'report-preview-box', lastReportMarkdown));
+      });
+    });
+    exportBtn.addEventListener('click', () => fetchAndCopyReport('full', true));
+    reportBar.append(lblContent, lblHealth, copySummaryBtn, copyFullBtn, previewReportBtn, exportBtn, reportStatus);
+
+    drawGrowthChart();
+    chartCard.append(chartHead, customWrap, viewSeg, legendBox, chartFrame, dayDrillBox, reportBar);
+
+    // 4. Health Check Summary + On-Demand Modal Inspector (keeps overview compact)
+    const healthCard = el('article', 'veil-card');
+    const healthHead = el('div', 'veil-card-head');
+    healthHead.append(el('h3', '', '健康巡检'));
+    const healthActions = el('div', 'inline-controls');
+    const expandHealthBtn = btn('展开完整巡检', 'sm');
+    expandHealthBtn.addEventListener('click', () => {
+      openBrainModal('记忆健康巡检中心', '严格只读核验 · 支持按日期范围检查与报告导出', async body => {
+        await renderHealthWorkspace(body, req);
+      });
+    });
+    healthActions.append(expandHealthBtn);
+    healthHead.append(healthActions);
+    const hSummaryText = hSum
+      ? `最近巡检：${formatTime(data.health_scanned_at)} · 状态：${hSum.status_label || hSum.status || '完成'} · 异常 ${hSum.error_count || 0} / 关注 ${hSum.warn_count || 0}`
+      : '尚未进行首次检查（点击“展开完整巡检”可执行只读巡检、查看历史报告与配置定期检查）';
+    healthCard.append(healthHead, el('p', 'muted', hSummaryText));
+    if (hSum) {
+      const hPills = el('div', 'inline-controls');
+      hPills.append(
+        pill(`通过 ${hSum.good_count || 0} 项`, 'good'),
+        pill(`需关注 ${(hSum.warn_count || 0) + (hSum.error_count || 0)} 项`, (hSum.warn_count || hSum.error_count) ? 'warn' : 'good'),
+      );
+      healthCard.append(hPills);
+    }
+
+    // 5. Recent Activities (Compact list; click to inspect readable before/after diff & copy report in modal)
+    const actCard = el('article', 'veil-card');
+    const tlHead = el('div', 'veil-card-head');
+    tlHead.append(el('h3', '', '近期记忆与事件轨迹'));
+    const tlBtn = btn('打开记忆档案', 'sm');
+    tlBtn.addEventListener('click', () => window.veilWorkspace?.go('memory'));
+    tlHead.append(tlBtn);
+    actCard.append(tlHead);
+    const acts = data.activities || [];
+    if (!acts.length) {
+      actCard.append(renderEmptyState('近期暂无写入动态', '新的对话整理和事件记录会按时间出现在这里。'));
+    } else {
+      const list = el('div', 'stack-sm');
+      for (const act of acts.slice(0, 6)) {
+        const row = el('button', 'index-item');
+        row.type = 'button';
+        const top = el('div', 'index-item-top');
+        top.append(el('strong', '', act.title || act.kind_label || '记忆变更'), el('small', '', formatTime(act.time).slice(5, 16)));
+        row.append(top, el('small', 'muted', act.meta || act.source || ''));
+        row.addEventListener('click', () => {
+          openBrainModal(act.title || '记忆变更详情', `来源：${act.source || '记忆系统'} · 时间：${formatTime(act.time)}`, (body, closeModal) => {
+            if (act.detail) body.append(el('p', '', act.detail));
+            if (act.content) body.append(el('div', 'reader-why', act.content));
+            if (Array.isArray(act.diff) && act.diff.length) {
+              body.append(el('strong', '', '版本变化对比'), buildReadableDiffNode(act.diff, '', act.content || ''));
+            }
+            const actBtns = el('div', 'inline-controls');
+            const copyActBtn = btn('复制轨迹报告', 'sm primary');
+            copyActBtn.addEventListener('click', async () => {
+              const repLines = [
+                `# 记忆轨迹报告 · ${act.title || ''}`,
+                `- 类型：${act.kind_label || act.kind || '变更'}`,
+                `- 来源：${act.source || '记忆系统'}`,
+                `- 时间：${formatTime(act.time)}`,
+                `- 说明：${act.detail || '无'}`,
+                act.content ? `\n## 正文内容\n${act.content}` : '',
+                Array.isArray(act.diff) && act.diff.length ? `\n## 版本差异\n\`\`\`diff\n${act.diff.join('\n')}\n\`\`\`` : '',
+              ].filter(Boolean).join('\n');
+              const ok = await copyText(repLines);
+              copyActBtn.textContent = ok ? '已复制轨迹报告 ✓' : '复制失败';
+            });
+            actBtns.append(copyActBtn);
+            if (act.event_id || act.memory_id) {
+              const jumpBtn = btn(act.event_id ? '查看关联事件' : '定位到记忆档案', 'sm');
+              jumpBtn.addEventListener('click', () => {
+                closeModal();
+                if (act.event_id) window.veilWorkspace?.openEvent(act.event_id);
+                else if (act.memory_id) window.veilWorkspace?.openMemory(act.memory_id);
+              });
+              actBtns.append(jumpBtn);
+            }
+            body.append(actBtns);
+          });
+        });
+        list.append(row);
+      }
+      actCard.append(list);
+    }
+
+    const bentoSplit = el('div', 'brain-home-bento');
+    const bentoSide = el('div', 'brain-home-bento-side');
+    bentoSide.append(healthCard, actCard);
+    bentoSplit.append(chartCard, bentoSide);
+
+    const wrap = el('div', 'brain-home-compact stack-sm');
+    wrap.append(kpiGrid, layerCard, bentoSplit);
+    host.replaceChildren(wrap);
   }
 
   // =========================================================================
@@ -230,14 +841,14 @@
     memoryAddonMounted = true;
     view.classList.add('p4-unified');
 
-    const addon = el('section', 'veil-card');
+    const addon = el('section', 'brain-library-shell');
     addon.id = 'brain-library-addon';
-    addon.style.marginTop = '14px';
+    addon.style.marginTop = '10px';
 
     const head = el('div', 'veil-card-head');
     const titleWrap = el('div');
-    titleWrap.append(el('h3', '', 'P4 全量记忆浏览器（分层检索 · 版本 Diff · 并发锁定）'));
-    const statsLabel = el('small', '', '支持置顶/关联/碎片过滤，保存时校验 SHA-256 乐观锁');
+    titleWrap.append(el('h3', '', '记忆档案库'));
+    const statsLabel = el('small', '', '支持关键词检索、状态筛选、历史版本对比与安全编辑');
     titleWrap.append(statsLabel);
     const refreshBtn = btn('刷新全库', 'sm primary');
     head.append(titleWrap, refreshBtn);
@@ -289,16 +900,16 @@
       readerPane.replaceChildren();
 
       const badgeRow = el('div', 'index-tags');
-      badgeRow.append(pill(item.kind || 'memory', 'rose'), pill(item.bucket || 'dynamic'));
+      badgeRow.append(pill(labelMemoryType(item.kind), 'rose'), pill(item.bucket === 'archive' ? '已归档' : (item.bucket === 'core' ? '核心' : '动态')));
       if (item.pinned) badgeRow.append(pill('置顶', 'gold'));
       if (item.locked) badgeRow.append(pill('锁定', 'warn'));
       if (item.archived) badgeRow.append(pill('已归档'));
-      if (item.vector_state && item.vector_state !== 'ready') badgeRow.append(pill(`向量:${item.vector_state}`, 'warn'));
+      if (item.vector_state && item.vector_state !== 'ready') badgeRow.append(pill('待补索引', 'warn'));
 
       const title = el('h3', 'reader-title', item.title);
       const meta = el('div', 'reader-meta-grid');
       meta.append(
-        el('span', '', `ID: ${item.memory_id}`),
+        el('span', '', `编号: ${item.memory_id}`),
         el('span', '', `更新: ${formatTime(item.updated_at)}`),
         el('span', '', `召回: ${item.recalled ?? 0} 次`),
         el('span', '', `版本: ${item.version_count ?? 0}`),
@@ -321,8 +932,7 @@
       const actionStatus = el('p', '', '');
       const draftArea = el('div', '');
       if (draft !== undefined) {
-        const box = el('article', 'veil-card');
-        box.style.marginTop = '8px';
+        const box = el('div', 'veil-subpanel');
         box.append(el('p', '', '你有未保存的草稿（基于旧版本）。服务器上的最新版本如下，核对后再决定保存或丢弃。'));
         box.append(el('pre', 'diff-box', serverBody || '（服务器版本为空）'));
         const discard = btn('丢弃我的草稿，改用服务器版本', 'sm');
@@ -334,8 +944,8 @@
         draftArea.append(box);
       }
       const actions = el('div', 'workspace-links');
-      const saveBtn = btn('保存修改（乐观锁校验）', 'sm primary');
-      const verBtn = btn('查看版本与 Diff', 'sm');
+      const saveBtn = btn('保存修改', 'sm primary');
+      const verBtn = btn('查看历史版本', 'sm');
       const archBtn = btn(item.archived ? '恢复到活跃记忆' : '移入归档', 'sm');
       const delBtn = btn('申请删除', 'sm danger');
 
@@ -394,12 +1004,11 @@
             return;
           }
           for (const v of versions) {
-            const card = el('div', 'veil-card');
-            card.style.marginTop = '8px';
-            card.append(el('strong', '', `${formatTime(v.time)} · ${v.operation_reason || '编辑'}`));
-            if (v.diff) card.append(buildLineDiffNode(v.diff));
-            else if (v.old_content) card.append(el('div', 'diff-box', v.old_content.slice(0, 400)));
-            extraArea.append(card);
+            const entry = el('div', 'flat-entry');
+            entry.append(el('strong', '', `${formatTime(v.time)} · ${v.operation_reason || '编辑'}`));
+            if (v.diff) entry.append(buildReadableDiffNode(v.diff, v.old_content, serverBody));
+            else if (v.old_content) entry.append(el('div', 'diff-box', v.old_content.slice(0, 400)));
+            extraArea.append(entry);
           }
         } catch (err) {
           extraArea.replaceChildren(el('p', '', err?.message || '版本读取失败。'));
@@ -491,6 +1100,9 @@
         listPane.append(renderEmptyState('无匹配记忆', '请放宽搜索词或筛选状态。'));
         return;
       }
+      if (!state.selectedId || !state.items.some(it => it.memory_id === state.selectedId)) {
+        state.selectedId = state.items[0].memory_id;
+      }
       for (const item of state.items) {
         const card = el('button', 'index-item');
         card.type = 'button';
@@ -499,9 +1111,10 @@
         const top = el('div', 'index-item-top');
         top.append(el('strong', '', item.title), el('small', '', formatTime(item.updated_at).slice(0, 10)));
         const tags = el('div', 'index-tags');
-        tags.append(pill(item.kind || 'memory'));
+        tags.append(pill(labelMemoryType(item.kind)));
         if (item.pinned) tags.append(pill('置顶', 'gold'));
         if (item.recalled) tags.append(pill(`召回 ${item.recalled}`));
+        if (item.event?.title) tags.append(pill('关联事件', 'rose'));
         card.append(top, el('div', 'index-preview', item.body || item.why || ''), tags);
         card.addEventListener('click', () => { state.detailSeq += 1; openDetail(item); });
         listPane.append(card);
@@ -669,36 +1282,140 @@
       reqJson(req, '/api/peter-page/versions'),
     ]);
     const page = pageRes.data || {};
+    const learned = page.learned || {};
     const versions = verRes.data?.items || verRes.data?.versions || [];
 
-    const grid = el('div', 'overview-grid');
-    const relCard = el('article', 'veil-card');
-    relCard.append(el('h3', '', '关系阶段与核心羁绊'));
-    const relText = page.relationship || page.relationship_base || page.summary || '（暂无关系描述）';
-    relCard.append(el('div', 'reader-prose', typeof relText === 'string' ? relText : JSON.stringify(relText, null, 2)));
-    const fullProfileBtn = btn('打开完整 Peter 档案页', 'sm');
+    const utf8Bytes = str => new Blob([String(str || '')]).size;
+    const relItems = (learned.relationship && learned.relationship.items) || [];
+    const ongoingItems = (learned.ongoing && learned.ongoing.items) || [];
+    const factsText = (learned.sections && learned.sections.facts && learned.sections.facts.text) || '';
+    const growthText = (learned.sections && learned.sections.growth && learned.sections.growth.text) || '';
+
+    const activeRel = relItems.filter(it => !it.stale && it.status !== 'outdated');
+    const staleRel = relItems.filter(it => it.stale || it.status === 'outdated');
+    const openOngoing = ongoingItems.filter(it => !['done', 'completed', 'closed', 'archived'].includes(it.status || 'active'));
+    const closedOngoing = ongoingItems.filter(it => ['done', 'completed', 'closed', 'archived'].includes(it.status || 'active'));
+
+    const usedBytes = (learned.budget && typeof learned.budget.used_bytes === 'number')
+      ? learned.budget.used_bytes
+      : (utf8Bytes(growthText) +
+        utf8Bytes(factsText) +
+        openOngoing.reduce((s, it) => s + utf8Bytes(it.text), 0) +
+        activeRel.reduce((s, it) => s + utf8Bytes(it.text), 0));
+    const maxBytes = (learned.budget && typeof learned.budget.max_bytes === 'number')
+      ? learned.budget.max_bytes
+      : (learned.max_bytes || 4000);
+    const pct = Math.min(100, Math.round((usedBytes / Math.max(1, maxBytes)) * 100));
+
+    // Shared budget summary card
+    const budgetCard = el('article', 'veil-card');
+    const bHead = el('div', 'veil-card-head');
+    bHead.append(el('h3', '', '关系底座与习得认知 · 四区独立预算'), pill(`${usedBytes} / ${maxBytes} B (${pct}%)`, pct > 90 ? 'warn' : 'good'));
+    const meter = el('div', 'budget-meter');
+    const fill = el('div');
+    fill.style.width = `${pct}%`;
+    fill.style.background = pct > 90 ? 'var(--bad, #c0392b)' : 'var(--veil-accent)';
+    meter.append(fill);
+    const bMeta = el('div', 'inline-controls');
+    const fullProfileBtn = btn('在 Peter 档案中编辑', 'sm');
     fullProfileBtn.addEventListener('click', () => window.veilWorkspace?.go('peter'));
-    relCard.append(fullProfileBtn);
+    bMeta.append(el('span', 'muted', `最后更新：${formatTime(learned.updated_at || (learned.relationship && learned.relationship.updated_at)) || '未知'}`), fullProfileBtn);
+    const bSections = el('div', 'layer-list');
+    for (const [key, label] of [['facts', '习得认知'], ['growth', '成长记录'], ['relationship', '关系底座'], ['ongoing', '进行中事项']]) {
+      const budget = learned.budgets?.sections?.[key];
+      if (!budget) continue;
+      const row = el('div', 'layer-item');
+      row.append(el('strong', '', label), el('small', '',
+        `${budget.used_bytes} / ${budget.max_bytes} B${budget.degraded ? '（超限，待整理）' : ''}`));
+      bSections.append(row);
+    }
+    budgetCard.append(bHead, meter, bSections, bMeta);
 
-    const learnedCard = el('article', 'veil-card');
-    learnedCard.append(el('h3', '', '习得偏好与约定记忆'));
-    const learnedText = page.learned_context || page.learned || '';
-    learnedCard.append(el('div', 'reader-prose', typeof learnedText === 'string' ? learnedText : JSON.stringify(learnedText, null, 2)));
+    const grid = el('div', 'cognition-grid');
 
-    if (versions.length) {
-      const verTitle = el('h4', '', `近期认知版本历史 (${versions.length})`);
-      learnedCard.append(verTitle);
-      for (const v of versions.slice(0, 6)) {
-        const box = el('div', 'layer-item');
-        box.style.marginBottom = '8px';
-        box.append(el('strong', '', `${formatTime(v.time)} · ${v.reason || v.action || '自动更新'}`));
-        if (v.diff) box.append(buildLineDiffNode(v.diff));
-        learnedCard.append(box);
+    // Relationship Base
+    const relCard = el('article', 'veil-card');
+    relCard.append(el('div', 'veil-card-head'));
+    relCard.firstChild.append(el('h3', '', '关系底座'), pill(`${activeRel.length} 条有效`));
+    if (!activeRel.length) {
+      relCard.append(el('p', 'muted', '暂无有效关系底座记录。'));
+    } else {
+      const list = el('div', 'stack-sm');
+      for (const it of activeRel) {
+        const row = el('div', 'layer-item');
+        row.append(el('div', 'reader-prose', it.text || ''));
+        if (it.updated_at || it.source || it.locked || it.stale_ref || it.evidence_degraded || it.status) {
+          const srcLabel = ({ lan: '你确认的', evidence: '有来源可查', peter: '角色自述' })[it.source] || it.source || '';
+          const status = ({ confirmed: '已确认', uncertain: '未确认' })[it.status];
+          const badges = [formatTime(it.updated_at), srcLabel, status, it.locked && '已锁定',
+            it.evidence_degraded ? '证据失效已降级' : it.stale_ref && '部分引用失效'].filter(Boolean);
+          row.append(el('small', 'muted', badges.join(' · ')));
+          if (it.sources?.length) row.append(el('small', 'muted', `证据：${it.sources.join('、')}`));
+        }
+        list.append(row);
       }
+      relCard.append(list);
+    }
+    if (staleRel.length) {
+      const det = el('details');
+      det.append(el('summary', '', `历史/过时关系记录 (${staleRel.length})`));
+      for (const it of staleRel) det.append(el('p', 'muted', it.text || ''));
+      relCard.append(det);
     }
 
-    grid.append(relCard, learnedCard);
-    host.replaceChildren(grid);
+    // Learned Context (Facts)
+    const factsCard = el('article', 'veil-card');
+    factsCard.append(el('div', 'veil-card-head'));
+    factsCard.firstChild.append(el('h3', '', '习得认知'), pill(`${utf8Bytes(factsText)} B`));
+    factsCard.append(el('div', 'reader-prose', factsText.trim() || '暂无习得认知记录。'));
+
+    // Ongoing
+    const ongoingCard = el('article', 'veil-card');
+    ongoingCard.append(el('div', 'veil-card-head'));
+    ongoingCard.firstChild.append(el('h3', '', '进行中事项'), pill(`${openOngoing.length} 项`));
+    if (!openOngoing.length) {
+      ongoingCard.append(el('p', 'muted', '暂无进行中事项。'));
+    } else {
+      const list = el('div', 'stack-sm');
+      for (const it of openOngoing) {
+        const row = el('div', 'layer-item');
+        row.append(el('div', 'reader-prose', it.text || ''));
+        list.append(row);
+      }
+      ongoingCard.append(list);
+    }
+    if (closedOngoing.length) {
+      const det = el('details');
+      det.append(el('summary', '', `已结束事项 (${closedOngoing.length})`));
+      for (const it of closedOngoing) det.append(el('p', 'muted', it.text || ''));
+      ongoingCard.append(det);
+    }
+
+    // Growth
+    const growthCard = el('article', 'veil-card');
+    growthCard.append(el('div', 'veil-card-head'));
+    growthCard.firstChild.append(el('h3', '', '成长记录'), pill(`${utf8Bytes(growthText)} B`));
+    growthCard.append(el('div', 'reader-prose', growthText.trim() || '暂无成长记录。'));
+
+    grid.append(relCard, factsCard, ongoingCard, growthCard);
+
+    // Versions & Technical Details (collapsed)
+    const techCard = el('article', 'veil-card');
+    const techDet = el('details');
+    techDet.append(el('summary', '', `认知版本历史 (${versions.length}) 与技术结构`));
+    if (versions.length) {
+      for (const v of versions.slice(0, 8)) {
+        const box = el('div', 'layer-item');
+        box.append(el('strong', '', `${formatTime(v.time)} · ${v.reason || v.action || '自动更新'}`));
+        if (v.diff) box.append(buildLineDiffNode(v.diff));
+        techDet.append(box);
+      }
+    } else {
+      techDet.append(el('p', 'muted', '暂无认知版本变更记录。'));
+    }
+    techCard.append(techDet);
+
+    host.replaceChildren(budgetCard, grid, techCard);
   }
 
   // =========================================================================
@@ -707,20 +1424,118 @@
   async function renderRecallWorkspace(host, req, focusTurnId = null) {
     const renderSeq = ++recallRenderSeq;
     host.replaceChildren(el('p', '', '正在读取记忆召回链路与开销快照…'));
-    const snapRes = await reqJson(req, '/api/request-snapshots?limit=24');
-    if (renderSeq !== recallRenderSeq) return;  // a newer navigation already owns the view
-    const combined = snapRes.data?.snapshots || snapRes.data?.items || [];
 
-    if (!combined.length) {
-      host.replaceChildren(renderEmptyState('暂无召回追踪记录', '完成一轮聊天后，这里会展示每一层的 Token 预算、命中的记忆与成本。'));
-      return;
+    let page = 1;
+    let filterDate = '';
+    let filterPurpose = '';
+    let filterModel = '';
+
+    const filterBar = el('div', 'inline-controls');
+    const dateInp = el('input', 'veil-input');
+    dateInp.type = 'date';
+    const purpSel = el('select', 'veil-input');
+    for (const opt of [['', '全部用途'], ['chat', '日常对话'], ['experience', '经历整理'], ['judge', '想起判官']]) {
+      const o = el('option', '', opt[1]);
+      o.value = opt[0];
+      purpSel.append(o);
     }
+    const modelInp = el('input', 'veil-input');
+    modelInp.placeholder = '筛选模型…';
+    const searchBtn = btn('筛选', 'sm');
+    filterBar.append(dateInp, purpSel, modelInp, searchBtn);
 
+    const trendCard = el('article', 'veil-card');
     const split = el('div', 'split-reader');
     const listPane = el('div', 'index-pane');
     const detailPane = el('article', 'veil-card reader-pane');
-    let selectedId = focusTurnId || combined[0].request_id || combined[0].id || '';
+    const pager = el('div', 'inline-controls');
+    let selectedId = focusTurnId || '';
     let detailSeq = 0;
+    let turnsSeq = 0;
+
+    async function loadTurns() {
+      const seq = ++turnsSeq;
+      const qs = new URLSearchParams({ page: String(page), limit: '20' });
+      if (filterDate) qs.set('date', filterDate);
+      if (filterPurpose) qs.set('purpose', filterPurpose);
+      if (filterModel) qs.set('model', filterModel);
+      const res = await reqJson(req, `/api/brain/recall-turns?${qs.toString()}`);
+      if (seq !== turnsSeq || renderSeq !== recallRenderSeq) return;
+      const items = res.data?.items || [];
+      const total = res.data?.total || 0;
+      const trends = res.data?.trends || [];
+
+      if (trends.length) {
+        const lastT = trends[trends.length - 1];
+        const totalTurns = trends.reduce((s, t) => s + t.turns, 0);
+        const totalMemTok = trends.reduce((s, t) => s + (t.mem_tokens_sum || 0), 0);
+        const head = el('div', 'veil-card-head');
+        head.append(
+          el('h3', '', '历史召回与注入趋势'),
+          el('small', '', `近 ${trends.length} 天累计 ${totalTurns} 轮 · 记忆注入 ${totalMemTok} tokens · 最近一日关系底座命中 ${lastT.base_hits} 次 / 自然联想 ${lastT.assoc_hits} 次`),
+        );
+        const maxTurns = Math.max(1, ...trends.map(t => t.turns || 0));
+        const bars = el('div', 'recall-trend-bars');
+        const lbls = el('div', 'recall-trend-labels');
+        for (const t of trends) {
+          const col = el('div', 'recall-trend-col');
+          col.title = `${t.date}：${t.turns} 轮，关系底座 ${t.base_hits}，自然联想 ${t.assoc_hits}，记忆注入 ${t.mem_tokens_sum || 0} tokens`;
+          col.append(el('span', 'bar-val-label', `${t.turns}`));
+          const bar = el('div', 'recall-trend-bar');
+          bar.style.height = `${Math.max(8, Math.round(((t.turns || 0) / maxTurns) * 64))}px`;
+          col.append(bar);
+          bars.append(col);
+          lbls.append(el('span', '', (t.date || '').slice(5).replace('-', '/')));
+        }
+        trendCard.replaceChildren(head, bars, lbls);
+      } else {
+        trendCard.replaceChildren(el('h3', '', '历史召回与注入趋势'), el('p', 'muted', '暂无足够历史轮次数据'));
+      }
+
+      listPane.replaceChildren();
+      if (!items.length) {
+        listPane.append(renderEmptyState('暂无匹配的召回轮次', '调整筛选条件或完成一轮对话后查看。'));
+        detailPane.replaceChildren();
+        return;
+      }
+
+      if (!selectedId || !items.some(it => it.request_id === selectedId)) {
+        selectedId = items[0].request_id;
+      }
+      for (const it of items) {
+        const row = el('button', 'index-item');
+        row.type = 'button';
+        row.dataset.turnId = it.request_id;
+        row.setAttribute('aria-current', String(it.request_id === selectedId));
+        row.append(
+          el('div', 'index-title', it.summary || '对话轮次'),
+          el('div', 'index-meta', `${formatTime(it.time)} · ${it.model} · ${it.purpose_label || it.purpose}`),
+        );
+        row.addEventListener('click', () => showTurn(it));
+        listPane.append(row);
+      }
+
+      pager.replaceChildren();
+      const prevBtn = btn('上一页', 'sm');
+      prevBtn.disabled = page <= 1;
+      prevBtn.addEventListener('click', () => { page = Math.max(1, page - 1); loadTurns(); });
+      const nextBtn = btn('下一页', 'sm');
+      nextBtn.disabled = page * 20 >= total;
+      nextBtn.addEventListener('click', () => { page += 1; loadTurns(); });
+      const covNote = res.data?.coverage_note ? ` · ${res.data.coverage_note}` : '';
+      pager.append(prevBtn, el('span', 'muted', `第 ${page} 页 / 共 ${total} 轮${covNote}`), nextBtn);
+
+      const activeItem = items.find(it => it.request_id === selectedId) || items[0];
+      if (activeItem) await showTurn(activeItem);
+    }
+
+    searchBtn.addEventListener('click', () => {
+      page = 1;
+      filterDate = dateInp.value;
+      filterPurpose = purpSel.value;
+      filterModel = modelInp.value.trim();
+      loadTurns();
+    });
 
     async function showTurn(item) {
       const tid = String(item.request_id || item.id || '');
@@ -731,123 +1546,174 @@
       }
       detailPane.replaceChildren(el('p', '', '正在加载该轮召回层级详情…'));
 
-      let traceData = item;
-      if (tid) {
-        const traceRes = await reqJson(req, `/api/diagnostics/trace?request_id=${encodeURIComponent(tid)}`);
-        if (seq !== detailSeq) return;  // A -> B -> A: only the newest request owns the pane
-        if (traceRes.ok && traceRes.data) traceData = { ...item, ...traceRes.data };
-      }
-
-      detailPane.replaceChildren();
-      detailPane.append(el('h3', 'reader-title', `轮次 ${tid || '最近对话'}`));
-
-      const recall = traceData.recall || traceData.chain?.recall || traceData;
-      const costs = traceData.costs || traceData.chain?.costs;
-      const tags = el('div', 'index-tags');
-      if (recall.retrieval_mode) tags.append(pill(`模式: ${recall.retrieval_mode}`, 'rose'));
-      if (recall.context_signal?.mode) tags.append(pill(`情境: ${recall.context_signal.mode}`));
-      if (recall.judge?.outcome) tags.append(pill(`判官: ${recall.judge.outcome}`));
-      if (recall.degraded && typeof recall.degraded === 'object' && recall.degraded.stage) {
-        tags.append(pill(`降级: ${recall.degraded.stage}/${recall.degraded.reason || recall.degraded.error || ''}`, 'warn'));
-      }
-      if (recall.association?.mode) {
-        const assocLabel = recall.association.picked?.length
-          ? `联想(${recall.association.mode}): 命中`
-          : `联想(${recall.association.mode}): ${recall.association.reason || '未触发'}`;
-        tags.append(pill(assocLabel));
-      }
-      if (recall.lifecycle?.delivered === true) tags.append(pill('已送达', 'good'));
-      else if (recall.lifecycle?.rolled_back === true) tags.append(pill('已回滚', 'warn'));
-      if (traceData.model) tags.append(pill(traceData.model));
-      if (Array.isArray(costs)) {
-        const settled = costs.filter(row => row && row.type === 'settle');
-        const settledTotal = settled.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-        if (settled.length) tags.append(pill(`费用 ¥${settledTotal.toFixed(2)}（已结算 ${settled.length} 笔）`, 'gold'));
-        else if (costs.length) tags.append(pill(`费用结算中（${costs.length} 条）`, 'warn'));
-      } else if (costs?.total_cost != null) {
-        tags.append(pill(`费用 ¥${costs.total_cost}`, 'gold'));
-      }
-      detailPane.append(tags);
-
-      // Layer breakdown
-      const layers = [
-        ['关系底座', recall.relationship_base],
-        ['开场记忆', recall.opening],
-        ['相关召回', recall.relevant_recall],
-        ['自然联想', recall.natural_association],
-        ['延续记忆', recall.carried],
-        ['向量召回', recall.vector],
-      ];
-      const layerGrid = el('div', 'layer-list');
-      layerGrid.style.margin = '12px 0';
-      for (const [label, val] of layers) {
-        if (!val && val !== 0) continue;
-        const card = el('div', 'layer-item');
-        const cnt = Array.isArray(val) ? val.length : (val?.count ?? val?.items?.length ?? '已注入');
-        card.append(el('strong', '', label), el('small', '', typeof val === 'string' ? val.slice(0, 80) : `命中 ${cnt}`));
-        layerGrid.append(card);
-      }
-      detailPane.append(layerGrid);
-
-      const hits = recall.items || recall.memories || [];
-      if (Array.isArray(hits) && hits.length) {
-        detailPane.append(el('h4', '', `命中记忆 (${hits.length})`));
-        const hitList = el('div', 'workspace-links');
-        for (const h of hits) {
-          const mid = h.memory_id || h.id;
-          const b = btn(`${h.title || mid || '记忆'}${h.score != null ? ` (${Number(h.score).toFixed(2)})` : ''}`, 'sm');
-          if (mid) b.addEventListener('click', () => window.veilWorkspace?.openMemory(mid));
-          hitList.append(b);
+      const tk = item.tokens || {};
+      const head = el('div', 'veil-card-head');
+      head.append(el('h3', '', item.summary || '单轮召回与注入分析'));
+      const headActions = el('div', 'inline-controls');
+      const copyBtn = btn('复制单轮诊断报告', 'sm primary');
+      const previewBtn = btn('预览报告', 'sm');
+      previewBtn.hidden = true;
+      let lastTurnReport = '';
+      copyBtn.addEventListener('click', async () => {
+        const rep = await reqJson(req, `/api/brain/recall-report?request_id=${encodeURIComponent(tid)}`);
+        if (rep.ok && rep.data?.markdown) {
+          lastTurnReport = rep.data.markdown;
+          previewBtn.hidden = false;
+          const ok = await copyText(rep.data.markdown);
+          copyBtn.textContent = ok ? '已复制诊断报告 ✓' : '已生成（点击预览）';
+          setTimeout(() => { copyBtn.textContent = '复制单轮诊断报告'; }, 2000);
         }
-        detailPane.append(hitList);
-      }
-
-      if (tid) {
-        const rawDetails = el('details', 'tech-evidence');
-        const sum = el('summary', '', '展开该轮完整 Prompt 分区快照（只读）');
-        const body = el('pre', 'diff-box', '点击展开后按需加载…');
-        rawDetails.append(sum, body);
-        rawDetails.addEventListener('toggle', async () => {
-          if (!rawDetails.open || rawDetails.dataset.loaded === 'true' || rawDetails.dataset.loading === 'true') return;
-          rawDetails.dataset.loading = 'true';
-          body.textContent = '正在读取完整快照…';
-          try {
-            const snapDetail = await reqJson(req, `/api/request-snapshot?id=${encodeURIComponent(tid)}`);
-            if (!snapDetail.ok || !snapDetail.data) {
-              throw new Error(snapDetail.data?.error || '快照读取失败，收起后再展开可重试。');
-            }
-            body.textContent = JSON.stringify(snapDetail.data, null, 2);
-            if (snapDetail.data.truncated) {
-              rawDetails.append(el('p', 'muted', '接口返回的快照已标记为截断。'));
-            }
-            rawDetails.dataset.loaded = 'true';
-          } catch (err) {
-            body.textContent = err?.message || '快照读取失败，收起后再展开可重试。';
-          } finally {
-            delete rawDetails.dataset.loading;
-          }
+      });
+      previewBtn.addEventListener('click', () => {
+        if (!lastTurnReport) return;
+        openBrainModal('单轮召回与注入诊断报告', `${formatTime(item.time)} · ${item.model}`, body => {
+          body.append(el('pre', 'report-preview-box', lastTurnReport));
         });
-        detailPane.append(rawDetails);
-      }
-    }
+      });
+      headActions.append(copyBtn, previewBtn);
+      head.append(headActions);
 
-    for (const item of combined) {
-      const tid = String(item.request_id || item.id || '');
-      const card = el('button', 'index-item');
-      card.type = 'button';
-      card.dataset.turnId = tid;
-      card.setAttribute('aria-current', String(tid === String(selectedId)));
-      const top = el('div', 'index-item-top');
-      top.append(el('strong', '', item.user_preview || item.title || `请求 ${tid.slice(0, 10)}`), el('small', '', formatTime(item.time || item.created_at).slice(11, 19)));
-      card.append(top, el('div', 'index-preview', item.model || item.recall?.retrieval_mode || '召回诊断记录'));
-      card.addEventListener('click', () => showTurn(item));
-      listPane.append(card);
+      const meta = el('p', 'muted', `${formatTime(item.time)} · ${item.model} · ${item.purpose_label || item.purpose}`);
+
+      // Flat metric strip (Token, Cache, Cost) — never coerce missing cache to 0
+      const metricStrip = el('div', 'flat-metric-strip');
+      const cacheText = tk.cache_hit != null
+        ? `${tk.cache_hit}${tk.cache_hit_rate != null ? ` (${tk.cache_hit_rate}%)` : ''}`
+        : '未记录';
+      const tCards = [
+        ['快照预估 Token', tk.estimated != null ? String(tk.estimated) : '未记录'],
+        ['实际输入 / 输出', tk.actual_input != null ? `${tk.actual_input} / ${tk.actual_output ?? '-'}` : '未计量（上游未返回）'],
+        ['缓存命中', cacheText],
+        ['记忆注入 Token', tk.memory_tokens != null ? String(tk.memory_tokens) : '未记录'],
+        ['结算费用', item.cost_cny != null ? `¥${item.cost_cny}` : '暂无结算'],
+      ];
+      for (const [lbl, val] of tCards) {
+        const c = el('div', 'flat-metric-cell');
+        c.append(el('small', '', lbl), el('strong', '', val));
+        metricStrip.append(c);
+      }
+
+      // 1. Six-layer Recall Chain (distinguish hit / not_hit / not_run / missing)
+      const chainBlock = el('div', 'recall-section-block');
+      chainBlock.append(el('h4', '', '实际召回链路'));
+      const chainGrid = el('div', 'recall-chain-grid');
+      const chainSteps = item.recall_chain || [];
+      if (item.recall_evidence_state === 'missing') {
+        chainGrid.append(el('p', 'muted', '该轮未记录召回追踪证据（证据缺失，不等同于未命中）。'));
+      } else if (chainSteps.length) {
+        for (const st of chainSteps) {
+          const cell = el('div', 'recall-chain-step');
+          let badgeText = '未命中';
+          let badgeTone = '';
+          if (st.state === 'missing') { badgeText = '证据缺失'; badgeTone = 'warn'; }
+          else if (st.state === 'not_run') { badgeText = '未执行'; }
+          else if (st.state === 'hit' || (st.count != null && st.count > 0)) { badgeText = `命中 ${st.count}`; badgeTone = 'good'; }
+          cell.append(el('span', '', st.label), pill(badgeText, badgeTone));
+          const base = st.key === 'relationship_base' ? st.detail : null;
+          if (base && typeof base === 'object') {
+            const size = value => Array.isArray(value) ? value.length : '?';
+            cell.append(el('small', 'muted',
+              `存储 ${base.stored_count ?? '?'} / 有效 ${base.active_count ?? '?'} / 初选 ${size(base.preselected_items)} / 选中 ${size(base.selected_items)} / 注入 ${st.count ?? '?'}`));
+            if (base.reason) cell.append(el('small', 'muted', base.reason));
+            if (base.dropped?.length) cell.append(el('small', 'muted',
+              base.dropped.map(row => `${row.id}（${row.reason}）`).join('；')));
+          }
+          chainGrid.append(cell);
+        }
+      } else {
+        chainGrid.append(el('p', 'muted', '暂无召回链路分层数据'));
+      }
+      chainBlock.append(chainGrid);
+
+      // 2. Candidate vs Final Injected Comparison
+      const diffBlock = el('div', 'recall-section-block');
+      const cands = item.candidates || [];
+      const injected = item.injected || [];
+      const dropped = item.dropped_candidates || [];
+      diffBlock.append(el('h4', '', `候选检索 (${cands.length}) 与最终注入 (${injected.length}) 对比`));
+      const diffGrid = el('div', 'candidate-diff-grid');
+
+      const injCol = el('div', 'candidate-col');
+      injCol.append(el('small', 'muted', `最终注入记忆（${injected.length} 条）`));
+      if (injected.length) {
+        for (const m of injected) {
+          const row = el('div', 'candidate-row');
+          const mid = m.memory_id || m.id || '';
+          const scoreStr = m.score != null ? ` · 相关度 ${Number(m.score).toFixed(2)}` : '';
+          const layerStr = m.layer ? ` · ${m.layer}` : '';
+          row.append(
+            el('strong', '', m.title || mid || '记忆'),
+            el('small', 'muted', `已注入${layerStr}${scoreStr}`),
+          );
+          injCol.append(row);
+        }
+      } else {
+        injCol.append(el('p', 'muted', item.recall_evidence_state === 'missing' ? '召回证据缺失' : '本轮无注入记忆'));
+      }
+
+      const dropCol = el('div', 'candidate-col');
+      dropCol.append(el('small', 'muted', `未入选候选（${dropped.length} 条）`));
+      if (dropped.length) {
+        for (const m of dropped) {
+          const row = el('div', 'candidate-row');
+          const mid = m.memory_id || m.id || '';
+          const scoreStr = m.score != null ? ` · 相关度 ${Number(m.score).toFixed(2)}` : '';
+          row.append(
+            el('strong', '', m.title || mid || '候选记忆'),
+            el('small', 'muted', `${m.drop_reason || '未记录未入选原因（证据缺失）'}${scoreStr}`),
+          );
+          dropCol.append(row);
+        }
+      } else {
+        dropCol.append(el('p', 'muted', item.recall_evidence_state === 'missing' ? '召回证据缺失' : '无未入选候选'));
+      }
+      diffGrid.append(injCol, dropCol);
+      diffBlock.append(diffGrid);
+
+      // 3. Prompt Section Token Breakdown (explicitly labeled as pre-send snapshot estimate)
+      const secBlock = el('div', 'recall-section-block');
+      const sections = item.prompt_sections || [];
+      const estSum = sections.reduce((acc, s) => acc + Number(s.tokens || 0), 0);
+      const secHead = el('div', 'veil-card-head');
+      secHead.append(
+        el('h4', '', 'Prompt 分区 Token 分布（发送前快照估算）'),
+        el('small', 'muted', tk.actual_input != null ? `分区估算合计 ${estSum} tok · 上游实测输入 ${tk.actual_input} tok` : `分区估算合计 ${estSum} tok`),
+      );
+      secBlock.append(secHead, el('small', 'muted', '各分区为发送前按规则估算，实际计费输入以上游模型返回的「实际输入 Token」为准。'));
+      if (sections.length) {
+        const maxSec = Math.max(1, ...sections.map(s => Number(s.tokens || 0)));
+        const secList = el('div', 'prompt-sec-list');
+        for (const sec of sections) {
+          const tok = Number(sec.tokens || 0);
+          const row = el('div', 'prompt-sec-row');
+          const track = el('div', 'prompt-sec-track');
+          const fill = el('div', 'prompt-sec-fill');
+          fill.style.width = `${Math.max(3, Math.round((tok / maxSec) * 100))}%`;
+          track.append(fill);
+          row.append(
+            el('span', '', sec.label || sec.name || '分区'),
+            track,
+            el('span', 'prompt-sec-val', `${tok} tok`),
+          );
+          secList.append(row);
+        }
+        secBlock.append(secList);
+      } else {
+        secBlock.append(el('p', 'muted', '该轮未记录 Prompt 分区明细'));
+      }
+
+      const det = el('details', 'tech-evidence');
+      det.append(el('summary', '', '查看原始请求快照与追踪数据'));
+      det.append(el('pre', 'diff-box', JSON.stringify(item, null, 2)));
+
+      if (seq !== detailSeq) return;
+      detailPane.replaceChildren(head, meta, metricStrip, chainBlock, diffBlock, secBlock, det);
     }
 
     split.append(listPane, detailPane);
-    host.replaceChildren(split);
-    const firstMatch = combined.find(x => String(x.request_id || x.id) === String(selectedId)) || combined[0];
-    if (firstMatch) await showTurn(firstMatch);
+    host.replaceChildren(filterBar, trendCard, split, pager);
+    await loadTurns();
+    return;
   }
 
   // =========================================================================
@@ -858,6 +1724,8 @@
     let healthSettings = null;
     let healthControls = null;
     let healthSaveSeq = 0;
+    let filterFrom = '';
+    let filterTo = '';
 
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
@@ -883,16 +1751,34 @@
       const leadText = el('div');
       leadText.append(
         el('h3', '', sum.status_label || '状态正常'),
-        el('small', '', `检查时间: ${formatTime(report.scanned_at)} · 耗时 ${report.duration_ms ?? 0}ms · 严格只读 (?mode=ro) · 零付费 Token`),
+        el('small', '', `检查时间: ${formatTime(report.scanned_at)} · 耗时 ${report.duration_ms ?? 0}ms · 只读核验 · 零模型消耗`),
       );
       lead.append(leadText);
 
-      const scanBtn = btn('立即全面检查（只读）', 'primary');
-      const exportBtn = btn('导出脱敏报告', '');
+      const scanBtn = btn('立即全面检查', 'primary sm');
+      const copyReportBtn = btn('复制巡检报告', 'sm');
+      const previewHealthBtn = btn('预览报告', 'sm');
+      previewHealthBtn.hidden = true;
+      const exportBtn = btn('导出脱敏报告', 'sm');
       const bannerMsg = el('small', '', '');
       const btnGroup = el('div', 'workspace-links');
-      btnGroup.append(scanBtn, exportBtn, bannerMsg);
+      btnGroup.append(scanBtn, copyReportBtn, previewHealthBtn, exportBtn, bannerMsg);
       banner.append(lead, btnGroup);
+
+      // Date range filter bar for Health Scan
+      const rangeBar = el('div', 'inline-controls');
+      const fromInp = el('input', 'veil-input');
+      fromInp.type = 'date';
+      fromInp.value = filterFrom;
+      fromInp.ariaLabel = '巡检开始日期';
+      const toInp = el('input', 'veil-input');
+      toInp.type = 'date';
+      toInp.value = filterTo;
+      toInp.ariaLabel = '巡检结束日期';
+      const rangeScanBtn = btn('按日期范围巡检', 'sm');
+      rangeBar.append(el('small', 'muted', '指定日期范围：'), fromInp, el('span', '', '至'), toInp, rangeScanBtn);
+
+      let lastHealthReportText = '';
 
       // KPI stats row inside banner
       const stats = report.stats || {};
@@ -900,7 +1786,7 @@
       for (const [lbl, val] of [
         ['活跃记忆', stats.active_memories ?? '—'],
         ['事件故事', stats.events_total ?? '—'],
-        ['向量行', stats.vectors_total ?? '—'],
+        ['向量索引', stats.vectors_total ?? '—'],
         ['通过项', sum.good_count ?? 0],
         ['需关注', (sum.warn_count ?? 0) + (sum.error_count ?? 0)],
       ]) {
@@ -912,7 +1798,7 @@
       // Auto-schedule setting bar
       const schedBar = el('div', 'veil-card');
       const schedHead = el('div', 'veil-card-head');
-      schedHead.append(el('h3', '', '定期只读巡检设置'), pill('不删除/不合并任何记忆'));
+      schedHead.append(el('h3', '', '定期只读巡检设置'), pill('不修改任何记忆'));
       const controls = el('div', 'filter-bar');
       const enabledChk = document.createElement('input');
       enabledChk.type = 'checkbox';
@@ -971,18 +1857,19 @@
         const item = el('article', 'health-item');
         const cHead = el('div', 'veil-card-head');
         cHead.append(
-          el('h3', '', `${chk.id ? `[${chk.id}] ` : ''}${chk.title || ''}`),
-          pill(chk.status_label || chk.severity, chk.severity === 'good' ? 'good' : (chk.severity === 'error' ? 'danger' : 'warn')),
+          el('h3', '', chk.title || ''),
+          pill(chk.status_label || (chk.severity === 'good' ? '正常' : '需关注'), chk.severity === 'good' ? 'good' : (chk.severity === 'error' ? 'danger' : 'warn')),
         );
         item.append(cHead, el('p', '', chk.impact || ''));
 
         const tech = el('details', 'tech-evidence');
-        tech.append(el('summary', '', '查看技术依据、检查对象与样本明细'));
+        if (chk.severity === 'warn' || chk.severity === 'error') tech.open = true;
+        tech.append(el('summary', '', '查看检查依据与样本证据'));
         const kv = el('div', 'health-kv');
         kv.append(
-          el('div', '', `检查对象：${chk.object || 'brain.db'}`),
+          el('div', '', `检查对象：${chk.object || '记忆数据库'}`),
           el('div', '', `判断依据：${chk.basis || '—'}`),
-          el('div', '', `数据来源：${chk.source || 'brain.db (?mode=ro)'}`),
+          el('div', '', `数据来源：${chk.source || '主记忆库'}`),
           el('div', '', `可信度：${chk.confidence || '高可信'}`),
         );
         tech.append(kv);
@@ -1007,14 +1894,16 @@
         checksWrap.append(item);
       }
 
-      scanBtn.addEventListener('click', async () => {
-        scanBtn.disabled = true;
-        scanBtn.textContent = '巡检中…';
+      const runScanWithRange = async (btnEl, defaultText) => {
+        filterFrom = fromInp.value;
+        filterTo = toInp.value;
+        btnEl.disabled = true;
+        btnEl.textContent = '巡检中…';
         try {
           const res = await reqJson(req, '/api/brain/health/scan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ from: filterFrom, to: filterTo }),
           });
           if (!res.ok || !res.data?.report) {
             bannerMsg.textContent = res.data?.error || '巡检失败，请稍后重试。';
@@ -1024,8 +1913,31 @@
         } catch (err) {
           bannerMsg.textContent = err?.message || '巡检失败，请稍后重试。';
         } finally {
-          scanBtn.disabled = false;
-          scanBtn.textContent = '立即全面检查（只读）';
+          btnEl.disabled = false;
+          btnEl.textContent = defaultText;
+        }
+      };
+
+      scanBtn.addEventListener('click', () => runScanWithRange(scanBtn, '立即全面检查'));
+      rangeScanBtn.addEventListener('click', () => runScanWithRange(rangeScanBtn, '按日期范围巡检'));
+
+      copyReportBtn.addEventListener('click', async () => {
+        copyReportBtn.disabled = true;
+        try {
+          const res = await req('/api/brain/health/export?format=markdown');
+          const payload = await res.json().catch(() => null);
+          if (!res.ok || !payload || typeof payload.text !== 'string') {
+            bannerMsg.textContent = '复制失败：后端没有返回报告正文。';
+            return;
+          }
+          lastHealthReportText = payload.text;
+          previewHealthBtn.hidden = false;
+          const ok = await copyText(payload.text);
+          bannerMsg.textContent = ok ? '已复制脱敏巡检报告 ✓' : '已生成报告（点击预览报告查看）';
+        } catch (err) {
+          bannerMsg.textContent = err?.message || '复制失败。';
+        } finally {
+          copyReportBtn.disabled = false;
         }
       });
 
@@ -1054,7 +1966,14 @@
         }
       });
 
-      wrap.append(banner, kpis, schedBar, checksWrap);
+      previewHealthBtn.addEventListener('click', () => {
+        if (!lastHealthReportText) return;
+        openBrainModal('健康巡检脱敏报告', '严格只读检查摘要', body => {
+          body.append(el('pre', 'report-preview-box', lastHealthReportText));
+        });
+      });
+
+      wrap.append(banner, rangeBar, kpis, schedBar, checksWrap);
       host.replaceChildren(wrap);
     }
 

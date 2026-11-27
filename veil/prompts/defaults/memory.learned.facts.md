@@ -1,1 +1,1 @@
-IMPORTANT FACTS (his notes about Lan):
+IMPORTANT FACTS (stable facts and preferences about Lan; not relationship agreements):

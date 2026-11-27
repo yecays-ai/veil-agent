@@ -1,18 +1,42 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T15:56:00+08:00 · 基线 `main` = `2a264a7`（PR #458 已合并）· 当前分支 `ticket/460-p6-s5-retrieval-judge-association`（工单 460 · PR #461 二次复审收口完成：补齐 18 轮真实 `Chat.send()` 完整生产链路验证、验证范围四层区分及 `contextual_s5` 两条 `trap` 误触根因评估，待独立复审；未合并、未部署正式目录）
+> 更新：2026-11-27 +08:00 · 工单 460 / PR #461（P6-S5）· 已合入 `main` `f979ca2`（含 PR #459 与 PR #460 S3）；待最终复核与合并，未部署。
 
 ## 当前停点
 
-- **本单（工单 460 · PR #461 · P6-S5 二次复审收口完成）**：
-  - **Tier D 真实 `Chat.send()` 完整生产链路验证**：新增 `research/recall-lab/recall_lab/s5_prod_verify.py` 与结果 `p6_s5_prod_verify.json`，在隔离副本实例化真实 `Chat`、`BrainAuthority`、事件账本/故事、`LearnedContext`、`relationship_base`、全局 `recall_budget`、真实 `RecallJudge` 与 `request_snapshots`，对 6 条已验证判官子集样本 × 3 路跑完 18 轮完整 `Chat.send()`（18/18 关系底座/快照/送达确认通过，`stopwords=False, K=8`）；重生成本机 `.local-tmp/s5/lan-blind-review-s5.md`（不入库）。
-  - **自然联想交付定性**：`association_contextual_enabled` 因生产组件回放中 2 条自然语言隐式 `trap` 穿透双塔余弦门控（`work_trap_intrusions=2 > 0`），**未通过 0 干扰门禁，严格保持默认关闭，记录为「待验证候选」，不标记为体验目标完成**；后续可行方向为复用同轮 `RecallJudge` 做二阶段审核。
-  - **最终默认配置**：`stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官（空查询 FPR `-18.2pp`，工作 trap FPR `-33.3pp`）；DeepSeek 实验累计花费 `¥2.71 / ¥10.00`。
-  - **S3/S5 合流状态**：基于 S3 已提交 HEAD `de2cc06` 的隔离合流 0 代码冲突、40 项联合回归通过；S3 工作区当前正处于自身合并/修复中，待 S3 最终 HEAD 确定且合并后，再做一次合流后最终联合回归。
+- **本单（工单 460 · PR #461 · P6-S5 检索、判官与情境相关自然联想升级）**：
+  - 检索与判官：保留 Min-Max 混合检索、`stopwords_enabled=False`（可审计停用词表与保护词零重叠）、`candidate_k=8`、4 秒超时 / 300 字卡片保守基线；新增本地零费用情境分类（`context_signal.py`）、情境判官升级与失败/超时/解析失败分口径诊断。
+  - 自然联想与界面持久化开关：保留 `association_enabled=True`、`association_contextual_enabled=False` 默认配置；在现有「VEIL Brain → 记忆监控」界面补齐「自然联想总开关」与「情境相关自然联想」双独立开关及实时生效状态显示，经 `/api/brain/layer-toggle` 持久化至 `recall-association.json`，下一轮生效、重启保留，关闭情境联想后恢复现行联想机制。
+  - VEIL Lab 正式日用模型三路盲评：基于最新只读快照 `peter-20261127T170245/r2` 与正式日用 `gemini-4-hydrogen` 完成 3 组 9 回复完整上下文盲评（¥1.10，`all_checks_ok=true`），Lan 盲评结果为第 1 组 `contextual_s5`/`legacy_breath8` 平局、第 2 组 `contextual_s5` 胜、第 3 组 `contextual_s5` 弱偏好（不作显著优势结论）；实验报告见 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](docs/reports/p6-s5-retrieval-judge-association-20261127.md)。
+  - 跨模块合流：已合入最新 `origin/main`（`f979ca2`，含 PR #459 与 PR #460 S3），保持六层网格结构与 S3 关系底座/诊断/预算完全兼容，联合回归通过；未触碰正式运行目录与正式 `data/peter`。
+- **前序已合入 `main`（`f979ca2`）的工单 459 · PR #460（P6-S3）要点与门禁全部保留如下**：
+  - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
+  - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。
+  - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本支持进程中断恢复，按角色与写入及备份互斥。
+  - `veil/brain/relationship_base.py` & `veil/core/veil_agent.py`：`locked` 最高优先、预算不足时省略整条并说明原因；隔离失效认知和跨区冲突、`debug['relationship_base']` 区分存储/有效/选中/实际注入。
+  - `veil/tools/learned_tools.py`、`veil/prompts/defaults/`、`veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/peter-page.js`、`desktop/workspace-brain.js`、`desktop/chat.js` 同步接入四区预算、锁定/恢复/核验与诊断展示。
+  - 收口：只允许恢复历史条目，同一版本链只保留一条当前认知；重复恢复不再写正文或版本日志。GET `/api/peter-page` 使用现有 Host、Origin、Token 防护。
+  - 收口前 `d5f8591` 的 GitHub 检查为 14 通过、1 跳过；收口提交查对应的新运行。开发侧联合回归 128 项、桌面 Node 56 项通过，Lan 真机体验未验收。
+  - 旧本机失败对照 `2b03006` / `d5f8591` 均复现：Maintenance 在 CRLF 测试文件的暂存区检查失败（改 LF 后通过）；OpenCode 原用例缺输出文件，GitHub CI 因未安装而跳过；冷备份仅在 APPDATA 有桌面配置时增加 `desktop-data`，空 APPDATA 的两个用例均通过。本轮不改这些模块。
+  - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
+
+## S6 开工门禁与证据边界
+
+1. [聊天历史全量读取](veil/brain/learned_context.py#L455)：日志变化后全量扫描和常驻缓存会增加长历史请求耗时与内存。验收：长历史连续追加不反复全扫、有明确缓存上限；旧引用按需核验，删除或替换后不命中旧缓存。
+2. [数据库读连接](veil/brain/learned_context.py#L481)与[实时核验](veil/brain/learned_context.py#L1195)：多条引用的串行 SQLite 等待会累加。验收：锁库加多引用场景验证整次核验的统一墙钟预算，超限不误晋升、不阻断聊天。
+3. [认知追加](veil/brain/learned_context.py#L1895)与[待办新增](veil/brain/learned_context.py#L2130)：提交后丢响应时，重试可能重复写入。验收：持久化幂等键在丢回包、并发和重启场景下均返回原结果与原 ID，只落一条正文及相应版本。
+4. [反证长期积累](veil/brain/learned_context.py#L806)：以长期历史验证载荷与查询有界，不裁掉相关否决；证据不足时不晋升并标记原因。
+5. [任意跨语言同义否决](veil/brain/learned_context.py#L164)：现有原文锚点不是完整语义保证；验证无共享锚点的译写拒绝、无关正例与明确恢复路径。以上五项均是 S6 开工门禁，本单不重构。
+6. [情境自然联想隐式 `trap` 穿透与同轮判官联合判断](veil/brain/recall/natural_association.py)（PR #461 延期）：离线回放存在 2 条隐式工作 `trap` 穿透，当前保持 `association_contextual_enabled=False` 默认关闭；S6 前置须以同轮判官语义结论联合门控自然联想，通过零穿透门禁后再评估默认启用。
+
+### 既有边界与反例
+
+- [间接证据查询](veil/brain/learned_context.py#L535-L563)：每次解析至多读取 200 条匹配的 stage-evidence（账本序号倒序）、50 条用户引述及 50 条聊天来源（ord 顺序）；不分页。有效证据可能位于窗口外；若其余来源也无法证实，保持或降为 uncertain，不以截断、无命中或来源缺失断言证据不存在，也不放宽原话匹配。此为当前能力边界，未改查询。
+- [迁移回滚反例](tests/test_pr460_storage.py#L161-L215)从缺少 vetoed 的旧格式实际迁移，断言 applied 并无条件调用 rollback；验证无用字段撤销、迁移后编辑/删除/锁定/完成状态及版本历史保留。[原有 CI 日志](https://github.com/yecays-ai/veil-agent/actions/runs/45967164223/job/140398494254)两例通过，本轮未重跑。
 
 ## 下一个窗口第一步
 
-1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，先在该分支的隔离副本运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --check`，确认无目标冲突后再运行 `--all --move --rewrite`；工具会先改写、再移动、生成兼容入口，并在失败时恢复原文件。
+1. 复核 PR #460 收口提交与对应 CI；不要合并或部署。S6 接入前读[证据与否决的能力边界](docs/tickets/459-p6-s3-relationship-governance.md#供-s6-使用的能力边界)。
 2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
 3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 

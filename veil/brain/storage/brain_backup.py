@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+from veil.brain.learned_context import LearnedContext
 from veil.brain.storage.brain_lock import write_lock
 
 COUNTS = ('memories', 'versions', 'vectors', 'events', 'event_stages', 'event_ledger',
@@ -686,6 +687,11 @@ def reconcile_companion_state(role_dir: str | Path) -> dict[str, Any]:
     }
 
 
+def _recover_learned_context(role: Path) -> None:
+    # The bundle already holds the same per-role lock used by LearnedContext writes.
+    LearnedContext(role.parent, role.name, {'file': 'learned-context.json'})._recover_storage_transaction()
+
+
 def backup_bundle(role_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
     """Create a coordinated backup bundle of brain.db, companion files, and chat watermark."""
     role = Path(role_dir)
@@ -693,6 +699,7 @@ def backup_bundle(role_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     db_path = role / 'brain.db'
     with write_lock(SimpleNamespace(root=role.parent), role.name):
+        _recover_learned_context(role)
         db_meta = backup(db_path, out / 'brain.db')
         companions: dict[str, dict[str, Any]] = {}
         for name in COMPANION_FILES:
@@ -788,6 +795,7 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
 
     role.mkdir(parents=True, exist_ok=True)
     with write_lock(SimpleNamespace(root=role.parent), role.name):
+        _recover_learned_context(role)
         db_result = restore(bundle_db, role / 'brain.db', lock_held=True)
         restored_companions: list[str] = []
         preserved_newer: list[str] = []

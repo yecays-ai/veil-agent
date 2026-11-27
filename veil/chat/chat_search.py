@@ -20,7 +20,7 @@ TOOL_SCHEMA = {'type': 'function', 'function': {
     'description': ('Search the saved chat log with lan by clue words when you cannot recall something she '
                     'mentions; returns the matching messages with time and the messages around them. '
                     'For "yesterday" etc. work out the date yourself; since/until alone gives an overview. '
-                    'Read-only.'),
+                    'Saved user messages show citeable chat:<id> references. Read-only.'),
     'parameters': {'type': 'object', 'properties': {
         'keywords': {'type': 'array', 'items': {'type': 'string', 'maxLength': 40},
                      'maxItems': MAX_KEYWORDS,
@@ -74,6 +74,13 @@ def _shorten(text, words):
     return ('…' if start else '') + text[start:start + MESSAGE_CHARS] + ('…' if start + MESSAGE_CHARS < len(text) else '')
 
 
+def _evidence_prefix(row):
+    mid = row.get('message_id') or row.get('id')
+    if row['role'] == 'user' and isinstance(mid, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', mid):
+        return f'[chat:{mid}] '
+    return ''
+
+
 def _browse(rows, first, last):
     """Ticket 354: what was said in a period, without clue words: evenly spaced messages, in order."""
     picked = []
@@ -95,7 +102,7 @@ def _browse(rows, first, last):
              'Search with keywords in the same period for the exact part you need.']
     for when, row in shown:
         who = 'lan' if row['role'] == 'user' else 'you'
-        lines.append(f'{when.strftime("%Y-%m-%d %H:%M")} {who}: {_shorten(row["content"], [])}')
+        lines.append(f'{when.strftime("%Y-%m-%d %H:%M")} {who}: {_evidence_prefix(row)}{_shorten(row["content"], [])}')
     text = '\n'.join(lines)
     if len(text.encode('utf-8')) > RESULT_BYTES:
         text = text.encode('utf-8')[:RESULT_BYTES].decode('utf-8', 'ignore').rstrip() + '\n…(cut; narrow the dates)'
@@ -169,7 +176,7 @@ def search_chat(rows, keywords, since=None, until=None):
             who = 'lan' if row['role'] == 'user' else 'you'
             mark = '[*] ' if i in matches else ''
             body = _shorten(row['content'], words)
-            lines.append(f'{mark}{stamp} {who}: {body}')
+            lines.append(f'{mark}{stamp} {who}: {_evidence_prefix(row)}{body}')
         pieces.append('\n'.join(lines))
     text = '\n\n'.join(pieces)
     if len(text.encode('utf-8')) > RESULT_BYTES:

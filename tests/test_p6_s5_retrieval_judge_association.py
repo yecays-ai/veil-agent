@@ -318,6 +318,73 @@ class TestDeliveryContractAndConfigRegistry(unittest.TestCase):
             for cached_row in mem._assoc_pool_cache['rows']:
                 self.assertNotIn('body', cached_row)
 
+    def test_association_toggles_persist_apply_next_turn_and_survive_restart(self):
+        from veil.brain.brain_p4_api import overview as brain_overview, toggle_layer
+        from veil.brain.memory_agent import Memory
+        from veil.core.veil_agent import Store
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'peter').mkdir()
+            store = Store(root)
+
+            def make_mem():
+                mem = object.__new__(Memory)
+                mem.mutex = __import__('threading').RLock()
+                mem.store = store
+                mem.cfg = SimpleNamespace(
+                    id='peter',
+                    memory={'recall': {'association_enabled': True, 'association_contextual_enabled': False}},
+                )
+                mem.recall_settings = recall_rotation.settings(mem.cfg.memory)
+                mem.retrieval_settings = brain_retrieval.load_settings({})
+                mem.judge = None
+                return mem
+
+            mem1 = make_mem()
+            hub1 = SimpleNamespace(
+                data_root=root,
+                chat=SimpleNamespace(cfg=mem1.cfg, store=store, memory=mem1, experience=None, profile=None),
+            )
+            # Default: 6-layer grid intact; association total on, contextual off -> effective_mode == legacy
+            home0 = brain_overview(hub1)
+            self.assertEqual(len(home0['layers']), 6)
+            assoc0 = home0['recall_association']
+            ctrls0 = {x['id']: x for x in assoc0['controls']}
+            self.assertTrue(assoc0['enabled'])
+            self.assertFalse(assoc0['contextual_enabled'])
+            self.assertEqual(assoc0['effective_mode'], 'legacy')
+            self.assertTrue(ctrls0['association']['enabled'])
+            self.assertFalse(ctrls0['association_contextual']['enabled'])
+
+            # Toggle contextual on via existing /api/brain/layer-toggle handler -> persists & applies immediately
+            r1 = toggle_layer(hub1, 'association_contextual', True)
+            self.assertTrue(r1['ok'])
+            self.assertTrue(r1['persisted'])
+            self.assertEqual(r1['effective_mode'], 'contextual')
+            self.assertTrue(mem1.effective_recall_settings()['association_contextual_enabled'])
+
+            # Simulate restart (fresh Memory instance reading same store) -> retained!
+            mem2 = make_mem()
+            self.assertTrue(mem2.effective_recall_settings()['association_contextual_enabled'])
+            self.assertEqual(mem2.association_status()['effective_mode'], 'contextual')
+
+            # Toggle contextual off -> deterministically restores legacy mode
+            hub2 = SimpleNamespace(
+                data_root=root,
+                chat=SimpleNamespace(cfg=mem2.cfg, store=store, memory=mem2, experience=None, profile=None),
+            )
+            r2 = toggle_layer(hub2, 'association_contextual', False)
+            self.assertTrue(r2['ok'])
+            self.assertEqual(r2['effective_mode'], 'legacy')
+            self.assertFalse(mem2.effective_recall_settings()['association_contextual_enabled'])
+
+            # Toggle master association off -> disables both
+            r3 = toggle_layer(hub2, 'association', False)
+            self.assertTrue(r3['ok'])
+            self.assertEqual(r3['effective_mode'], 'disabled')
+            self.assertFalse(make_mem().effective_recall_settings()['association_enabled'])
+
 
 if __name__ == '__main__':
     unittest.main()

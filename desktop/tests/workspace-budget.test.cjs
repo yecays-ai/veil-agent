@@ -56,8 +56,8 @@ test('budget form edits the base limit, not the effective limit with today\'s ra
   const view = setup(budgetPayload('10', '25', '11', '26'));
   await view.render();
   const inputs = view.descendants('input');
-  assert.deepEqual(inputs.map(input => input.value), ['10', '25']);
-  assert.deepEqual(inputs.map(input => [input.min, input.step]), [['0.01', 'any'], ['0.01', 'any']]);
+  assert.deepEqual(inputs.slice(0, 2).map(input => input.value), ['10', '25']);
+  assert.deepEqual(inputs.slice(0, 2).map(input => [input.min, input.step]), [['0.01', 'any'], ['0.01', 'any']]);
   const kpiText = view.descendants('div').map(node => node.textContent).join(' ');
   assert.match(kpiText, /上限 ¥11/);
 });
@@ -73,4 +73,30 @@ test('saving limits posts only limits and keeps a working form', async () => {
   assert.deepEqual(view.bodies[0], { limits: { daily_cny: '1.5', monthly_cny: '26.5' } });
   assert.match(view.descendants('small').map(node => node.textContent).join(' '), /已保存/);
   assert.equal(view.descendants('button')[1].disabled, false);
+});
+
+test('semantic settings reuse the models route and display role ledger and verification separately', async () => {
+  const payload = budgetPayload('10', '25', '11', '26');
+  payload.relationship_semantic = {
+    daily_cap_cny: '0.06', timeout_seconds: 6, spent_cny: '0.03', pending_cny: '0.01', remaining_cny: '0.02',
+    verification: { pending: 2, promoted: 1, reasons: { timeout: 3, supported: 1, sensitive_payload: 1 } },
+  };
+  const view = setup(payload);
+  await view.render();
+  const [, , cap, timeout] = view.descendants('input');
+  assert.equal(cap.value, '0.06');
+  assert.equal(timeout.value, '6');
+  const text = view.descendants('p').map(node => node.textContent).join(' ');
+  assert.match(text, /今日已用 ¥0.03 · 预留 ¥0.01 · 额度余额 ¥0.02/);
+  assert.match(text, /待核验 2 条 · 已晋升 1 条/);
+  assert.deepEqual(view.descendants('li').map(node => node.textContent), ['核验超时：3 条', '材料含疑似凭据，未发送：1 条']);
+  cap.value = '0';
+  timeout.value = '3';
+  payload.relationship_semantic.daily_cap_cny = '0';
+  payload.relationship_semantic.timeout_seconds = 3;
+  await view.descendants('form')[1].listeners.submit({ preventDefault() {} });
+  assert.equal(view.requests[1][0], '/api/models');
+  assert.deepEqual(view.bodies[0], { semantic_verification: { daily_cap_cny: '0', timeout_seconds: 3 } });
+  assert.match(view.descendants('p').map(node => node.textContent).join(' '), /核验已暂停/);
+  assert.match(view.descendants('small').map(node => node.textContent).join(' '), /无需重启/);
 });

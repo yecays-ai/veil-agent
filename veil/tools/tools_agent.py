@@ -864,12 +864,21 @@ class FilesystemTools:
         if getattr(self, 'cap_path', None) is None:
             return
         try:
+            if isinstance(max_bytes, dict):
+                limit_note = (
+                    f"independent section limits: facts {max_bytes.get('facts', 1800)}B, "
+                    f"growth {max_bytes.get('growth', 2000)}B, "
+                    f"relationship {max_bytes.get('relationship', 1500)}B, "
+                    f"ongoing {max_bytes.get('ongoing', 900)}B"
+                )
+            else:
+                limit_note = f'the limit is {max_bytes} bytes'
             self._announce_once(
                 'profile_notes_announced',
                 'Capability update: you now have your own notes about Lan. They are shown to you at the start '
                 'of every chat and every autonomous wake, right after your persona, so you know them without '
                 'searching memory. You write and edit them yourself with profile_append and profile_replace '
-                f'(direct use, no approval); the limit is {max_bytes} bytes. The notes start empty.')
+                f'(direct use, no approval); {limit_note}. The notes start empty.')
         except Exception as exc:
             self.enabled = False
             raise UserError('能力清单无法更新，文件工具已停止；请保留 data 文件夹。') from exc

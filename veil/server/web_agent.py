@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -605,7 +606,8 @@ class Hub(ScreenPopMixin):
         user = chat.user_persona.status() if getattr(chat, 'user_persona', None) else None
         learned = chat.profile.status(with_text=True) if getattr(chat, 'profile', None) and hasattr(chat.profile, 'status') else None
         if learned is not None:
-            learned['versions'] = self._page_versions(chat.profile.versions)
+            learned['versions'] = (chat.profile.read_version_history()
+                                   if hasattr(chat.profile, 'read_version_history') else [])
         return {
             'persona': {'text': persona_text, 'chars': len(persona_text),
                         'bytes': len(persona_text.encode('utf-8')),
@@ -674,6 +676,30 @@ class Hub(ScreenPopMixin):
                                            expected_updated_at=body.get('expected_updated_at'),
                                            force=body.get('force') is True)
             return self.peter_page()
+        if action == 'lock_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'set_relationship_lock'):
+                raise UserError('这个角色没有启用关系锁定。')
+            chat.profile.set_relationship_lock(body.get('id'), bool(body.get('locked')),
+                                               expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'restore_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'restore_relationship_item'):
+                raise UserError('这个角色没有启用关系恢复。')
+            chat.profile.restore_relationship_item(body.get('id'),
+                                                   expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'reverify_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'reverify_relationship_evidence'):
+                raise UserError('这个角色没有启用证据核验。')
+            chat.profile.reverify_relationship_evidence()
+            return self.peter_page()
+        if action == 'migrate_learned':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'migrate_storage'):
+                raise UserError('这个角色没有启用认知迁移。')
+            plan = chat.profile.migrate_storage(dry_run=body.get('apply') is not True)
+            page = self.peter_page()
+            page['migration'] = plan
+            return page
         if action == 'restore':
             section = body.get('section')
             version = body.get('version')
@@ -2439,6 +2465,16 @@ def make_handler(hub, token):
                 self._send(503, {'error': '预算账本尚未就绪。'})
                 return
             from veil.system.ledger_recovery import is_unverified
+            cfg = getattr(hub.chat, 'cfg', None)
+            role_id = getattr(cfg, 'id', None)
+            settings = getattr(cfg, 'models', None)
+            semantic = None
+            read_semantic = getattr(settings, 'semantic_verification', None)
+            if role_id and read_semantic is not None:
+                try:
+                    semantic = read_semantic()
+                except SettingsError:
+                    pass  # Don't hide working totals if the configuration transaction is blocked.
             try:
                 with budget.mutex:
                     stamp = budget.clock()
@@ -2451,11 +2487,25 @@ def make_handler(hub, token):
                         used, reserved = budget.category_totals(stamp=stamp, category=key)
                         categories.append({'id': key, 'spent_cny': str(used), 'pending_cny': str(reserved),
                                            'limit_cny': str(caps[key]) if key in caps else None})
+                    if semantic is not None:
+                        used, reserved = budget.category_totals(role_id, stamp=stamp, category='relationship_semantic')
+                        cap = Decimal(semantic['daily_cap_cny'])
+                        semantic.update(spent_cny=str(used), pending_cny=str(reserved),
+                                        remaining_cny=str(max(Decimal(0), cap - used - reserved)))
                     models = budget.model_display(stamp)
                     unverified = is_unverified(budget.store.root)
             except (UserError, OSError, UnicodeError):
                 self._send(503, {'error': '暂时无法核对费用账本。'})
                 return
+            # Profile storage has its own lock; never hold the budget mutex while accessing it.
+            if semantic is not None:
+                summary = getattr(getattr(hub.chat, 'profile', None), 'relationship_semantic_summary', None)
+                semantic['verification'] = None
+                if summary is not None:
+                    try:
+                        semantic['verification'] = summary()
+                    except (UserError, OSError, UnicodeError):
+                        pass  # Unknown, not a fabricated zero.
             self._send(200, {
                 'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
                 # limit_cny is the effective cap (base + today's approved raise); the form must
@@ -2467,7 +2517,7 @@ def make_handler(hub, token):
                             'base_limit_cny': str(budget.monthly), 'raise_cny': str(monthly_cap - budget.monthly),
                             'remaining_cny': str(monthly_cap - month - pending)},
                 'pending_cny': str(pending), 'ledger_unverified': unverified,
-                'categories': categories, 'model_summary': models,
+                'categories': categories, 'model_summary': models, 'relationship_semantic': semantic,
             })
 
         def _health_context(self):
@@ -2593,6 +2643,72 @@ def make_handler(hub, token):
                     self._send(200, brain_overview(hub))
                 except sqlite3.Error:
                     self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import growth_analysis
+                try:
+                    self._send(200, growth_analysis(
+                        hub,
+                        range_key=(query.get('range') or ['7d'])[0],
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                    ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/day-changes':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import day_changes
+                try:
+                    self._send(200, day_changes(hub, (query.get('date') or [''])[0]))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import generate_growth_report
+                try:
+                    inc_content = (query.get('include_content') or ['1'])[0] not in ('0', 'false', 'False')
+                    inc_health = (query.get('include_health') or ['0'])[0] in ('1', 'true', 'True')
+                    self._send(200, generate_growth_report(
+                        hub,
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                        include_content=inc_content,
+                        include_health=inc_health,
+                        fmt=(query.get('format') or ['full'])[0],
+                    ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/recall-turns':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turns
+                try:
+                    page_num = int((query.get('page') or ['1'])[0] or 1)
+                    limit_num = int((query.get('limit') or ['20'])[0] or 20)
+                except ValueError:
+                    self._send(400, {'error': '分页参数 page 与 limit 必须为整数。'})
+                    return
+                self._send(200, recall_turns(
+                    hub,
+                    page=page_num,
+                    limit=limit_num,
+                    date=(query.get('date') or [''])[0],
+                    purpose=(query.get('purpose') or [''])[0],
+                    model=(query.get('model') or [''])[0],
+                    status=(query.get('status') or [''])[0],
+                ))
+            elif url.path == '/api/brain/recall-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turn_report
+                self._send(200, recall_turn_report(hub, (query.get('request_id') or [''])[0]))
             elif url.path == '/api/memory/library':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -2637,16 +2753,22 @@ def make_handler(hub, token):
                 if not getattr(cfg, 'id', None):
                     self._send(503, {'error': '角色配置尚未就绪。'})
                     return
-                from veil.core.config_registry import model_config_overview
+                from veil.core.config_registry import model_config_overview, semantic_config_overview
                 models = getattr(cfg, 'models', None)
                 try:
                     settings = models.public() if models is not None else None
                 except SettingsError:
                     settings = None
-                self._send(200, model_config_overview(
-                    role_id=cfg.id, settings=settings,
-                    background_model=hub.background_running,
-                ))
+                view = model_config_overview(role_id=cfg.id, settings=settings,
+                                             background_model=hub.background_running)
+                observe = getattr(models, 'semantic_verification_observation', None)
+                if observe is not None:
+                    try:
+                        observation = observe()
+                    except SettingsError:
+                        observation = None
+                    view['entries'].extend(semantic_config_overview(role_id=cfg.id, observation=observation))
+                self._send(200, view)
             elif url.path == '/api/config/inventory':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -3319,8 +3441,14 @@ def make_handler(hub, token):
                 self._send(500, {'error': f'保存指令失败：{exc}'})
 
         def _get_peter_page(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
-                self._send(200, hub.peter_page())
+                data = hub.peter_page()
+                if isinstance(data, dict) and isinstance(data.get('learned'), dict):
+                    from veil.brain.brain_p4_api import _compute_cognition_budget
+                    data['learned']['budget'] = _compute_cognition_budget(data['learned'])
+                self._send(200, data)
             except UserError as exc:
                 self._send(400, {'error': str(exc)})
             except OSError as exc:
@@ -3711,6 +3839,13 @@ def make_handler(hub, token):
                 self._post_brain_health_scan(body)
             elif url.path == '/api/brain/health/settings':
                 self._post_brain_health_settings(body)
+            elif url.path == '/api/brain/layer-toggle':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import toggle_layer
+                res = toggle_layer(hub, str(body.get('layer_id') or ''), bool(body.get('enabled')))
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
             elif url.path == '/api/pending-approvals':
                 try:
                     self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
@@ -3982,7 +4117,6 @@ def main(argv=None):
             budget.daily, budget.monthly = cfg.models.limits()
             acceptance_limits = None
             if args.acceptance:
-                from decimal import Decimal
                 acceptance_limits = (Decimal('2'), Decimal('20'))
                 budget.daily = min(budget.daily, acceptance_limits[0])
                 budget.monthly = min(budget.monthly, acceptance_limits[1])

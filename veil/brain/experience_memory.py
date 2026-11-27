@@ -141,9 +141,10 @@ class ExperienceMemory:
         return bool(self.settings['enabled'])
 
     def set_enabled(self, enabled):
-        self.store.replace(self.switch_path, {'enabled': bool(enabled)})
-        self._context_cache = None
-        return self.enabled()
+        with self._lock:
+            self.store.replace(self.switch_path, {'enabled': bool(enabled)})
+            self._context_cache = None
+            return self.enabled()
 
     # --- scheduling ---------------------------------------------------------------------------
     def start(self):
@@ -361,6 +362,8 @@ class ExperienceMemory:
         except Exception:
             pass
         with self._lock:
+            if not self.enabled():
+                return 'off'
             pending = self.pending()
             reason = 'forced' if force and pending else self.due(pending)
             if not reason:

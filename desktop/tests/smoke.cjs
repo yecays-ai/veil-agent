@@ -163,6 +163,16 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
       json(res, { events: [{ event_id: 'fictional-ev-1', title: '书店与雨天', summary: '约定下雨天逛松风旧书店。', first_at: new Date().toISOString(), last_at: new Date().toISOString() }] });
     } else if (url.pathname === '/api/memory/event') {
       json(res, { event: { event_id: 'fictional-ev-1', title: '书店与雨天', story: '两人约定下雨天去松风旧书店买地图。', first_at: new Date().toISOString(), last_at: new Date().toISOString() }, linked_memories: [{ memory_id: 'fictional-mem-1', title: '周末书店散步' }], stages: [{ stage_title: '起因', summary: '聊到下雨天喜欢看老地图。' }] });
+    } else if (url.pathname === '/api/peter-page') {
+      if (req.headers['x-token'] !== token) {
+        json(res, { error: 'token' }, 403); return;
+      }
+      json(res, {
+        persona: { text: 'Fictional authenticated profile' }, background: { text: '' },
+        user_persona: null,
+        learned: { available: true, sections: { facts: { text: '' }, growth: { text: '' } },
+          ongoing: { items: [] }, relationship: { items: [] }, max_bytes: 6200 },
+      });
     } else if (url.pathname === '/api/peter-page/versions') {
       json(res, { items: [{ time: new Date().toISOString(), reason: '确认周末出行偏好', diff: ['- 旧记录', '+ 新增旧书店偏好'] }] });
     } else if (url.pathname === '/api/diagnostics/trace') {
@@ -453,10 +463,10 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(()=>detachedMCP.isDestroyed(),'MCP detached window did not merge');
   // Stage 3 P4/P5 Brain, Themes, Detached Pin & Custom CSS E2E checks
   await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-home]").click()');
-  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-home-view")?.hidden && document.querySelector("#brain-home-view .kpi-card") && !document.querySelector("#subnav-shell")?.hidden && document.querySelectorAll("#subnav-track .subnav-tab").length === 6'), 'brain-home or Nocturne 6-tab subnav did not render');
-  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=brain-health]").click()');
+  await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-home-view")?.hidden && document.querySelector("#brain-home-view .kpi-card") && !document.querySelector("#subnav-shell")?.hidden && document.querySelectorAll("#subnav-track .subnav-tab").length === 4'), 'brain-home or Nocturne 4-tab subnav did not render');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=brain-health]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#brain-health-view")?.hidden && document.querySelector("#brain-health-view .health-summary-banner") && document.querySelector("#brain-health-view details.tech-evidence")'), 'brain-health did not render summary or collapsible evidence');
-  await chat.webContents.executeJavaScript('document.querySelector("[data-subnav-page=workspace-events]").click()');
+  await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=workspace-events]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#workspace-events-view")?.hidden && document.querySelector("#workspace-events-view")?.textContent.includes("周末书店散步")'), 'workspace-events linked memories missing');
   await chat.webContents.executeJavaScript('document.querySelector("[data-workspace-page=workspace-budget]").click()');
   await wait(() => chat.webContents.executeJavaScript('document.querySelector("#workspace-budget-view")?.textContent.includes("29.82")'), 'workspace-budget did not render');
@@ -473,6 +483,9 @@ const failSafe = setTimeout(() => { console.error('SMOKE timeout'); app.exit(1);
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#mcp-view").hidden && (document.querySelector("#mcp-view .mcp-master")?.getBoundingClientRect().width || 0) >= 500'), 'mcp master card collapsed narrow');
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=peter]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#peter-view").hidden && (document.querySelector("#peter-view .peter-card")?.getBoundingClientRect().width || 0) >= 500'), 'peter profile card collapsed narrow');
+  const profileGet = await chat.webContents.executeJavaScript('window.veilDesktop.request("/api/peter-page")');
+  assert.equal(profileGet.ok, true, 'authenticated desktop GET did not succeed');
+  assert.equal(profileGet.data.persona.text, 'Fictional authenticated profile');
   // Verify assistant turn avatar rendered on first bubble, voice play button centered cleanly, and activity 2-col switch layout
   await chat.webContents.executeJavaScript('document.querySelector("[data-page=chat]").click()');
   await wait(() => chat.webContents.executeJavaScript('!document.querySelector("#log").hidden'), 'chat view did not reopen');
