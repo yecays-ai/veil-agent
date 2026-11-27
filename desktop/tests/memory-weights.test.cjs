@@ -177,3 +177,41 @@ test('S6-1 library detail shows activation, pending review and history entry poi
   assert.match(source, /function renderMemoryReevalHistory/);
   assert.match(source, /只有真正送达你的回复才更新 last_active 与强化次数/);
 });
+
+test('health settings read failure or missing settings never renders a saveable default form', async () => {
+  const document = {
+    createElement: tag => new Element(tag),
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    body: new Element('body'),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const window = {};
+  vm.runInNewContext(source, { window, document, navigator: {}, URLSearchParams });
+  const posts = [];
+  const request = async (url, options) => {
+    if (String(url).includes('/api/brain/health/settings')) posts.push(options);
+    if (String(url) === '/api/brain/health') {
+      return { ok: false, status: 503, json: async () => ({ error: 'down' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const failed = new Element('section');
+  await window.veilBrain.renderPage('brain-health', failed, request);
+  assert.doesNotMatch(texts(failed).join('\n'), /保存巡检设置/);
+  assert.match(texts(failed).join('\n'), /无法读取|未能加载/);
+
+  const partialRequest = async (url) => {
+    if (String(url) === '/api/brain/health') {
+      return { ok: true, status: 200, json: async () => ({ report: {} }) };
+    }
+    throw new Error('must not call ' + url);
+  };
+  const partial = new Element('section');
+  await window.veilBrain.renderPage('brain-health', partial, partialRequest);
+  assert.doesNotMatch(texts(partial).join('\n'), /保存巡检设置/);
+  assert.match(texts(partial).join('\n'), /未能加载|无法读取/);
+  assert.deepEqual(posts, []);
+});

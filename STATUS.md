@@ -75,7 +75,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 - **长期重要度重评**：`memory_importance_proposals` 记录原因码、权重、证据引用与 `policy_version='s6-1.v1'`；自动只做 +1、上限 7、需证据且非锁定/置顶；降权与 8+ 只进待审；每次应用写单份 `versions`，可撤回；`hard_delete()` 同事务清理派生行。S6-3 用统一的 `MemoryWeights.propose()`。
 - **界面**：记忆监控首页新增“记忆权重与保护性衰减”面板（5 个开关 + 4 个参数，保存到 `data/<role>/memory-weights.json`，下一轮生效、重启保留）；记忆详情显示活跃度/送达/跨天会话/保护状态、待确认重评、重评历史与撤回；库支持“有待重评建议”过滤和“活跃度”排序。
 - **模块协作**：检索默认不启用活跃度排序（#455 AB-R5b 证据不足）；开关打开后只追加可选分数，无送达记录时严格无操作。判官、联想、召回预算逻辑未改。
-- **验证**：新增 `tests/test_p6_s6_memory_weights.py`（47 项）与 `desktop/tests/memory-weights.test.cjs`（3 项）；合流 S6-2 后桌面 64/64；完整 Python 套件失败集合与 `origin/main = 81dba35` 基线一致（详见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。VEIL Lab mock run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终 `s6-1-final-20261128T023357`（快照 r3，¥0）验证送达、幂等、回滚、重启、digest、保护性衰减与 5→6 自动重评；五次 `run verify` 均通过。
+- **验证**：新增 `tests/test_p6_s6_memory_weights.py`（47 项）与 `desktop/tests/memory-weights.test.cjs`（4 项）；合流 S6-2 后桌面 65/65；完整 Python 套件失败集合与 `origin/main = 81dba35` 基线一致（详见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。VEIL Lab mock run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终 `s6-1-final-20261128T023357`（快照 r3，¥0）验证送达、幂等、回滚、重启、digest、保护性衰减与 5→6 自动重评；五次 `run verify` 均通过。
 
 ## S6 开工门禁与 S6-1 状态
 
@@ -87,7 +87,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 | 反证长期积累有界、不丢相关否决 | **已关闭** | 超限按相关性分批；无关积累不阻断其他晋升；相关否决不丢 |
 | 任意跨语言同义否决与无关正例 | **已关闭（能力边界内）** | 单测 + DeepSeek 合成实验 `docs/reports/461-cross-language-live-20261127.md` |
 | 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期项，不在工单 461 范围） | 见 `docs/tickets/460-p6-s5-retrieval-judge-association.md`；S6-1 的送达记账不依赖它，S6-2 已合并，S6-3 开工前仍需处理 |
-| S6-1 送达激活、保护性衰减与版本化重评（工单 462 / PR #464） | **开发侧完成**（待审核/CI/体验） | `tests/test_p6_s6_memory_weights.py` 47 项；桌面 64/64；VEIL Lab run `s6-1-activation-20261128T004338`；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md` |
+| S6-1 送达激活、保护性衰减与版本化重评（工单 462 / PR #464） | **开发侧完成**（待审核/CI/体验） | `tests/test_p6_s6_memory_weights.py` 47 项；桌面 65/65；VEIL Lab run `s6-1-activation-20261128T004338`；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md` |
 | S6-2 自主闲暇联想（工单 463） | 已合并 `81dba35`，默认关闭；未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-11；S6-2 只改联想/自主路径，未改本单送达记账 |
 | S6-3 认知巩固 | 未开工 | 等 C-2 方向；本单已给出 `MemoryWeights.propose()` 接口 |
 

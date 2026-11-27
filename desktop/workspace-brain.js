@@ -2117,6 +2117,12 @@
   // =========================================================================
   // 6. Strictly Read-Only P5 Health Center (brain-health)
   // =========================================================================
+  function validHealthSettings(settings) {
+    return Boolean(settings && typeof settings === 'object'
+      && typeof settings.enabled === 'boolean'
+      && ['daily_night', 'every_6h', 'manual_only'].includes(settings.schedule));
+  }
+
   async function renderHealthWorkspace(host, req) {
     host.replaceChildren(el('p', '', '正在加载只读健康报告与巡检设置…'));
     let healthSettings = null;
@@ -2128,8 +2134,18 @@
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
       // A scan response carries only the report; keep the saved settings instead of redrawing
-      // the form with defaults that a later save would write back to disk.
-      const settings = payload?.settings || healthSettings || { enabled: true, schedule: 'daily_night', idle_only: true };
+      // the form with defaults that a later save would write back to disk. A malformed/missing
+      // settings payload must not produce a saveable form: that form's defaults would overwrite
+      // the real schedule on the next save.
+      const candidate = payload && Object.prototype.hasOwnProperty.call(payload, 'settings')
+        ? payload.settings : healthSettings;
+      if (!validHealthSettings(candidate)) {
+        host.replaceChildren(renderEmptyState(
+          '巡检设置未能加载，已停止显示保存表单',
+          '为避免用默认值覆盖你的原配置，请检查后端服务后重新打开本页。'));
+        return;
+      }
+      const settings = candidate;
       healthSettings = settings;
       const sum = report.summary || { status: 'good', status_label: '尚未运行检查', total_checks: 0, good_count: 0, warn_count: 0, error_count: 0 };
       const checks = report.checks || [];
@@ -2399,9 +2415,9 @@
     }
 
     const healthRes = await reqJson(req, '/api/brain/health');
-    if (!healthRes.ok || !healthRes.data) {
-      // Do not render a writable settings form from defaults after a failed read: a later save
-      // would silently overwrite the real schedule. Show the failure and let the user retry.
+    if (!healthRes.ok || !healthRes.data || !validHealthSettings(healthRes.data.settings)) {
+      // Do not render a writable settings form from defaults after a failed/partial read: a later
+      // save would silently overwrite the real schedule. Show the failure and let the user retry.
       host.replaceChildren(renderEmptyState('暂时无法读取健康巡检数据', '请检查后端服务后重新打开本页。'));
       return;
     }

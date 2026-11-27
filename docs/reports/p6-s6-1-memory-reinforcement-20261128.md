@@ -10,7 +10,7 @@
 - 保护性衰减只对 `importance <= 6` 且未置顶的**活跃度投影**生效；`importance >= 7` 与 `pinned` 永不衰减；衰减不改重要度、不删除、不隐藏。
 - 活跃度排序是**可选信号**，默认关闭。理由：#455 的 `AB-R5b` 只有 `+1/53` 且无冷门重要样本，证据不足；本单只保证信号可靠，等真实多日送达数据积累后再决定。
 - 隔离真实链路（VEIL Lab，mock，¥0）已验证：送达后更新、重复确认幂等、回滚不增加、重启保留、60 天后低保真衰减而高重要度不动、5→6 自动重评并写版本。
-- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 47 项 Python 测试与 3 项桌面测试，合流 S6-2 后桌面全套 64/64。
+- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 47 项 Python 测试与 4 项桌面测试，合流 S6-2 后桌面全套 65/65。
 
 ## 2. 范围、前置与并行边界
 
@@ -83,7 +83,7 @@
       tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store \
       tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget \
       tests.test_p6_s6_idempotent_writes tests.test_p3_1_brain_only     # 98 项通过
-    node --test desktop/tests/*.test.cjs                            # 64/64 通过
+    node --test desktop/tests/*.test.cjs                            # 65/65 通过
 
 覆盖的关键场景：
 
