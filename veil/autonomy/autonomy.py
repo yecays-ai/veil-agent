@@ -167,7 +167,7 @@ def activity_history(store, cfg, count=3):
 
 def activities_since(store, cfg, since, until):
     """Brief actual wake records for a returning conversation, not instructions or current state."""
-    from life_state import _time
+    from veil.life.life_state import _time
     start, end = _time(since), _time(until)
     if start is None or end is None:
         return ''
@@ -1138,7 +1138,7 @@ class AutonomyController:
     def _context(self, wake_reason=None):
         stamp = datetime.now().astimezone()
         rows = self.chat.store.read(self.chat.path)
-        from life_state import gap_text
+        from veil.life.life_state import gap_text
         elapsed = gap_text(rows, stamp.isoformat(), minimum=0) or 'No previous visible user message is recorded.'
         previous = activity_view(self.rows[-1]) if self.rows else None
         auto_day, auto_pending = self.chat.budget.category_totals(self.chat.cfg.id)
@@ -1186,7 +1186,7 @@ class AutonomyController:
         life_text = ''
         try:
             # Ticket 352: same structured life-record text as ordinary chat (status and date on each row).
-            from life_state import state_text
+            from veil.life.life_state import state_text
             life_text = state_text(life_rows=self.chat.life_records.read(), today=stamp.date().isoformat(),
                                    moods=self.chat.life_records.moods())
             life_text = life_text + '\n' if life_text else ''

@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import test_chat
 from agent_types import now
-from autonomy import GlanceController
+from veil.autonomy.autonomy import GlanceController
 from veil.brain.recent_experiences import (begin_glance, record_glance, recent_experience_context,
                                 record_screen_message)
 from veil_agent import Chat, Store, ActivityState

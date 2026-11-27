@@ -1,7 +1,7 @@
 import unittest
 
-import delegate_agent
-import long_tasks
+from veil.autonomy import delegate_agent
+from veil.autonomy import long_tasks
 from veil.tools.tool_access import TOOL_ACCESS, tools_with
 
 

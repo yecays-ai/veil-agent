@@ -490,7 +490,7 @@ class XiaohongshuTests(unittest.TestCase):
 
     def test_autonomous_wake_reads_then_saves_local_draft_without_publishing(self):
         from veil_agent import ActivityState, Budget, Character, Chat, Store
-        from autonomy import AutonomyController
+        from veil.autonomy.autonomy import AutonomyController
         from web_agent import Hub
         store = Store(self.root / 'data')
         cfg = Character('peter', 'Test', 'Fictional persona', 20, 100,

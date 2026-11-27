@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-import persona_versions
+from veil.persona import persona_versions
 
 ROOT = Path(__file__).resolve().parents[1]
 

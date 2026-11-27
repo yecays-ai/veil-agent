@@ -29,7 +29,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, getproxies, urlopen
 from urllib.error import HTTPError, URLError
 
-from attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
+from veil.chat.attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
                               inspect_attachment, redirected_path, valid_attachment_row)
 from model_settings import SettingsError
 from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
@@ -38,11 +38,11 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
 from veil.tools import workbench_switch
-import persona_versions
+from veil.persona import persona_versions
 import diagnostics
-from autonomy import AutonomyController, GlanceController
+from veil.autonomy.autonomy import AutonomyController, GlanceController
 from hub_screen_pop import ScreenPopMixin
-from codex_watch import CodexWatchController
+from veil.autonomy.codex_watch import CodexWatchController
 
 workbench_lock = threading.Lock()
 
@@ -1650,7 +1650,7 @@ class Hub(ScreenPopMixin):
             'card_decline': 'decline', 'card_return': 'return',
         }
         if action in card_actions:
-            from virtual_cards import VirtualCardError, client_action_id
+            from veil.life.virtual_cards import VirtualCardError, client_action_id
             if self.chat is None:
                 return '当前聊天不可用。'
             with self.cond:
@@ -2048,7 +2048,7 @@ def make_handler(hub, token):
                 return
             try:
                 if parts[3] == 'veil-score.js':
-                    from lab_games import score_helper
+                    from veil.life.lab_games import score_helper
                     _folder, _entry, game_id = manager._entry(parts[2])
                     body = score_helper(parts[2], game_id).encode('utf-8')
                     mime = 'text/javascript; charset=utf-8'
@@ -2057,7 +2057,7 @@ def make_handler(hub, token):
             except (OSError, ValueError):
                 self._send(404, {'error': 'game resource unavailable'})
                 return
-            from lab_preview import _csp
+            from veil.life.lab_preview import _csp
             self._send(200, body, mime, {
                 'Content-Security-Policy': _csp(),
                 'Cross-Origin-Resource-Policy': 'same-origin'})
@@ -2224,7 +2224,7 @@ def make_handler(hub, token):
             if library is None:
                 self._send(503, {'error': '表情包暂不可用。'})
                 return
-            from stickers import StickerError, parse_sticker_text
+            from veil.chat.stickers import StickerError, parse_sticker_text
             action = body.get('action')
             try:
                 if action == 'add_pack':
@@ -2275,7 +2275,7 @@ def make_handler(hub, token):
             except (ValueError, KeyError, TypeError):
                 self._send(400, {'error': 'bad request'})
                 return
-            from stickers import StickerError
+            from veil.chat.stickers import StickerError
             try:
                 library.add_bytes(pack, name, raw, by='lan')
             except StickerError as exc:
@@ -2293,7 +2293,7 @@ def make_handler(hub, token):
                 self._send(503, {'error': '服务尚未就绪，请稍后重试。'})
                 return
             try:
-                from life_records import effective, fold_completed
+                from veil.life.life_records import effective, fold_completed
                 value = {'records': [effective(r) for r in hub.chat.life_records.read() if isinstance(r, dict) and r.get('kind') != 'diary']} if hub.chat is not None else {'records': []}
                 if not isinstance(value, dict) or not isinstance(value.get('records'), list):
                     raise ValueError
@@ -3537,7 +3537,7 @@ def make_handler(hub, token):
                 if set(body)!={'find'} or not isinstance(key,str) or not key:
                     self._send(400, {'error':'invalid lookup'}); return
                 try:
-                    from life_records import effective
+                    from veil.life.life_records import effective
                     row=next((r for r in hub.chat.life_records.read() if isinstance(r,dict) and r.get('id')==key and r.get('kind')!='diary'),None)
                 except (OSError,ValueError,UnicodeError):
                     self._send(500, {'error':'生活记录无法安全读取。'}); return
@@ -3762,7 +3762,7 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
 
     chat.virtual_card_changed = publish_virtual_card
     if getattr(files, 'lab', None) is not None:
-        from lab_games import LabGames
+        from veil.life.lab_games import LabGames
         hub.game_manager = LabGames(files.workspace, hub.game_port, files.lab.name)
         files.attach_game_manager(hub.game_manager)
     announce_free_reply = getattr(files, 'announce_free_reply', None)
@@ -4004,7 +4004,7 @@ def main(argv=None):
                 hub.push('notice', '模型还没有选择，记忆后台暂未启动；请在设置里选择模型后重启。')
             if acceptance_limits is not None:
                 hub.acceptance_limits = acceptance_limits
-            from stickers import StickerLibrary
+            from veil.chat.stickers import StickerLibrary
             hub.sticker_library = StickerLibrary(store.root / 'stickers')
             token = secrets.token_urlsafe(24)
             try:

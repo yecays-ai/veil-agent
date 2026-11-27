@@ -71,7 +71,7 @@ class LiveContextTest(unittest.TestCase):
         self.assertNotIn('recent_calls', self.chat.tool_inventory_snapshot['rows'][0])  # the chat's copy is not touched
 
     def test_hub_shows_the_voice_reference_with_its_text_and_switch(self):
-        from voice_style import VoiceStyle
+        from veil.persona.voice_style import VoiceStyle
         path = Path(self.temp.name) / 'fake.voice.md'
         path.write_text('> hi\nFake: hello you\n', encoding='utf-8')
         self.chat.voice_style = VoiceStyle(self.store, 'peter', path, 'Fake')

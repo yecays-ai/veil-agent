@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
 from capability_state import capability_transaction, save_capabilities
-from attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
+from veil.chat.attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
 from veil.integrations.web_tools import WEB_TOOL_NAMES
 from veil.integrations.github_readonly import GITHUB_TOOL_NAMES, GitHubReadTools
 from veil.integrations.browser_tools import BROWSER_TOOL_NAMES, BrowserTools
@@ -356,11 +356,11 @@ class FilesystemTools:
                                                 'open_lab_game', 'run_lab_python'))
         self._open_lab(settings)
         if self.lab:
-            from lab_preview import LabPreview
+            from veil.life.lab_preview import LabPreview
             self.lab_preview = LabPreview(self.workspace, platform_enabled=os.name == 'nt',
                                           legacy_lab_name=self.lab.name)
             self.tools.extend(self.lab_preview.tools)
-            from lab_sandbox import LabPythonSandbox
+            from veil.life.lab_sandbox import LabPythonSandbox
             self.lab_sandbox = LabPythonSandbox(self.lab, enabled=settings.get('python_sandbox', False))
             self.tools.extend(self.lab_sandbox.tools)
             self.game_manager = None
@@ -1382,7 +1382,7 @@ class FilesystemTools:
         if not self.enabled or not getattr(self, 'cap_path', None):
             return None
         try:
-            from virtual_cards import ANNOUNCE_TEXT
+            from veil.life.virtual_cards import ANNOUNCE_TEXT
             return self._announce_once('virtual_cards_announced', ANNOUNCE_TEXT)
         except Exception:
             return False

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
-from long_tasks import LongTaskStore
+from veil.autonomy.long_tasks import LongTaskStore
 from veil.tools.tools_agent import FilesystemTools
 from veil_agent import Budget, Chat, Store, UserError, load_character, model_tool_result
 
@@ -84,7 +84,7 @@ class LongTaskTests(unittest.TestCase):
     def test_atomic_write_failure_keeps_previous_valid_snapshot(self):
         self.create()
         previous = self.tasks.read()
-        with patch('long_tasks.os.replace', side_effect=OSError('simulated interruption')):
+        with patch('veil.autonomy.long_tasks.os.replace', side_effect=OSError('simulated interruption')):
             with self.assertRaises(UserError):
                 self.tasks._update({'action': 'update', 'task_id': previous['task_id'],
                                     'progress_update': 'This update cannot be committed.'})
@@ -114,7 +114,7 @@ class LongTaskTests(unittest.TestCase):
         self.assertIsNone(self.tasks.read()['pending_action'])
 
     def test_full_progress_rolls_oldest_into_archive_instead_of_refusing(self):
-        from long_tasks import MAX_PROGRESS_ITEMS
+        from veil.autonomy.long_tasks import MAX_PROGRESS_ITEMS
         task_id = self.create()
         for index in range(MAX_PROGRESS_ITEMS + 2):
             _, state, _ = self.tasks.invoke('long_task_update', {
@@ -488,7 +488,7 @@ max_result_bytes = 4096
 
         before = self.tasks.path.read_bytes()
         previous = self.tasks.read()
-        with patch('long_tasks.os.replace', side_effect=OSError('simulated interruption')):
+        with patch('veil.autonomy.long_tasks.os.replace', side_effect=OSError('simulated interruption')):
             with self.assertRaises(UserError):
                 self.tasks.invoke('long_task_update', {
                     'action': 'update', 'task_id': task_id, 'status': 'completed',

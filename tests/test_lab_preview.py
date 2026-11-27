@@ -11,8 +11,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from unittest.mock import patch
 
-from lab_preview import LabPreviewResult
-from lab_preview import (
+from veil.life.lab_preview import LabPreviewResult
+from veil.life.lab_preview import (
     image_prompt,
     MAX_ITERATIONS,
     MAX_RESOURCE_REQUESTS,
@@ -47,12 +47,12 @@ class LabPreviewPathTests(unittest.TestCase):
 
     def test_every_reparse_point_in_a_page_path_is_rejected(self):
         page = self.lab / "game.html"
-        with patch("lab_preview._is_reparse_point", side_effect=lambda path: Path(path) == page):
+        with patch("veil.life.lab_preview._is_reparse_point", side_effect=lambda path: Path(path) == page):
             with self.assertRaisesRegex(ValueError, "Links and junctions"):
                 _safe_lab_file(self.lab, "game.html", page=True)
 
     def test_lab_root_cannot_itself_be_a_link_or_junction(self):
-        with patch("lab_preview._is_reparse_point", return_value=True):
+        with patch("veil.life.lab_preview._is_reparse_point", return_value=True):
             with self.assertRaisesRegex(ValueError, "configured Lab folder"):
                 LabPreview(self.root, platform_enabled=True)
 

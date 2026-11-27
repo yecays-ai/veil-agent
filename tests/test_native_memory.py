@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 from veil.brain.memory_agent import Memory, MemoryToolError
 from veil.brain.memory_native import HOLD, NativeMemoryTools, ToolSet
-from long_tasks import LongTaskStore
+from veil.autonomy.long_tasks import LongTaskStore
 from test_memory import Backend
 from veil.tools.tools_agent import permitted_tools
 from veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode

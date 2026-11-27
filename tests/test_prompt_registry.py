@@ -92,7 +92,7 @@ class PlaceholderTests(unittest.TestCase):
 
     def test_edited_guidance_reaches_the_next_gap_text(self):
         from datetime import datetime, timedelta, timezone
-        import life_state
+        from veil.life import life_state
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._store
             try:

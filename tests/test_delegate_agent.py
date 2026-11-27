@@ -3,7 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from delegate_agent import MAX_TOOL_CALLS, READ_ONLY_TOOLS, run
+from veil.autonomy.delegate_agent import MAX_TOOL_CALLS, READ_ONLY_TOOLS, run
 
 
 def call(name, arguments='{}', call_id='call-1'):

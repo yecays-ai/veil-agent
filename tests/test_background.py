@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from background import (LIMITS, NOTE, append_context_log, background_context, chunk_paragraph,
+from veil.persona.background import (LIMITS, NOTE, append_context_log, background_context, chunk_paragraph,
                         select_background, split_background)
 from veil_agent import Budget, Character, Chat, Store
 

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from life_state import gap_text, state_text, time_separator, return_window
+from veil.life.life_state import gap_text, state_text, time_separator, return_window
 from veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
@@ -126,7 +126,7 @@ class GapTextTests(unittest.TestCase):
         self.assertIsNotNone(return_window(rows[:-1], '2026-11-12T09:02:00+08:00'))
 
     def test_failed_activity_separates_failure_from_plan(self):
-        from autonomy import activities_since
+        from veil.autonomy.autonomy import activities_since
         import tempfile
         from pathlib import Path
         from types import SimpleNamespace

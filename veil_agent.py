@@ -20,20 +20,20 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 import ledger_recovery
-import persona_versions
+from veil.persona import persona_versions
 import prompts
 from veil.tools import tool_failures
-from voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
-from background import append_context_log, background_context, background_path, context_chars, request_kind
+from veil.persona.voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
+from veil.persona.background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
 from veil.tools.desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
-from bubble_split import MAX_BUBBLES, split_bubbles
+from veil.chat.bubble_split import MAX_BUBBLES, split_bubbles
 from veil.tools.tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 from model_settings import SettingsError
-from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
+from veil.autonomy.delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
 
 # Ticket 427: the abilities Ombre used to provide through its own tools, and where each one lives now.
 REMOVED_TOOL_HINTS = {
@@ -2231,7 +2231,7 @@ class Chat:
         initial_services = []
         managed_env = {}
         if cfg.id == 'peter':
-            from nowhere_integration import service_config, service_environment
+            from veil.life.nowhere_integration import service_config, service_environment
             initial_services.append(service_config())
             managed_env['nowhere'] = service_environment(store.root / cfg.id / 'nowhere')
         self.mcp_services = MCPServices(store.root / cfg.id / 'mcp-services.json', integrations,
@@ -2245,15 +2245,15 @@ class Chat:
                 self.mcp_services.register_adapter('xiaohongshu', filesystem_tools.xiaohongshu_tools)
         self.pending_capability_event = tools.capability_event if tools else None
         self.pending_capability_event_model = capability_model_notice(tools)
-        from long_tasks import LongTaskStore
+        from veil.autonomy.long_tasks import LongTaskStore
         self.long_tasks = LongTaskStore(store, cfg.id)
-        from investigation_checkpoint import InvestigationCheckpoint
+        from veil.autonomy.investigation_checkpoint import InvestigationCheckpoint
         self.investigation = InvestigationCheckpoint(store, cfg.id)
         # Ticket 390: a durable projection of the investigation record and long task, so a long piece of work
         # survives a new conversation and the rolling history window without inventing goals.
-        from work_checkpoint import WorkCheckpoint
+        from veil.autonomy.work_checkpoint import WorkCheckpoint
         self.work_checkpoint = WorkCheckpoint(store, cfg.id, self.investigation, self.long_tasks)
-        from life_records import LifeRecords
+        from veil.life.life_records import LifeRecords
         self.life_records = LifeRecords(store, cfg.id)
         # Ticket 385: Peter may edit what Lan wrote in the shared calendar; she is told in the chat (a notice line that
         # never enters his history), and the record keeps every earlier version.
@@ -2263,7 +2263,7 @@ class Chat:
         except OSError:
             pass
         # Ticket 152: Peter's own index of thoughts that might carry on (one line each).
-        from thoughts import ThoughtIndex
+        from veil.autonomy.thoughts import ThoughtIndex
         self.thoughts = ThoughtIndex(store, cfg.id)
         self.autonomy_controller = None
         self.task_tools_enabled = bool(cfg.tools and cfg.tools.get('max_steps', 1) > 1)
@@ -2313,7 +2313,7 @@ class Chat:
                 from veil.brain.learned_context import LearnedContext
                 self.profile = LearnedContext(store.root, cfg.id, cfg.profile)
             else:
-                from profile_notes import ProfileNotes
+                from veil.persona.profile_notes import ProfileNotes
                 self.profile = ProfileNotes(store.root, cfg.id, cfg.profile)
             if tools and hasattr(tools, 'announce_profile_notes'):
                 tools.announce_profile_notes(cfg.profile['max_bytes'])
@@ -2321,7 +2321,7 @@ class Chat:
                 self.pending_capability_event_model = capability_model_notice(tools)
         self.user_persona = None
         if getattr(cfg, 'user_persona', None) and getattr(cfg, 'persona_path', None):
-            from user_persona import UserPersona
+            from veil.persona.user_persona import UserPersona
             self.user_persona = UserPersona(Path(cfg.persona_path).parent, cfg.user_persona)
         self.persona_lock = threading.RLock()
         from veil.tools.pending_approvals import PendingApprovals
@@ -2410,7 +2410,7 @@ class Chat:
         existing_tools = permitted_tools(self.tools.tools if self.tools else [])
         if self.autonomy_mode and self.tools and getattr(self.tools, 'lab_sandbox', None):
             try:
-                from lab_sandbox import check_docker_available
+                from veil.life.lab_sandbox import check_docker_available
                 if not check_docker_available()[0]:
                     # Ticket 399: Docker is down; do not offer a tool that can only fail this wake.
                     existing_tools = [tool for tool in existing_tools
@@ -2425,15 +2425,15 @@ class Chat:
             (self.cfg.tools and self.cfg.tools.get('enabled', True))
             or (self.tools and self.tools.tools)) else []
         if messaging:
-            from virtual_cards import CARD_ACTION
+            from veil.life.virtual_cards import CARD_ACTION
             messaging.append(CARD_ACTION)
         if messaging and not self.force_reply:
             messaging.extend([with_text(STAY_SILENT, 'chat.stay_silent'),
                               with_text(REPLY_LATER, 'chat.reply_later')])
         if messaging and self.sticker_library is not None:
-            import stickers
+            from veil.chat import stickers
             messaging.append(stickers.tool_schema(self.sticker_library))
-        from chat_search import TOOL_SCHEMA as CHAT_SEARCH
+        from veil.chat.chat_search import TOOL_SCHEMA as CHAT_SEARCH
         history = [CAPABILITY_HISTORY, AUTONOMY_HISTORY, CHAT_SEARCH] if existing_tools or task_tools or messaging else []
         wake_tools = [AUTONOMY_SET_NEXT_WAKE, AUTONOMY_SET_WAKE_RHYTHM] if self.autonomy_controller is not None else []
         profile = []
@@ -2442,10 +2442,10 @@ class Chat:
                 from veil.tools.learned_tools import PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL
                 profile = [PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL]
             else:
-                from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
+                from veil.persona.profile_notes import PROFILE_APPEND, PROFILE_REPLACE
                 profile = [PROFILE_APPEND, PROFILE_REPLACE]
-        from thoughts import THOUGHT_TOOL
-        from life_records import LIFE_TOOL
+        from veil.autonomy.thoughts import THOUGHT_TOOL
+        from veil.life.life_records import LIFE_TOOL
         thought = [THOUGHT_TOOL] if history else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
         if mcp_tools or (self.cfg.tools or {}).get('enabled', True) and self.mcp_services.has_stateful_services() is True:
@@ -2530,7 +2530,7 @@ class Chat:
         return schemas
 
     def _delegate_cost_guidance(self, provider_name, provider, schemas):
-        from delegate_agent import READ_ONLY_TOOLS
+        from veil.autonomy.delegate_agent import READ_ONLY_TOOLS
 
         def price(provider):
             if provider.get('cny_per_call'):
@@ -2729,7 +2729,7 @@ class Chat:
                 break
 
     def _send_virtual_card_message(self, args, allowed, request_id, tool_call_id):
-        from virtual_cards import VirtualCardError, build_card
+        from veil.life.virtual_cards import VirtualCardError, build_card
 
         if 'transfer' in args and 'gift' in args:
             return 'Send a transfer or a gift, not both in one call. Nothing was sent.', '被拒绝', 'send_message'
@@ -2770,7 +2770,7 @@ class Chat:
         return self._commit_assistant_card(card, request_id, tool_call_id, done=args.get('done') is True)
 
     def _commit_assistant_card(self, card, request_id, tool_call_id, done=False):
-        from virtual_cards import card_text
+        from veil.life.virtual_cards import card_text
 
         autonomy = self.autonomy_mode
         if not autonomy:
@@ -2832,7 +2832,7 @@ class Chat:
 
     def create_virtual_card(self, sender, kind, fields, client_action_id=None):
         """Save one card from Lan or from a caller that is not inside send_message."""
-        from virtual_cards import build_card, card_text, client_action_id as normalize_client
+        from veil.life.virtual_cards import build_card, card_text, client_action_id as normalize_client
 
         client_action_id = normalize_client(client_action_id)
         if client_action_id:
@@ -2857,7 +2857,7 @@ class Chat:
         return row, True
 
     def act_on_virtual_card(self, actor, message_id, action):
-        from virtual_cards import (MESSAGE_ID_RE, VirtualCardError, can_apply, card_text, event_payload,
+        from veil.life.virtual_cards import (MESSAGE_ID_RE, VirtualCardError, can_apply, card_text, event_payload,
                                    event_text, next_status)
 
         if not isinstance(message_id, str) or not MESSAGE_ID_RE.fullmatch(message_id):
@@ -2889,7 +2889,7 @@ class Chat:
         return updated, event, content
 
     def card_action(self, arguments):
-        from virtual_cards import VirtualCardError
+        from veil.life.virtual_cards import VirtualCardError
 
         try:
             args = json.loads(arguments or '{}')
@@ -2917,7 +2917,7 @@ class Chat:
                 '成功', 'card_action')
 
     def virtual_card_context(self):
-        from virtual_cards import card_context
+        from veil.life.virtual_cards import card_context
         return card_context(self.history_events, self.cfg.name)
 
     def _paragraph_bubbles(self, args):
@@ -2975,7 +2975,7 @@ class Chat:
                 hint = (' Available: ' + ', '.join(available[:12]) + '.' if available else '')
                 return ('No sticker "' + str(sticker_ref)[:80] + '"; nothing was sent. Use the stickers tool to list a '
                         'pack and copy "pack/name" exactly.' + hint), '被拒绝', 'send_message'
-            import stickers as sticker_module
+            from veil.chat import stickers as sticker_module
             if isinstance(args.get('text'), str) and args['text'].strip():
                 # Ticket 223: a sticker is always its own bubble. Words sent with it go out as the next message.
                 # Check everything for both bubbles first so a refusal never leaves only the sticker sent.
@@ -3078,7 +3078,7 @@ class Chat:
                 except BudgetExceeded as exc:
                     voice_failure = str(exc)
                 except Exception as exc:
-                    from voice_output import VoiceError
+                    from veil.chat.voice_output import VoiceError
                     if not isinstance(exc, VoiceError):
                         if attachment and callable(self.attachment_discarder):
                             self.attachment_discarder(attachment)
@@ -3099,7 +3099,7 @@ class Chat:
             if autonomy:
                 event.update({'autonomy_run_id': run_id,
                               'autonomy_tool_call_id': tool_call_id})
-                from autonomy import origin_note
+                from veil.autonomy.autonomy import origin_note
                 note = origin_note(self.last_tool_summaries, self.canonical_tool_name)
                 if note:
                     event['autonomy_origin'] = note  # ticket 360: shown to the model only
@@ -3349,7 +3349,7 @@ class Chat:
 
     def life_state_context(self, exclude_ids=(), stamp=None):
         """Ticket 352: program-computed time gap and current task/life state for ordinary chat."""
-        from life_state import MAX_FINISHED, gap_text, state_text
+        from veil.life.life_state import MAX_FINISHED, gap_text, state_text
         stamp = stamp or self.budget.clock()
         parts = []
         try:
@@ -4109,8 +4109,8 @@ class Chat:
         if not autonomy:
             # Ticket 094: the last activity record is given once after a wake; afterwards Peter
             # looks it up himself with autonomy_history.
-            from autonomy import activities_since, recent_chat_handoff, recent_glance_handoff
-            from life_state import _time, return_window
+            from veil.autonomy.autonomy import activities_since, recent_chat_handoff, recent_glance_handoff
+            from veil.life.life_state import _time, return_window
             autonomy_handoff_id, handoff = recent_chat_handoff(self.store, self.cfg)
             stamp = self.budget.clock()
             current_ids = {item for item in (message_id, self.regeneration_parent_message_id) if item}
@@ -4136,7 +4136,7 @@ class Chat:
                 return_ids = [r.get('message_id') for r in chat_rows if isinstance(r, dict)
                               and r.get('role') == 'user' and _time(r.get('time'))
                               and _time(r['time']) >= _time(window[1])]
-                from life_state import gap_text
+                from veil.life.life_state import gap_text
                 return_gap = gap_text(chat_rows, window[1], [*current_ids, *return_ids])
                 if _time(autonomy_handoff_id) and _time(autonomy_handoff_id) <= _time(window[1]):
                     handoff = None
@@ -4165,7 +4165,7 @@ class Chat:
                 changing += '\n' + life_note
             if return_gap and 'Time since Lan last wrote' not in life_note:
                 changing += '\nEarlier in this conversation, when she returned: ' + return_gap
-            from life_state import time_separator
+            from veil.life.life_state import time_separator
             past = [row for row in self.history_events if row.get('message_id') not in {message_id, *current_ids,
                     self.regeneration_parent_message_id} and _time(row.get('time')) and _time(row['time']) < _time(stamp)]
             if past and (boundary := time_separator(past[-1]['time'], stamp)):
@@ -4346,7 +4346,7 @@ class Chat:
         history = [dict(message) for message in self.history]
         for message in history:
             labels[id(message)] = 'history'
-        from life_state import time_separator
+        from veil.life.life_state import time_separator
         for index, row in enumerate(self.history_events[:len(history)]):
             if index and (separator := time_separator(self.history_events[index - 1].get('time'), row.get('time'))):
                 content = history[index].get('content')
@@ -4676,10 +4676,10 @@ class Chat:
                 self.store.append(f'{self.cfg.id}/message-processing.jsonl', {
                     'batch_id': processing_batch, 'state': state, 'at': now()})
             if autonomy_handoff_id is not None:
-                from autonomy import acknowledge_chat_handoff
+                from veil.autonomy.autonomy import acknowledge_chat_handoff
                 acknowledge_chat_handoff(self.store, self.cfg, autonomy_handoff_id)
             if glance_handoff_id is not None:
-                from autonomy import acknowledge_glance_handoff
+                from veil.autonomy.autonomy import acknowledge_glance_handoff
                 acknowledge_glance_handoff(self.store, self.cfg, glance_handoff_id)
         self.autonomy_mode = False
         return reply
@@ -4781,7 +4781,7 @@ class Chat:
                 else:
                     result, state, summary = self.profile.invoke(call.function.name, args)
             elif call.function.name == 'autonomy_history':
-                from autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
+                from veil.autonomy.autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
                 args = json.loads(call.function.arguments or '{}')
                 count = args.get('count', 3) if isinstance(args, dict) else None
                 if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= AUTONOMY_HISTORY_LIMIT:
@@ -4790,7 +4790,7 @@ class Chat:
                     result, state = activity_history(self.store, self.cfg, count), '成功'
                 summary = 'autonomy_history'
             elif call.function.name == 'search_chat_history':
-                from chat_search import search_chat
+                from veil.chat.chat_search import search_chat
                 args = json.loads(call.function.arguments or '{}')
                 if not isinstance(args, dict) or not set(args) <= {'keywords', 'since', 'until'}:
                     result, state = 'Give keywords (a list of words), optionally since and until.', '被拒绝'
@@ -4800,7 +4800,7 @@ class Chat:
                     state = '成功'
                 summary = 'search_chat_history'
             elif call.function.name == 'stickers':
-                import stickers
+                from veil.chat import stickers
                 try:
                     sticker_args = json.loads(call.function.arguments or '{}')
                 except ValueError:
@@ -5197,7 +5197,7 @@ class Chat:
                                      f"id {meta['id']}]")
 
     def _run_delegate(self, task, request_id):
-        from delegate_agent import DelegateResult, READ_ONLY_TOOLS, run as run_delegate
+        from veil.autonomy.delegate_agent import DelegateResult, READ_ONLY_TOOLS, run as run_delegate
         models = getattr(self.cfg, 'models', None)
         if models is None:
             return DelegateResult('委派任务尚未配置模型。', '出错')
@@ -6587,7 +6587,7 @@ def memory_available(cfg):
 
 
 def make_voice(root, cfg, store, budget):
-    from voice_output import MiniMaxVoice, load_voice_config
+    from veil.chat.voice_output import MiniMaxVoice, load_voice_config
     if not cfg.voice or cfg.voice.get('provider') != 'minimax':
         return None
     config = load_voice_config(root)
@@ -6615,7 +6615,7 @@ def pending_deletion_context(chat):
         native, 'process_pending_deletions') else []
     if not isinstance(notes, list) or not notes:
         return None
-    from autonomy import recent_chat_handoff
+    from veil.autonomy.autonomy import recent_chat_handoff
     _, earlier = recent_chat_handoff(chat.store, chat.cfg)
     note = ('The user has processed deletion requests you made during autonomous activity. '
             'This is a program-recorded outcome, not an instruction:\n' + '\n'.join(notes))
@@ -6624,7 +6624,7 @@ def pending_deletion_context(chat):
 
 def run_chat(chat, input_fn=input, output=print, drop=drop_typeahead, activity=None, autonomy=None,
              start_notes=True):
-    from calendar_agreements import CalendarAgreements
+    from veil.life.calendar_agreements import CalendarAgreements
     calendar_agreements = CalendarAgreements(chat, output)
     activity = activity or ActivityState(chat.store.root / chat.cfg.id / 'resident-state.json')
     chat.activity_enabled = activity.enabled

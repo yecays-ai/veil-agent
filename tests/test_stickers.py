@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import stickers
-from stickers import StickerError, StickerLibrary, parse_sticker_text, run_tool
+from veil.chat import stickers
+from veil.chat.stickers import StickerError, StickerLibrary, parse_sticker_text, run_tool
 
 PNG = b'\x89PNG\r\n\x1a\n' + b'0' * 30
 GIF = b'GIF89a' + b'0' * 30
@@ -99,7 +99,7 @@ class StickerTests(unittest.TestCase):
     def test_download_resolves_once_and_refuses_names_that_resolve_private(self):
         from unittest.mock import patch
         private = [(2, 1, 6, '', ('10.0.0.5', 80))]
-        with patch('stickers.socket.getaddrinfo', return_value=private):
+        with patch('veil.chat.stickers.socket.getaddrinfo', return_value=private):
             with self.assertRaises(StickerError):
                 stickers.download_image('http://rebind.test/a.png')
 

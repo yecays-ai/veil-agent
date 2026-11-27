@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from agent_types import NOT_ASKED_TEXT, not_asked
-from autonomy import AutonomyController
+from veil.autonomy.autonomy import AutonomyController
 from veil.tools.desktop_files import DesktopFileTools
 from veil.tools.tools_agent import ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools
 from veil_agent import ActivityState, Budget, Chat, Store, load_character, parse_quiet_hours, self_facts

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from agent_types import now
 from veil_agent import Store
-from work_checkpoint import WorkCheckpoint
+from veil.autonomy.work_checkpoint import WorkCheckpoint
 
 
 class FakeInvestigation:

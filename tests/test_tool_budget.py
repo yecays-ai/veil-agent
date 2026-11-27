@@ -16,11 +16,11 @@ from veil_agent import Budget, Chat, Store, load_character
 PETER_GROUPS = ('web', 'github', 'desktop_control', 'memory_admin', 'build', 'desktop_files', 'garden_forum',
                 'garden_play', 'garden_more', 'nowhere', 'xiaohongshu', 'other')
 # Modules whose tool definitions are plain values in the repository (MCP services define theirs at run time).
-SCHEMA_MODULES = ('veil_agent', 'veil.brain.memory_native', 'long_tasks', 'veil.tools.tools_agent', 'veil.integrations.browser_tools', 'life_records',
-                  'veil.tools.desktop_files', 'veil.integrations.xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'thoughts',
-                  'chat_search', 'veil.integrations.mcp_services', 'profile_notes', 'virtual_cards', 'maintenance',
-                  'veil.tools.executor_opencode', 'veil.integrations.web_tools', 'veil.integrations.github_readonly', 'veil.windows.screen_pop', 'lab_games', 'lab_preview',
-                  'lab_sandbox')
+SCHEMA_MODULES = ('veil_agent', 'veil.brain.memory_native', 'veil.autonomy.long_tasks', 'veil.tools.tools_agent', 'veil.integrations.browser_tools', 'veil.life.life_records',
+                  'veil.tools.desktop_files', 'veil.integrations.xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'veil.autonomy.thoughts',
+                  'veil.chat.chat_search', 'veil.integrations.mcp_services', 'veil.persona.profile_notes', 'veil.life.virtual_cards', 'maintenance',
+                  'veil.tools.executor_opencode', 'veil.integrations.web_tools', 'veil.integrations.github_readonly', 'veil.windows.screen_pop', 'veil.life.lab_games', 'veil.life.lab_preview',
+                  'veil.life.lab_sandbox')
 
 
 def tool(name, text=''):

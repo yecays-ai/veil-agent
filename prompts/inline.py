@@ -14,20 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PROMPT_MODULES = (
     'veil_agent.py',
-    'autonomy.py',
-    'background.py',
-    'calendar_agreements.py',
-    'delegate_agent.py',
+    'veil/autonomy/autonomy.py',
+    'veil/persona/background.py',
+    'veil/life/calendar_agreements.py',
+    'veil/autonomy/delegate_agent.py',
     'veil/brain/experience_memory.py',
     'veil/brain/learned_context.py',
-    'life_state.py',
+    'veil/life/life_state.py',
     'veil/brain/memory_agent.py',
     'veil/brain/memory_native.py',
     'veil/brain/recall/recall_budget.py',   # ticket 419: builds one request-shaped message to measure its tokens
     'veil/brain/recall/recall_judge.py',
     'veil/brain/short_term_notes.py',
-    'user_persona.py',
-    'voice_style.py',
+    'veil/persona/user_persona.py',
+    'veil/persona/voice_style.py',
     'veil/tools/executor_opencode.py',
     'veil/windows/windows_observer.py',
 )

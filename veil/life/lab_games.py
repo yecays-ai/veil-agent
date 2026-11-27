@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from lab_preview import _safe_lab_file
+from veil.life.lab_preview import _safe_lab_file
 
 
 MAX_SCORE_BODY = 2048

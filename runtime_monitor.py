@@ -135,7 +135,7 @@ class RuntimeMonitor:
             return
         if state != '出错':
             return
-        from long_tasks import SIDE_EFFECT_TOOLS
+        from veil.autonomy.long_tasks import SIDE_EFFECT_TOOLS
         side_effect = name in SIDE_EFFECT_TOOLS
         if side_effect and autonomy:
             paused = self._pause()

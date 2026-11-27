@@ -1257,7 +1257,7 @@ max_result_bytes = 200
         self.assertTrue(any((m.get('content') or '').startswith('old ') for m in model.call_args_list[1].args[0]))
 
     def test_truncated_preview_does_not_claim_omitted_screenshot_was_seen(self):
-        from lab_preview import LabPreviewResult
+        from veil.life.lab_preview import LabPreviewResult
         self.cfg.tools['max_steps'] = 2
         preview = LabPreviewResult('Screenshot captured: yes.\n' + 'secret ' * 15000,
                                    'data:image/png;base64,aGVsbG8=')
@@ -1695,7 +1695,7 @@ class FilesystemServerTests(unittest.TestCase):
 
     def test_tool_failure_source_strings_are_english(self):
         root = Path(__file__).resolve().parents[1]
-        paths = ('long_tasks.py', 'veil/brain/memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'veil/brain/memory_agent.py')
+        paths = ('veil/autonomy/long_tasks.py', 'veil/brain/memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'veil/brain/memory_agent.py')
         failure_states = {'被拒绝', '出错', False}
         found = 0
 

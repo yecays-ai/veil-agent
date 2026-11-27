@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from autonomy import MAX_RUNTIME_SECONDS, AutonomyController
+from veil.autonomy.autonomy import MAX_RUNTIME_SECONDS, AutonomyController
 from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
 from web_agent import Hub
 
@@ -384,7 +384,7 @@ daily_budget_cny = "2"
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
         self.assertNotIn('most recent completed autonomous activity record', context)
 
-        from autonomy import activity_history
+        from veil.autonomy.autonomy import activity_history
         looked_up = activity_history(self.store, self.cfg)
         self.assertIn('实验室整理', looked_up)
         self.assertIn('等待新信息', looked_up)
@@ -796,7 +796,7 @@ daily_budget_cny = "2"
         self.assertNotIn('Files you already read', prompt)
 
     def test_unchanged_read_is_listed_only_while_the_file_is_unchanged(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         note = workspace / 'lab' / 'notes.html'
@@ -819,7 +819,7 @@ daily_budget_cny = "2"
         self.assertEqual(unchanged_read_lines([row], tools, workspace, canonical), [])
 
     def test_only_successful_untruncated_file_reads_are_listed(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         note = workspace / 'lab' / 'notes.html'
@@ -840,7 +840,7 @@ daily_budget_cny = "2"
         self.assertEqual(unchanged_read_lines([row], outside, workspace, canonical), [])
 
     def test_a_multi_file_read_lists_each_unchanged_file(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         for name in ('one.py', 'two.py'):

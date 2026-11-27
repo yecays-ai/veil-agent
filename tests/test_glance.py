@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from autonomy import GlanceController
+from veil.autonomy.autonomy import GlanceController
 from veil.tools.desktop_files import desktop_item_names
 
 

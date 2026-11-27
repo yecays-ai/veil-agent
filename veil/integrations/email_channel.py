@@ -21,7 +21,7 @@ from email.utils import make_msgid, parseaddr
 from html.parser import HTMLParser
 from pathlib import Path
 
-from attachment_utils import (ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, redirected_path,
+from veil.chat.attachment_utils import (ATTACHMENT_TYPES, MAX_ATTACHMENT_BYTES, redirected_path,
                               valid_attachment_row)
 
 

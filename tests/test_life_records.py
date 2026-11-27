@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 from pathlib import Path
-from life_records import LifeRecords, effective, fold_completed
+from veil.life.life_records import LifeRecords, effective, fold_completed
 from agent_types import now
 
 
@@ -18,7 +18,7 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:00:00+08:00'):
                 event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
                                      'remind':True,'remind_before':15},'Lan')
             at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
@@ -39,13 +39,13 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:00:00+08:00'):
                 event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
                                      'remind':True,'remind_before':15},'Lan')
             due=records.claim_due_reminder(datetime(2026,11,23,19,45,5,
                                                      tzinfo=timezone(timedelta(hours=8))))
             self.assertEqual(due['title'],'Meet')
-            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:45:06+08:00'):
                 records.write({'id':event['id'],'title':'Meet outside'},'Lan')
             current=records.current_due_reminder(due)
             self.assertEqual(current['title'],'Meet outside')
@@ -60,17 +60,17 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            with patch('life_records.now',return_value='2026-11-23T19:00:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:00:00+08:00'):
                 event=records.write({'kind':'event','title':'Meet','date':'2026-11-23','time':'20:00',
                                      'remind':True,'remind_before':15},'Lan')
             at=datetime(2026,11,23,19,45,tzinfo=timezone(timedelta(hours=8)))
             claimed=records.claim_due_reminder(at)
-            with patch('life_records.now',return_value='2026-11-23T19:45:01+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:45:01+08:00'):
                 records.write({'id':event['id'],'state':'cancelled'},'Lan')
             self.assertIsNone(records.current_due_reminder(claimed))
             self.assertIsNone(records.claim_due_reminder(at+timedelta(minutes=1)))
 
-            with patch('life_records.now',return_value='2026-11-23T19:45:02+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:45:02+08:00'):
                 records.write({'id':event['id'],'state':'active','date':'2026-11-23','time':'21:00'},'Lan')
             self.assertIsNone(records.current_due_reminder(claimed))
             new_due=records.claim_due_reminder(datetime(2026,11,23,20,45,
@@ -89,7 +89,7 @@ class LifeRecordsTest(unittest.TestCase):
                                  'remind':True,'remind_before':15},'Lan')
             due=records.claim_due_reminder(datetime(2026,11,23,19,45,
                                                     tzinfo=timezone(timedelta(hours=8))))
-            with patch('life_records.now',return_value='2026-11-23T19:45:06+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-23T19:45:06+08:00'):
                 records.write({'id':event['id'],'state':'cancelled'},'Lan')
             self.assertIsNone(records.current_due_reminder(due))
 
@@ -106,7 +106,7 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertIsNone(records.claim_daily_reminder(day))
             after_midnight=(day+timedelta(minutes=72)).isoformat()
             records.daily_reminder_path.unlink()
-            with patch('life_records.now',return_value=after_midnight):
+            with patch('veil.life.life_records.now',return_value=after_midnight):
                 result=records.write({'id':todo['id'],'state':'completed','date':day.date().isoformat()},'Peter')
             self.assertEqual(result['completion_day'],day.date().isoformat())
             self.assertEqual(result['today_state'],'active')
@@ -114,7 +114,7 @@ class LifeRecordsTest(unittest.TestCase):
             self.assertEqual(past['state'],'completed')
             self.assertEqual(past['at'][:10],(day+timedelta(days=1)).date().isoformat())
             self.assertEqual(records.read()[0]['state'],'active')
-            with patch('life_records.now',return_value=(day+timedelta(minutes=73)).isoformat()):
+            with patch('veil.life.life_records.now',return_value=(day+timedelta(minutes=73)).isoformat()):
                 records.write({'id':todo['id'],'title':'Diary updated'},'Lan')
             self.assertEqual(records.daily_checks()['days'][day.date().isoformat()][todo['id']]['state'],'completed')
 
@@ -152,7 +152,7 @@ class LifeRecordsTest(unittest.TestCase):
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
             # A coarse clock can give two writes the same updated_at. The revision must still catch the edit.
-            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-25T20:00:00+08:00'):
                 before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
                 manual=records.write({'id':before['id'],'time':'20:30'},'Lan')
                 self.assertEqual(manual['updated_at'],before['updated_at'])
@@ -167,7 +167,7 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            with patch('life_records.now',return_value='2026-11-25T20:00:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-25T20:00:00+08:00'):
                 before=records.write({'kind':'event','title':'Walk','date':'2026-11-25','time':'20:00'},'Peter')
                 after=records.write({'id':before['id'],'title':'Long walk'},'Peter',auto=True)
                 path=records.path.with_name('calendar-agreements.jsonl')
@@ -184,12 +184,12 @@ class LifeRecordsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=temp_root) as directory:
             store=SimpleNamespace(root=Path(directory),mutex=threading.RLock())
             records=LifeRecords(store,'peter')
-            with patch('life_records.now',return_value='2026-11-20T23:30:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-20T23:30:00+08:00'):
                 todo=records.write({'kind':'note','title':'Diary','repeat':'daily'},'Lan')
-            with patch('life_records.now',return_value='2026-11-20T23:51:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-20T23:51:00+08:00'):
                 hint=records.claim_daily_hint()
             self.assertIn('2026-11-20',hint)
-            with patch('life_records.now',return_value='2026-11-21T00:10:00+08:00'):
+            with patch('veil.life.life_records.now',return_value='2026-11-21T00:10:00+08:00'):
                 result=records.write({'id':todo['id'],'state':'completed'},'Peter')
             self.assertEqual(result['completion_day'],'2026-11-20')
             yesterday=records.daily_checks()['days']['2026-11-20'][todo['id']]

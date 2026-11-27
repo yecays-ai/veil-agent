@@ -5,7 +5,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from bubble_split import MAX_BUBBLES, split_bubbles
+from veil.chat.bubble_split import MAX_BUBBLES, split_bubbles
 from veil_agent import Budget, Chat, Store, load_character
 
 

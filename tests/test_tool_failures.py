@@ -166,7 +166,7 @@ class FailureSourceContractTests(unittest.TestCase):
     """
 
     MODULES = ('veil_agent.py', 'veil/tools/tools_agent.py', 'veil/windows/windows_observer.py',
-               'veil/windows/windows_interaction.py', 'veil/brain/memory_agent.py', 'long_tasks.py')
+               'veil/windows/windows_interaction.py', 'veil/brain/memory_agent.py', 'veil/autonomy/long_tasks.py')
     BARE = {
         '参数无效。', '参数无效', 'Error', 'Error.', 'Failed.', 'Failed',
         'The tool failed.', 'Invalid arguments.', 'Invalid arguments',

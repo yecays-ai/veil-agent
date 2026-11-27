@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 
 from agent_types import UserError, now
-from long_tasks import LongTaskStore, READ_ONLY_TOOLS
+from veil.autonomy.long_tasks import LongTaskStore, READ_ONLY_TOOLS
 import prompts
 
 

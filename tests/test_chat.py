@@ -211,7 +211,7 @@ output_cny_per_million = "8"
         self.assertEqual(rounds, 2)
 
     def test_send_message_can_send_a_sticker_as_its_text_marker(self):
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('丑猫', '打人', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         self.assertNotIn('sticker', send_message_schema()['function']['parameters']['properties'])
@@ -244,7 +244,7 @@ output_cny_per_million = "8"
         self.assertEqual(len(self.store.read('test/chat.jsonl')), before)  # nothing half-sent
 
     def test_stickers_tool_is_offered_only_with_a_library(self):
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         names = lambda chat: [s['function']['name'] for s in chat.tool_schemas()]
         chat = Chat(self.cfg, self.store, self.budget, self.model)
         self.assertNotIn('stickers', names(chat))
@@ -563,7 +563,7 @@ output_cny_per_million = "8"
         outputs = []
         store = Store(self.root / 'calendar-reminder-race')
         chat = Chat(replace(self.cfg, tools=None), store, Budget(store), Mock(), output=outputs.append)
-        with patch('life_records.now', return_value='2026-11-25T19:00:00+08:00'):
+        with patch('veil.life.life_records.now', return_value='2026-11-25T19:00:00+08:00'):
             event = chat.life_records.write({'kind': 'event', 'title': 'Movie', 'date': '2026-11-25',
                                              'time': '20:00', 'remind': True}, 'Lan')
         due = chat.life_records.claim_due_reminder(datetime(2026, 11, 25, 20, 0, tzinfo=timezone.utc))
@@ -1015,7 +1015,7 @@ output_cny_per_million = "8"
         delegated.assert_called_once()
 
     def test_delegate_model_request_timeout_is_45_seconds(self):
-        from delegate_agent import DelegateResult, READ_ONLY_TOOLS
+        from veil.autonomy.delegate_agent import DelegateResult, READ_ONLY_TOOLS
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         chat = Chat(cfg, self.store, self.budget, self.model)
         chat.tools = SimpleNamespace(tools=[
@@ -1028,7 +1028,7 @@ output_cny_per_million = "8"
         client = SimpleNamespace(close=Mock())
         with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
               patch('veil_agent.make_model', return_value=(client, Mock())) as make_model,
-              patch('delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功')) as run_delegate):
+              patch('veil.autonomy.delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功')) as run_delegate):
             result = chat._run_delegate('Find a public article.', 'parent-request')
         self.assertEqual(result.text, 'Fixture result.')
         self.assertEqual(make_model.call_args.kwargs['timeout'], 45)

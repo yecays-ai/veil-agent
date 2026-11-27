@@ -1,6 +1,6 @@
 import unittest
 
-from chat_search import search_chat, split_keywords
+from veil.chat.chat_search import search_chat, split_keywords
 
 
 def row(role, content, when, **extra):

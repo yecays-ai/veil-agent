@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import life_records
-from life_records import LifeRecords, valid_emoji
+from veil.life import life_records
+from veil.life.life_records import LifeRecords, valid_emoji
 
 
 class SharedCalendarTests(unittest.TestCase):

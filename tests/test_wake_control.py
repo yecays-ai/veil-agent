@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from autonomy import AutonomyController
+from veil.autonomy.autonomy import AutonomyController
 from veil.tools.tools_agent import tool_policy
 from veil_agent import ActivityState, Budget, Chat, Store, load_character
 from web_agent import Hub
@@ -81,7 +81,7 @@ class WakeControlTests(unittest.TestCase):
         self.assertEqual(state, '成功')
         self.assertIn('every 45 minutes', self.controller.rhythm_text())
         later = datetime.now().astimezone() + timedelta(minutes=61)
-        with patch('autonomy.datetime') as clock:
+        with patch('veil.autonomy.autonomy.datetime') as clock:
             clock.now.return_value = later
             clock.fromisoformat = datetime.fromisoformat
             self.assertEqual(self.controller._read_rhythm()['mode'], 'normal')

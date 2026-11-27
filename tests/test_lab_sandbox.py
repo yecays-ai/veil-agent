@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from lab_sandbox import (
+from veil.life.lab_sandbox import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_FILE_BYTES,
     MAX_OUTPUT_BYTES,
@@ -58,13 +58,13 @@ class LabSandboxPathTests(unittest.TestCase):
         target = sub / "script.py"
         target.write_text("print(1)", encoding="utf-8")
 
-        with patch("lab_sandbox._is_reparse_point", side_effect=lambda p: Path(p) == sub):
+        with patch("veil.life.lab_sandbox._is_reparse_point", side_effect=lambda p: Path(p) == sub):
             with self.assertRaises(ValueError):
                 _safe_lab_file(self.lab, "sub/script.py", must_exist=True)
 
     def test_reparse_point_file_is_rejected(self):
         target = self.lab / "test_script.py"
-        with patch("lab_sandbox._is_reparse_point", side_effect=lambda p: Path(p) == target):
+        with patch("veil.life.lab_sandbox._is_reparse_point", side_effect=lambda p: Path(p) == target):
             with self.assertRaises(ValueError):
                 _safe_lab_file(self.lab, "test_script.py", must_exist=True)
 
@@ -345,7 +345,7 @@ class LabSandboxExecutionTests(unittest.TestCase):
             return mock_proc
 
         with patch("subprocess.Popen", side_effect=fake_popen), \
-             patch("lab_sandbox.MAX_WORKSPACE_DISK_BYTES", 512):
+             patch("veil.life.lab_sandbox.MAX_WORKSPACE_DISK_BYTES", 512):
             res, state, summary = sandbox.invoke({"path": "good.py"})
 
         self.assertEqual(state, "成功")

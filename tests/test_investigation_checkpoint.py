@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from investigation_checkpoint import InvestigationCheckpoint
+from veil.autonomy.investigation_checkpoint import InvestigationCheckpoint
 from veil_agent import Store
 
 

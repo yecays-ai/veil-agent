@@ -81,7 +81,7 @@ class FreeReplyTests(unittest.TestCase):
 
     def test_fake_sticker_marker_in_a_plain_reply_is_sent_back_to_peter(self):
         # Ticket 224: typing a sticker marker for a sticker that does not exist is not a reply.
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         model = Mock(side_effect=[
@@ -110,7 +110,7 @@ class FreeReplyTests(unittest.TestCase):
 
     def test_retry_after_a_fake_sticker_keeps_the_reasoning_of_that_reply(self):
         # DeepSeek's thinking mode answers 400 when the reasoning of a reply put back in the request is missing.
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         model = Mock(side_effect=[

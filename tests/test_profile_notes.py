@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from profile_notes import ProfileNotes
+from veil.persona.profile_notes import ProfileNotes
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 

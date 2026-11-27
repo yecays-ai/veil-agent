@@ -2,10 +2,11 @@
 from pathlib import Path
 import sys
 
+from veil.paths import PROJECT_ROOT
 
 UPSTREAM_REPOSITORY = 'https://github.com/yuyixuanfu/nowhere.git'
 UPSTREAM_REVISION = 'f0803c1053e5f97a6f44bab26e15043d71825ec7'
-RUNTIME_DIR = Path(__file__).resolve().parent / '.runtime' / 'nowhere' / UPSTREAM_REVISION
+RUNTIME_DIR = PROJECT_ROOT / '.runtime' / 'nowhere' / UPSTREAM_REVISION
 SOURCE_DIR = RUNTIME_DIR / 'source'
 VENV_DIR = RUNTIME_DIR / 'venv'
 PYTHON = VENV_DIR / ('Scripts/pythonw.exe' if sys.platform == 'win32' else 'bin/python')
