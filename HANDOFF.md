@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T11:30:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复，待独立复审；未合并、未部署正式目录）
+> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
 
 ## 当前停点
 
@@ -11,9 +11,10 @@
   - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
   - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
   - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
-  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md) 与同名 JSON；只使用合成数据。
+  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
+  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
   - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
-- **状态**：F1–F11 集中修复完成，隔离演练通过，待推送 CI 与独立复审；未合并、未部署。
+- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
 
 ## 下一个窗口第一步
 

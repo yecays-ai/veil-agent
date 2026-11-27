@@ -67,6 +67,8 @@ class RepoLayoutGuardTests(unittest.TestCase):
         self.assertIn('if (-not $AllowOnlineDeps)', ps1)
         self.assertIn('if ($needsPythonSync)', ps1)
         self.assertNotIn('Write-Warning "Python dependency sync failed', ps1)
+        self.assertIn('if ($switched)', ps1)
+        self.assertIn('previous code restored', ps1)
 
     def test_root_python_files_and_legacy_imports(self):
         if not STRICT_LAYOUT:

@@ -231,7 +231,10 @@ if ($currentBranch) {
 if ($LASTEXITCODE -ne 0) {
     throw "Git rollback to $resolved failed. Safety branch preserved at $backupBranch."
 }
+$switched = $true
 Write-Host "Working tree rolled back to $resolved."
+
+try {
 
 # 8. Sync dependencies only when the user explicitly allowed network access.
 if ($needsPythonSync) {
@@ -241,7 +244,7 @@ if ($needsPythonSync) {
     Write-Host 'Syncing Python packages from requirements.lock.txt (network allowed by -AllowOnlineDeps)...'
     & $py -m pip install --no-cache-dir -r (Join-Path $root 'requirements.lock.txt')
     if ($LASTEXITCODE -ne 0) {
-        throw "Python dependency sync failed; the rollback commit is active and .venv may be incomplete. Safety branch: $backupBranch"
+        throw "Python dependency sync failed; the previous code will be restored. Safety branch: $backupBranch"
     }
 }
 
@@ -308,6 +311,24 @@ if (-not $SkipPackage) {
         }
         Pop-Location
     }
+}
+
+} catch {
+    $failureMessage = $_.Exception.Message
+    $restoreNote = 'previous code was not changed'
+    if ($switched) {
+        if ($currentBranch) {
+            & git @gitArgs reset --hard $currentHead
+        } else {
+            & git @gitArgs checkout --detach $currentHead
+        }
+        if ($LASTEXITCODE -eq 0) {
+            $restoreNote = 'previous code restored'
+        } else {
+            $restoreNote = 'could not restore previous code; use the safety branch'
+        }
+    }
+    throw "Rollback failed: $failureMessage`n$restoreNote. Safety branch: $backupBranch"
 }
 
 Write-Host "Rollback complete. Safety branch: $backupBranch"

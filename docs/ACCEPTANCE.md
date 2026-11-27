@@ -333,10 +333,10 @@
 
 ### G-4 仓库目录结构重整（工单 458）
 
-- **状态**：开发侧 F1–F11 修复与隔离演练已完成，待独立复审与 Lan 验收（`ticket/458-repo-layout`，尚未合并、尚未部署）
-- **验什么**：根目录简洁且功能分层清晰（`veil/`、`scripts/`、`research/`）；升级后桌面启动、聊天、记忆读取、自主活动与工具权限正常；原有 `data/`、`characters/`、`persona/`、`.env` 无需手动迁移；7 个根兼容入口可执行；独立回滚脚本默认离线、遇未跟踪/被忽略路径冲突即中止、打包失败保留旧桌面。
-- **开发侧证据**：[`docs/reports/pr458-isolation-drill-20261127.md`](reports/pr458-isolation-drill-20261127.md) 与同名 JSON（合成数据，无正式数据/绝对路径）。
-- **步骤**：合并并更新后启动桌面版，发一条普通聊天、打开「记忆」与「经历」页、查看一次工具/自主记录，确认与改前行为一致；如需回滚，先在一个隔离副本运行 `scripts\windows\rollback-version.cmd <旧提交>`，确认冲突/离线/打包失败路径。
+- **状态**：开发侧 F1–F11 修复、隔离演练与运行时验收已补齐；**打包版 EXE 图形界面与 Nowhere 未验证**，待独立复审与 Lan 真机验收（`ticket/458-repo-layout`，尚未合并、尚未部署）
+- **验什么**：根目录简洁且功能分层清晰（`veil/`、`scripts/`、`research/`）；旧 update.bat 原地升级、旧/新桌面后端、聊天落盘、Brain/记忆/事件 API、权限审批、自主记录与费用、完整离线回滚及失败恢复均正常；原有 `data/`、`characters/`、`persona/`、`.env` 无需手动迁移；7 个根兼容入口可执行。
+- **开发侧证据**：[`docs/reports/pr458-runtime-acceptance-20261127.md`](reports/pr458-runtime-acceptance-20261127.md)、[`docs/reports/pr458-isolation-drill-20261127.md`](reports/pr458-isolation-drill-20261127.md) 与对应 JSON（合成数据，无正式数据/绝对路径）。
+- **步骤**：合并并更新后启动桌面版，用旧/新安装包各启动一次，发一条普通聊天、打开「记忆」与「经历」页、查看一次工具/自主记录；在隔离副本运行一次无 `--skip-package` 的回滚，确认冲突/离线/依赖失败/打包失败路径。图形界面、Nowhere 和真实 Peter 数据仍需 Lan 真机确认。
 - [ ] 通过
 
 ---
