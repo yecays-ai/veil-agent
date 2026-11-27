@@ -101,10 +101,27 @@ class TestContextSignalAndAssociation(unittest.TestCase):
         self.assertTrue(tech['is_work_task'])
         self.assertFalse(tech['allow_association'])
 
-        work_emo = context_signal.analyze('今天加班修线上报错修到好累，真的委屈想吐槽')
+        work_emo = context_signal.analyze('今天加班开会好累，真的委屈想吐槽')
         self.assertEqual(work_emo['mode'], 'work_emotion')
         self.assertFalse(work_emo['is_work_task'])
         self.assertTrue(work_emo['allow_association'])
+
+        # F2: concrete technical task co-occurring with emotion must NOT be misclassified as casual/work_emotion
+        emo_tech = context_signal.analyze('好烦好累，先帮我修一下这个 Traceback KeyError 报错')
+        self.assertEqual(emo_tech['mode'], 'technical_task')
+        self.assertTrue(emo_tech['is_work_task'])
+        self.assertTrue(emo_tech['has_emotion_signal'])
+        self.assertFalse(emo_tech['allow_association'])
+
+        # F2: long daily-life sharing must NOT be blocked by character length
+        long_life = context_signal.analyze('今天下午去楼下散步的时候看到一只特别胖的三花猫趴在台阶上晒太阳，' * 3)
+        self.assertEqual(long_life['mode'], 'casual_chat')
+        self.assertFalse(long_life['is_work_task'])
+        self.assertTrue(long_life['allow_association'])
+
+        # F3: followup flag must not mask concrete technical task intent
+        shift_sig = context_signal.analyze('然后帮我查一下 pytest 报错日志', followup=True)
+        self.assertTrue(shift_sig['is_work_task'])
 
         sticker = context_signal.analyze('[表情包：邪恶比格]')
         self.assertEqual(sticker['mode'], 'short_ack')
@@ -122,12 +139,19 @@ class TestContextSignalAndAssociation(unittest.TestCase):
         sims = {'m_high_irrelevant': 0.12, 'm_work_shared': 0.62}
         cfg = {'association_enabled': True, 'association_contextual_enabled': True,
                'association_min_similarity': 0.34, 'association_cooldown_turns': 8}
-        # Work-induced emotion allows association; high-importance irrelevant item CANNOT bypass gate.
+        # Work-induced emotion (without explicit debug command) allows association;
+        # high-importance irrelevant item CANNOT bypass similarity gate.
         res = natural_association.choose(
-            '今天加班修 bug 好累啊', candidates, metas, {}, 10, set(), cfg, similarities=sims)
+            '今天加班开会好累啊想吐槽', candidates, metas, {}, 10, set(), cfg, similarities=sims)
         self.assertEqual(res['key'], 'm_work_shared')
         self.assertEqual(res['mode'], 'contextual')
         self.assertAlmostEqual(res['similarity'], 0.62, places=2)
+
+        # Concrete technical task with emotion is still suppressed for unrelated association.
+        res_emo_cmd = natural_association.choose(
+            '好烦，帮我修一下这个 CI 报错日志', candidates, metas, {}, 11, set(), cfg, similarities=sims)
+        self.assertEqual(res_emo_cmd['key'], '')
+        self.assertEqual(res_emo_cmd['reason'], 'work_task_suppressed')
 
         # Pure technical task is strictly suppressed (0 intrusion).
         res_task = natural_association.choose(
@@ -247,8 +271,27 @@ class TestDeliveryContractAndConfigRegistry(unittest.TestCase):
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]['association_ids'], ['m2'])
 
-            # 2) Rollback restores association streak & marks without firing listener
-            mem._pending_recall = {
+            # 2) F7: First-time association failure (prior state None/empty) & mismatched request_id guard
+            mem_fresh = object.__new__(Memory)
+            mem_fresh.mutex = __import__('threading').RLock()
+            mem_fresh.rotation = recall_rotation.Cooldown()
+            mem_fresh.rotation_path = 'peter/recall-rotation.json'
+            mem_fresh.store = SimpleNamespace(root=root, replace=lambda *a, **k: None)
+            mem_fresh.cfg = SimpleNamespace(id='peter', memory={'model': 'BAAI/bge-m3'})
+            mem_fresh.budget = SimpleNamespace(clock=lambda: '2026-11-27T15:00:00+08:00')
+            mem_fresh.last_recall_debug = {'ombre': [], 'judge': {'picked': []}}
+            mem_fresh.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
+            mem_fresh.last_injected_refs = []
+            mem_fresh._previous_injected_refs = []
+            mem_fresh.last_recall_marks = None
+            mem_fresh.last_association_marks = None
+            mem_fresh._has_association_rollback = False
+            mem_fresh._pending_recall_request_id = ''
+            mem_fresh.surfaced_ids = {}
+            mem_fresh.delivery_listeners = [lambda ev: events.append(ev)]
+            # Simulate a rotation whose previous_association returns None on first turn
+            mem_fresh.rotation.previous_association = lambda: None
+            mem_fresh._pending_recall = {
                 'include_opening': False,
                 'association_key': 'm2',
                 'blocks': [
@@ -256,12 +299,24 @@ class TestDeliveryContractAndConfigRegistry(unittest.TestCase):
                      'source': 'association', 'event_id': '', 'pointer': '', 'kind': 'association'},
                 ],
             }
-            mem.finish_recall()
-            self.assertEqual(mem.rotation.association['repeat'], 2)
-            mem.rollback_recall()
-            self.assertEqual(mem.rotation.association['repeat'], 1)
-            self.assertTrue(mem.last_recall_debug['lifecycle']['rolled_back'])
+            mem_fresh.finish_recall(request_id='req-A')
+            self.assertEqual(mem_fresh.rotation.association['key'], 'm2')
+            # Mismatched request_id must be rejected by both confirm_delivery and rollback_recall
+            self.assertIsNone(mem_fresh.confirm_delivery('req-B'))
+            self.assertFalse(mem_fresh.rollback_recall('req-B'))
+            self.assertEqual(mem_fresh.rotation.association['key'], 'm2')
+            # Matching request_id rolls back cleanly even though previous_association was None
+            self.assertTrue(mem_fresh.rollback_recall('req-A'))
+            self.assertEqual(mem_fresh.rotation.association['key'], '')
+            self.assertEqual(mem_fresh.rotation.association['repeat'], 0)
             self.assertEqual(len(events), 1)
+
+            # 3) F6: Bounded multi-source pool caches lightweight metadata only (no full-body cache)
+            pool_blocks, pool_meta = mem._association_pool(limit=8)
+            self.assertEqual(pool_meta['source'], 'bounded_multi_source')
+            self.assertEqual(len(pool_blocks), 2)
+            for cached_row in mem._assoc_pool_cache['rows']:
+                self.assertNotIn('body', cached_row)
 
 
 if __name__ == '__main__':

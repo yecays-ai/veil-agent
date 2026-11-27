@@ -199,15 +199,15 @@
 - **步骤**：双击仓库根目录 `打开-VEIL隔离预览.cmd`（或先新建专门的可丢弃测试记忆）→ 分别测试锁定、归档、恢复与删除。
 - [ ] 通过
 
-### B-7 P6-S5 检索、判官与情境自然联想（工单 460）
+### B-7 P6-S5 检索、判官与情境自然联想（工单 460 · PR #461）
 
-- **状态**：开发侧实现、DeepSeek 隔离实验（¥2.44/¥10）与 340+ 项单测通过，**待 PR 审核与 Lan 三路盲评验收**（`ticket/460-p6-s5-retrieval-judge-association`，未合并、未部署）
+- **状态**：已完成 PR #461 独立复审 F1–F8 集中修复、DeepSeek 隔离实验（¥2.54/¥10）与 S3+S5 隔离合流回归，**待独立复审与 Lan 三路盲评验收**（`ticket/460-p6-s5-retrieval-judge-association`，未合并、未部署）
 - **验什么**：
-  1. 审阅 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](reports/p6-s5-retrieval-judge-association-20261127.md) 确认是否默认开启可审计停用词（`stopwords_enabled`，K=8 全指标净正收益）及维持 `candidate_k=8`；
-  2. 完成本机 `.local-tmp/s5/lan-blind-review-s5.md` 的 6 组三路自然联想匿名盲评，拍板是否启用 `association_contextual_enabled`；
-  3. 在隔离预览中验证：换词回忆、连续追问与切题释放、纯报错任务不插旧事、工作情绪倾诉可共情，以及 Brain「召回诊断」页显示情境模式、判官结论、联想原因、降级来源与送达/回滚状态。
-- [ ] 停用词与 K 默认配置已拍板
-- [ ] 三路自然联想盲评完成并确认开关
+  1. 审阅 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](reports/p6-s5-retrieval-judge-association-20261127.md)：确认最终默认配置为 `stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官（因联合实测停用词+S5 判官存在负交互，停用词保持默认关闭）；
+  2. 完成本机 `.local-tmp/s5/lan-blind-review-s5.md` 的 6 组**完整生产上下文组装**三路自然联想匿名盲评，结合 `work_trap_intrusions=2` 实测决定 `association_contextual_enabled` 保持关闭或后续调优；
+  3. 在隔离预览中验证：长篇生活交流、隐含情绪、工作引发的情绪交流、带情绪的明确技术任务、突然切换话题释放旧承接，以及 Brain「召回诊断」页各项标签与送达/回滚状态。
+- [ ] 最终默认配置与复审报告已确认
+- [ ] 三路完整生产上下文盲评完成
 - [ ] 隔离预览体验通过
 
 ---

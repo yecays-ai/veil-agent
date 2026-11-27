@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-27T15:08:49+08:00",
+  "generated_at": "2026-11-27T15:39:35+08:00",
   "model": "deepseek-chat",
   "budget_limit_cny": 10.0,
   "budget_snapshot": {
@@ -7,7 +7,7 @@
     "paid_calls": 0,
     "tokens": 0,
     "tier_spent_cny": 0.0,
-    "total_spent_cny": 2.440654
+    "total_spent_cny": 2.539043
   },
   "four_way_retrieval_judge": [
     {
@@ -21,54 +21,69 @@
       "retrieval_ndcg_at_8": 0.4973,
       "judge_recall": 0.5933,
       "judge_precision": 0.451,
+      "final_injected_recall": 0.5933,
+      "final_injected_precision": 0.451,
       "false_positive_rate": 0.5455,
       "trap_fpr": 1.0,
       "noise_fpr": 0.0,
       "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 7,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 93,
       "input_tokens": 68629,
       "output_tokens": 433,
       "latency_p50_ms": 1136.3,
       "latency_p95_ms": 3246.3,
-      "calls_paid": 35,
-      "calls_cached": 1,
-      "cost_cny": 0.137124,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.6229,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.6229,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.4,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.4,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.4667,
-          "judge_precision": 0.4533,
-          "fpr": null
+          "final_recall": 0.4667,
+          "final_precision": 0.4533,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 1.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.3333,
-          "judge_precision": 0.2708,
-          "fpr": null
+          "final_recall": 0.3333,
+          "final_precision": 0.2708,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     },
@@ -83,54 +98,69 @@
       "retrieval_ndcg_at_8": 0.5125,
       "judge_recall": 0.6033,
       "judge_precision": 0.4658,
+      "final_injected_recall": 0.6033,
+      "final_injected_precision": 0.4658,
       "false_positive_rate": 0.4545,
       "trap_fpr": 0.8333,
       "noise_fpr": 0.0,
       "empty_correct": "6/11",
+      "outcomes": {
+        "normal_rejected": 8,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 87,
       "input_tokens": 67533,
       "output_tokens": 415,
       "latency_p50_ms": 1148.2,
       "latency_p95_ms": 2390.4,
-      "calls_paid": 18,
-      "calls_cached": 18,
-      "cost_cny": 0.071258,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.6667,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.6667,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.3889,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.3889,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.5167,
-          "judge_precision": 0.4705,
-          "fpr": null
+          "final_recall": 0.5167,
+          "final_precision": 0.4705,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.8333
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.8333,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.3333,
-          "judge_precision": 0.2708,
-          "fpr": null
+          "final_recall": 0.3333,
+          "final_precision": 0.2708,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     },
@@ -145,54 +175,69 @@
       "retrieval_ndcg_at_8": 0.4973,
       "judge_recall": 0.6,
       "judge_precision": 0.4182,
+      "final_injected_recall": 0.6,
+      "final_injected_precision": 0.4182,
       "false_positive_rate": 0.5455,
       "trap_fpr": 1.0,
       "noise_fpr": 0.0,
       "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 7,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 101,
       "input_tokens": 83437,
       "output_tokens": 447,
       "latency_p50_ms": 1131.7,
       "latency_p95_ms": 2571.7,
-      "calls_paid": 35,
-      "calls_cached": 1,
-      "cost_cny": 0.166064,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.6146,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.6146,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.4,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.4,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.5667,
-          "judge_precision": 0.481,
-          "fpr": null
+          "final_recall": 0.5667,
+          "final_precision": 0.481,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 1.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.2778,
-          "judge_precision": 0.1222,
-          "fpr": null
+          "final_recall": 0.2778,
+          "final_precision": 0.1222,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     },
@@ -207,59 +252,74 @@
       "retrieval_ndcg_at_8": 0.5125,
       "judge_recall": 0.59,
       "judge_precision": 0.328,
+      "final_injected_recall": 0.59,
+      "final_injected_precision": 0.328,
       "false_positive_rate": 0.5455,
       "trap_fpr": 1.0,
       "noise_fpr": 0.0,
       "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 7,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 110,
       "input_tokens": 81806,
       "output_tokens": 479,
       "latency_p50_ms": 1035.1,
       "latency_p95_ms": 1825.9,
-      "calls_paid": 18,
-      "calls_cached": 18,
-      "cost_cny": 0.086476,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.4354,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.4354,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.275,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.275,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.5167,
-          "judge_precision": 0.4667,
-          "fpr": null
+          "final_recall": 0.5167,
+          "final_precision": 0.4667,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 1.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.2778,
-          "judge_precision": 0.1222,
-          "fpr": null
+          "final_recall": 0.2778,
+          "final_precision": 0.1222,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     }
   ],
-  "s5_trap_judge_comparison": {
+  "s5_trap_and_final_candidate": {
     "baseline_k8": {
       "arm": "baseline_k8_sw_off",
       "stopwords_enabled": false,
@@ -271,54 +331,69 @@
       "retrieval_ndcg_at_8": 0.4973,
       "judge_recall": 0.5933,
       "judge_precision": 0.451,
+      "final_injected_recall": 0.5933,
+      "final_injected_precision": 0.451,
       "false_positive_rate": 0.5455,
       "trap_fpr": 1.0,
       "noise_fpr": 0.0,
       "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 7,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 93,
       "input_tokens": 68629,
       "output_tokens": 433,
       "latency_p50_ms": 1136.3,
       "latency_p95_ms": 3246.3,
-      "calls_paid": 35,
-      "calls_cached": 1,
-      "cost_cny": 0.137124,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.6229,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.6229,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.4,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.4,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.4667,
-          "judge_precision": 0.4533,
-          "fpr": null
+          "final_recall": 0.4667,
+          "final_precision": 0.4533,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 1.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.3333,
-          "judge_precision": 0.2708,
-          "fpr": null
+          "final_recall": 0.3333,
+          "final_precision": 0.2708,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     },
@@ -333,10 +408,19 @@
       "retrieval_ndcg_at_8": 0.4973,
       "judge_recall": 0.5867,
       "judge_precision": 0.388,
+      "final_injected_recall": 0.5867,
+      "final_injected_precision": 0.388,
       "false_positive_rate": 0.3636,
       "trap_fpr": 0.6667,
       "noise_fpr": 0.0,
       "empty_correct": "7/11",
+      "outcomes": {
+        "normal_rejected": 10,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 91,
       "input_tokens": 72307,
       "output_tokens": 425,
@@ -348,39 +432,45 @@
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.5312,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.5312,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.4167,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.4167,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.3667,
-          "judge_precision": 0.34,
-          "fpr": null
+          "final_recall": 0.3667,
+          "final_precision": 0.34,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.6667
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.6667,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.3889,
-          "judge_precision": 0.2083,
-          "fpr": null
+          "final_recall": 0.3889,
+          "final_precision": 0.2083,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     },
@@ -395,10 +485,19 @@
       "retrieval_ndcg_at_8": 0.4973,
       "judge_recall": 0.5767,
       "judge_precision": 0.3704,
+      "final_injected_recall": 0.5767,
+      "final_injected_precision": 0.3704,
       "false_positive_rate": 0.5455,
       "trap_fpr": 1.0,
       "noise_fpr": 0.0,
       "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 8,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
       "injected_total": 96,
       "input_tokens": 87115,
       "output_tokens": 440,
@@ -410,87 +509,181 @@
       "by_category": {
         "explicit_recall": {
           "n": 8,
-          "judge_recall": 1.0,
-          "judge_precision": 0.5292,
-          "fpr": null
+          "final_recall": 1.0,
+          "final_precision": 0.5292,
+          "final_fpr": null,
+          "degraded": 0
         },
         "empathy": {
           "n": 6,
-          "judge_recall": 0.4167,
-          "judge_precision": 0.4,
-          "fpr": null
+          "final_recall": 0.4167,
+          "final_precision": 0.4,
+          "final_fpr": null,
+          "degraded": 0
         },
         "cross_event": {
           "n": 5,
-          "judge_recall": 0.3167,
-          "judge_precision": 0.2633,
-          "fpr": null
+          "final_recall": 0.3167,
+          "final_precision": 0.2633,
+          "final_fpr": null,
+          "degraded": 0
         },
         "noise": {
           "n": 5,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 0.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
         },
         "trap": {
           "n": 6,
-          "judge_recall": null,
-          "judge_precision": null,
-          "fpr": 1.0
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
         },
         "autonomy": {
           "n": 6,
-          "judge_recall": 0.3889,
-          "judge_precision": 0.2183,
-          "fpr": null
+          "final_recall": 0.3889,
+          "final_precision": 0.2183,
+          "final_fpr": null,
+          "degraded": 0
+        }
+      }
+    },
+    "s5_final_candidate_sw_on_k8": {
+      "arm": "s5_final_candidate_sw_on_k8",
+      "stopwords_enabled": true,
+      "k": 8,
+      "use_s5_context": true,
+      "samples": 36,
+      "retrieval_recall_at_k": 0.6267,
+      "retrieval_precision_at_5": 0.192,
+      "retrieval_ndcg_at_8": 0.5125,
+      "judge_recall": 0.5867,
+      "judge_precision": 0.3953,
+      "final_injected_recall": 0.5867,
+      "final_injected_precision": 0.3953,
+      "false_positive_rate": 0.5455,
+      "trap_fpr": 1.0,
+      "noise_fpr": 0.0,
+      "empty_correct": "5/11",
+      "outcomes": {
+        "normal_rejected": 8,
+        "judge_timeouts": 0,
+        "judge_errors": 0,
+        "parse_failures": 0,
+        "degraded_fallbacks": 0
+      },
+      "injected_total": 95,
+      "input_tokens": 71211,
+      "output_tokens": 437,
+      "latency_p50_ms": 1279.7,
+      "latency_p95_ms": 2118.9,
+      "calls_paid": 0,
+      "calls_cached": 36,
+      "cost_cny": 0.0,
+      "by_category": {
+        "explicit_recall": {
+          "n": 8,
+          "final_recall": 1.0,
+          "final_precision": 0.5917,
+          "final_fpr": null,
+          "degraded": 0
+        },
+        "empathy": {
+          "n": 6,
+          "final_recall": 0.4167,
+          "final_precision": 0.4,
+          "final_fpr": null,
+          "degraded": 0
+        },
+        "cross_event": {
+          "n": 5,
+          "final_recall": 0.3667,
+          "final_precision": 0.3,
+          "final_fpr": null,
+          "degraded": 0
+        },
+        "noise": {
+          "n": 5,
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 0.0,
+          "degraded": 0
+        },
+        "trap": {
+          "n": 6,
+          "final_recall": null,
+          "final_precision": null,
+          "final_fpr": 1.0,
+          "degraded": 0
+        },
+        "autonomy": {
+          "n": 6,
+          "final_recall": 0.3889,
+          "final_precision": 0.2083,
+          "final_fpr": null,
+          "degraded": 0
         }
       }
     }
   },
-  "association_three_way_offline": {
+  "association_three_way_production_replay": {
     "off": {
       "mode": "off",
       "total_samples": 73,
-      "triggered_count": 0,
+      "delivered_count": 0,
+      "budget_dropped_assoc": 0,
       "unique_memories_covered": 0,
       "long_tail_imp7_covered": 0,
+      "recent_covered": 0,
       "ordinary_covered": 0,
       "work_trap_intrusions": 0,
       "suppression_reasons": {
-        "disabled": 73
+        "not_applicable": 27,
+        "disabled": 46
       }
     },
     "legacy_breath8": {
       "mode": "legacy_breath8",
       "total_samples": 73,
-      "triggered_count": 10,
+      "delivered_count": 9,
+      "budget_dropped_assoc": 0,
       "unique_memories_covered": 2,
       "long_tail_imp7_covered": 2,
+      "recent_covered": 1,
       "ordinary_covered": 0,
       "work_trap_intrusions": 0,
       "suppression_reasons": {
-        "mood": 34,
-        "nothing_suitable": 29
+        "not_applicable": 27,
+        "nothing_suitable": 21,
+        "mood": 16
       }
     },
     "contextual_s5": {
       "mode": "contextual_s5",
       "total_samples": 73,
-      "triggered_count": 18,
-      "unique_memories_covered": 18,
-      "long_tail_imp7_covered": 16,
+      "delivered_count": 11,
+      "budget_dropped_assoc": 3,
+      "unique_memories_covered": 11,
+      "long_tail_imp7_covered": 9,
+      "recent_covered": 5,
       "ordinary_covered": 2,
-      "work_trap_intrusions": 0,
+      "work_trap_intrusions": 2,
       "suppression_reasons": {
-        "low_context_signal": 39,
-        "low_relevance": 8,
-        "work_task_suppressed": 8
+        "not_applicable": 27,
+        "low_relevance": 13,
+        "none": 3,
+        "work_task_suppressed": 8,
+        "low_context_signal": 11
       }
     }
   },
   "association_three_way_blind": {
     "groups": 6,
-    "cost_cny": 0.0
+    "cost_cny": 0.023232,
+    "production_assembled": true
   },
   "reranker_score_gate_calibration": {
     "available": true,

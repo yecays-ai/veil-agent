@@ -149,6 +149,13 @@ def analyze(query: str, recent=None, *, explicit_past: bool = False, followup: b
     if followup:
         reasons.append('followup')
 
+    # Compute task intent independently of followup so topic shifts into a concrete
+    # technical/debugging task are never masked by followup priority.
+    # When an explicit technical command/error task co-occurs with frustration/emotion
+    # (e.g. "好烦，帮我修一下这个 Traceback 报错"), task intent still suppresses unrelated
+    # natural associations while preserving has_emotion_signal for the judge.
+    concrete_work_task = bool(has_tech_cmd or (has_work and not has_emotion and not recent_emotion))
+
     if has_past:
         mode = 'explicit_past'
         allow_assoc = False
@@ -156,27 +163,27 @@ def analyze(query: str, recent=None, *, explicit_past: bool = False, followup: b
     elif followup:
         mode = 'followup'
         allow_assoc = False
-        is_work_task = False
-    elif has_work and (has_emotion or (recent_emotion and not has_tech_cmd)):
-        # Work-induced emotional / relational sharing: never suppress as a pure technical task.
-        mode = 'work_emotion'
-        allow_assoc = True
-        is_work_task = False
-    elif has_tech_cmd or (has_work and not has_emotion):
+        is_work_task = concrete_work_task
+    elif has_tech_cmd:
         mode = 'technical_task'
         allow_assoc = False
         is_work_task = True
-    elif not has_emotion and not recent_emotion and len(text) > 70:
-        # Long informational/task-like input without emotional or relational cues: keep quiet.
-        mode = 'informational'
-        allow_assoc = False
+    elif has_work and (has_emotion or recent_emotion):
+        # Work-induced emotional / relational sharing (without an explicit technical command):
+        # allow empathy and shared experience recall.
+        mode = 'work_emotion'
+        allow_assoc = True
         is_work_task = False
-        reasons.append('long_non_emotional')
+    elif has_work:
+        mode = 'technical_task'
+        allow_assoc = False
+        is_work_task = True
     elif has_emotion:
         mode = 'emotional_chat'
         allow_assoc = True
         is_work_task = False
     else:
+        # Never block long daily/life sharing merely by character length.
         mode = 'casual_chat'
         allow_assoc = True
         is_work_task = False
@@ -185,6 +192,7 @@ def analyze(query: str, recent=None, *, explicit_past: bool = False, followup: b
         'mode': mode,
         'allow_association': allow_assoc,
         'is_work_task': is_work_task,
+        'has_tech_cmd': has_tech_cmd,
         'has_emotion_signal': has_emotion,
         'has_work_signal': has_work,
         'recent_emotion_signal': recent_emotion,
