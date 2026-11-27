@@ -362,13 +362,16 @@ def library(hub, query_params):
             # Hash the stored body exactly as the edit endpoint does; a stripped copy would
             # produce a permanent 409 for memories whose stored body ends with whitespace.
             sha = r['body_sha256'] or hashlib.sha256(raw_body.encode('utf-8')).hexdigest()
+            activation_row = activation.get(mid)
             items.append({
                 'memory_id': mid,
                 'title': title,
                 'created': r['created'] or '',
-                'last_active': r['last_active'] or '',
-                'activation': activation.get(mid) or {
-                    'last_active': r['last_active'] or '', 'last_delivery_at': '',
+                # memories.last_active starts as the creation timestamp; only an activation row
+                # proves the memory was actually delivered.
+                'last_active': (activation_row or {}).get('last_active') or '',
+                'activation': activation_row or {
+                    'last_active': '', 'last_delivery_at': '',
                     'first_delivery_at': '', 'deliveries': 0, 'distinct_days': 0,
                     'distinct_sessions': 0, 'score': 0.0, 'display': 0, 'stored_score': 0.0,
                     'protected': bool(pinned) or (_as_number(r['importance']) or 5) >= 7,

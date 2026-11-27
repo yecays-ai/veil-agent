@@ -10,7 +10,7 @@
   - 长期重要度：`memory_importance_proposals` 带原因、证据、`policy_version`；自动只提升 +1 且上限 7；降权/8+/锁定/置顶进 `pending`；应用写 `versions`、可撤回；S6-3 统一入口 `MemoryWeights.propose()`。
   - 检索：`brain_retrieval.py` 增加可选的活跃度排序项，默认关闭；无送达记录时严格无操作；S6-2 的 leisure 向量捕获与召回路径已合流。判官/联想/召回预算选择逻辑未改。
   - 界面：`desktop/workspace-brain.js` 记忆监控权重面板（5 开关 + 4 参数，持久化到 `data/<role>/memory-weights.json`）、记忆详情重要度/活跃度/待确认重评/重评历史/撤回、库过滤与排序；已与 S6-2 的「自主闲暇自然联想」开关同文件合流；`brain_p4_api.py` / `web_agent.py` 新增对应 API。
-  - 测试：`tests/test_p6_s6_memory_weights.py`（46 项）通过；合流 S6-2 后桌面 64/64；合流后完整套件与 `81dba35` 基线对比结果见报告与 PR #464。
+  - 测试：`tests/test_p6_s6_memory_weights.py`（47 项）通过；合流 S6-2 后桌面 64/64；合流后完整套件与 `81dba35` 基线对比结果见报告与 PR #464。
   - VEIL Lab：run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与 `s6-1-final-20261128T023357`（最终代码 `b59a57bb...`；快照 `peter-20261127T170245/r3`，mock，¥0），`run verify` 均通过；送达/幂等/回滚/重启/digest/衰减/5→6 自动重评均已观察；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`。
   - 文档：`docs/tickets/462-p6-s6-1-memory-reinforcement.md`、本文件、`STATUS.md`、`docs/ACCEPTANCE.md` B-12。
 - **工单 463 / P6-S6-2 自主闲暇自然联想**：已合并 `81dba35`（PR #463，2026-11-27 17:05 UTC）；默认关闭、**未部署、无 Lan 验收记录**（B-11）。实现自主态禁旁白/无工具扮演约束与审计、严格闲暇 vs 任务态门控、复用 S5 相关性/多源池/个人意义/冷却去重的长尾联想、自主送达确认与 S6-1 监听联动、Brain 独立开关与运行诊断；119 项 Python 与桌面 3/3 定向回归、VEIL Lab `run verify` 通过。与本单在 `memory_agent.py` / `veil_agent.py` / `workspace-brain.js` / `brain_p4_api.py` 相交处已合流，保留双方功能。
@@ -23,7 +23,7 @@
 | 事项 | 状态 | 证据 |
 | --- | --- | --- |
 | S6 五项工程门禁（工单 461） | 已关闭 | `docs/tickets/461-p5-s6-gates.md`；对应测试与实验记录 |
-| S6-1 送达激活与保护性衰减（工单 462） | **开发侧完成，待审核/CI/体验** | 46 项单测；桌面 64/64；Lab run `s6-1-activation-20261128T004338` + `s6-1-final-20261128T023357` |
+| S6-1 送达激活与保护性衰减（工单 462） | **开发侧完成，待审核/CI/体验** | 47 项单测；桌面 64/64；Lab run `s6-1-activation-20261128T004338` + `s6-1-final-20261128T023357` |
 | S6-1 版本化重要度重评（工单 462） | **开发侧完成，待审核/CI/体验** | 同上；`tests/test_p6_s6_memory_weights.py` 提案/锁定/撤回用例 |
 | S6-2 自主闲暇联想（工单 463） | 已合并 `81dba35`，默认关闭；未部署、待验收 | `docs/ACCEPTANCE.md` B-11；只改联想/自主路径，未改本单送达记账 |
 | S6-3 认知巩固 | 未开工 | 本单已交付 `MemoryWeights.propose()` 统一接口 |

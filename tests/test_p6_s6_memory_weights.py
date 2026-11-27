@@ -126,13 +126,21 @@ class ActivationAccountingTests(_Base):
 
     def test_only_confirmed_delivery_writes_activation(self):
         self.assertEqual(self.w.activation_map(['m1']), {})
+        self.clock.value = '2026-11-01T12:34:56+0800'
         out = self.w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
         self.assertEqual(out['status'], 'applied')
         info = self.w.activation_map(['m1'])['m1']
         self.assertEqual(info['deliveries'], 1)
         self.assertEqual(info['distinct_days'], 1)
         self.assertGreater(info['display'], 0)
-        self.assertTrue(info['last_active'])
+        self.assertEqual(info['last_active'], '2026-11-01T12:34:56+0800')
+        conn = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT last_active FROM memories WHERE id='m1'").fetchone()[0],
+                '2026-11-01T12:34:56+0800')
+        finally:
+            conn.close()
 
     def test_duplicate_confirmation_and_restart_do_not_double_count(self):
         self.w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
@@ -288,7 +296,9 @@ class ImportanceProposalTests(_Base):
         codes = {item['code'] for item in proposal['reasons']}
         self.assertIn('event', codes)
         self.assertIn('relationship', codes)
-        self.assertTrue(proposal['evidence'])
+        refs = {(item.get('kind'), item.get('ref')) for item in proposal['evidence']}
+        self.assertIn(('event', 'e1'), refs)
+        self.assertIn(('relationship', 'rel1'), refs)
         conn = sqlite3.connect(str(self.db))
         try:
             importance = conn.execute("SELECT importance FROM memories WHERE id='m1'").fetchone()[0]
@@ -423,7 +433,7 @@ class ImportanceProposalTests(_Base):
 class SettingsAndRankingTests(_Base):
     def test_defaults_keep_ranking_off_and_protect_importance(self):
         self.assertFalse(DEFAULTS['ranking_enabled'])
-        self.assertFalse(DEFAULTS['reeval_auto_apply'] is False)
+        self.assertIs(DEFAULTS['reeval_auto_apply'], True)
         self.assertEqual(DEFAULTS['reeval_max_auto_importance'], 7)
         settings = brain_retrieval.load_settings({})
         self.assertFalse(settings['activation_ranking_enabled'])
@@ -786,6 +796,12 @@ class IntegrityAndRecoveryTests(_Base):
                          "created_at, status, proposed_importance, decided_at, decided_by) "
                          "VALUES('p2', 'm2', '2026-11-01T10:00:00+0800', 'rejected', 6, "
                          "'2026-11-02T10:00:00+0800', 'lan')")
+            conn.execute("INSERT INTO memory_importance_proposals(proposal_id, memory_id, "
+                         "created_at, status, proposed_importance, applied_at, version_seq) "
+                         "VALUES('p3', 'm2', '2026-11-02T11:00:00+0800', 'applied', 6, "
+                         "'2026-11-02T11:00:00+0800', 99)")
+            conn.execute("INSERT INTO memory_activation(memory_id, delivery_count, distinct_days, "
+                         "distinct_sessions, activity_score) VALUES('m2', 4, 2, 2, 4.0)")
             conn.commit()
         finally:
             conn.close()
@@ -805,6 +821,11 @@ class IntegrityAndRecoveryTests(_Base):
                 "SELECT status, decided_by FROM memory_importance_proposals "
                 "WHERE proposal_id='p2'").fetchone()
             self.assertEqual(tuple(decision), ('rejected', 'lan'))
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM memory_importance_proposals WHERE proposal_id='p3'").fetchone())
+            self.assertEqual(conn.execute(
+                "SELECT delivery_count FROM memory_activation WHERE memory_id='m2'"
+            ).fetchone()[0], 4)
         finally:
             conn.close()
 
@@ -843,10 +864,12 @@ class IntegrityAndRecoveryTests(_Base):
         self.assertEqual(out['error'], 'importance_changed_since_apply')
 
     def test_cold_important_memory_stays_retrievable_under_activation_ranking(self):
-        w = self.make([
-            {'id': 'hot', 'title': '常聊的日常', 'body': '今天吃什么', 'importance': 5},
-            {'id': 'cold', 'title': '冷门但重要', 'body': '冷门但重要的共同经历', 'importance': 8},
-        ])
+        rows = [{'id': 'hot', 'title': '常聊的日常', 'body': '今天吃什么', 'importance': 5},
+                {'id': 'cold', 'title': '冷门但重要', 'body': '冷门但重要的共同经历', 'importance': 8}]
+        for index in range(30):
+            rows.append({'id': 'noise%d' % index, 'title': '无关%d' % index,
+                         'body': '完全无关的日常记录 %d' % index, 'importance': 5})
+        w = self.make(rows)
         w.apply_delivery({'request_id': 'r1', 'injected_ids': ['hot']})
         settings = {'weight_vector': 0.65, 'weight_keyword': 0.35, 'candidate_k': 8,
                     'stopwords_enabled': False, 'activation_ranking_enabled': True,
@@ -905,6 +928,26 @@ class IntegrityAndRecoveryTests(_Base):
         self.assertEqual(w.drain_retries(), 1)
         self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 1)
 
+    def test_manual_force_does_not_repeat_unchanged_evidence(self):
+        w = self.make([{'id': 'm1', 'meaning': '有意义', 'event_id': 'e1',
+                        'event_title': '共同经历'}],
+                      relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                     'sources': ['event:e1']}])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 1)
+        first = w.proposals(memory_id='m1', status='applied')
+        self.assertEqual(len(first), 1)
+        again = w.reevaluate('m1')
+        self.assertFalse(again['ok'])
+        self.assertEqual(again['reason'], 'no_change')
+        conn = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT importance FROM memories WHERE id='m1'").fetchone()[0],
+                first[0]['proposed_importance'])
+        finally:
+            conn.close()
+
 class ApiSurfaceTests(_Base):
     def _hub(self, weights):
         from types import SimpleNamespace as NS
@@ -952,8 +995,14 @@ class ApiSurfaceTests(_Base):
         self.assertTrue(decision['ok'], decision)
         self.assertEqual(decision['importance'], 5)
         again = brain_p4_api.reevaluate_memory(hub, 'm1')
-        self.assertTrue(again['ok'], again)
-        self.assertIn(again['proposal']['status'], ('pending', 'applied'))
+        self.assertFalse(again['ok'])
+        self.assertEqual(again['reason'], 'no_change', 'reverted evidence must not be re-applied')
+        conn = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT importance FROM memories WHERE id='m1'").fetchone()[0], 5)
+        finally:
+            conn.close()
 
     def test_get_routes_wire_weights_and_proposals(self):
         from unittest.mock import Mock

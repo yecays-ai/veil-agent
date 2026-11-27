@@ -418,7 +418,17 @@ class MemoryWeights:
 
     def _save_retries(self, events):
         try:
-            self.store.replace(self._retry_path(), {'events': list(events)[:100]})
+            ordered = list(events)
+            kept, dropped = ordered[:100], ordered[100:]
+            payload = {'events': kept}
+            if dropped:
+                # Do not silently lose confirmed deliveries. The bounded queue keeps the newest
+                # 100 and records the overflow count/IDs for diagnosis; startup still replays kept.
+                payload['dropped_count'] = len(dropped)
+                payload['dropped_at'] = self._now()
+                payload['dropped_ids'] = [str(event.get('request_id') or '')
+                                          for event in dropped[:100]]
+            self.store.replace(self._retry_path(), payload)
         except Exception:
             pass
 
@@ -479,6 +489,22 @@ class MemoryWeights:
         finally:
             with self.mutex:
                 self._retry_thread = None
+
+    def drop_retries_for(self, memory_id):
+        """A hard-deleted memory must not keep its ID in the on-disk retry queue."""
+        mid = str(memory_id or '')
+        if not mid:
+            return
+        with self.mutex:
+            events = self._load_retries()
+            remaining = [event for event in events
+                         if mid not in [str(item) for item in
+                                        (list(event.get('injected_ids') or [])
+                                         + list(event.get('opening_ids') or [])
+                                         + list(event.get('association_ids') or [])
+                                         + list(event.get('carried_ids') or []))]]
+            if len(remaining) != len(events):
+                self._save_retries(remaining)
 
     @staticmethod
     def _retry_identity(event):
@@ -567,7 +593,7 @@ class MemoryWeights:
                 day = _day_of(stamp) or stamp[:10]
                 counters = {'counted_ids': [], 'duplicate_ids': [], 'updated_ids': []}
                 digest_changed = False
-                for memory_id in ids[:64]:
+                for memory_id in ids:
                     row = connection.execute(
                         'SELECT id, importance, pinned, bucket, type, is_tombstone, is_deleted '
                         'FROM memories WHERE id=?', (memory_id,)).fetchone()
@@ -1114,7 +1140,7 @@ class MemoryWeights:
         codes = ','.join(item.get('code', '') for item in _json(proposal['reasons_json'], []))
         brain_writer.apply_update_memory(
             connection, proposal['memory_id'], {'importance': target},
-            operation_reason=('importance-reevaluation: ' + codes)[:500], why_remembered='')
+            operation_reason=('importance-reevaluation: ' + codes)[:500])
         seq = connection.execute(
             'SELECT MAX(seq) FROM versions WHERE memory_id=?',
             (proposal['memory_id'],)).fetchone()[0]
@@ -1184,6 +1210,23 @@ class MemoryWeights:
                             'detail': _clip_text(item.get('detail') or '', 120)})
         return cleaned
 
+    @staticmethod
+    def _same_evidence(plan, latest):
+        """A manual force must not turn unchanged evidence into another +1."""
+        try:
+            old_metrics = _json(latest['metrics_json'], {})
+            old_reasons = _json(latest['reasons_json'], [])
+        except (TypeError, ValueError):
+            return False
+        keys = ('deliveries', 'distinct_days', 'sessions', 'event_id', 'meaning', 'why',
+                'bucket', 'first_of_kind')
+        if any(old_metrics.get(key) != plan['metrics'].get(key) for key in keys):
+            return False
+        old_codes = {(item.get('code'), item.get('ref')) for item in old_reasons
+                     if isinstance(item, dict)}
+        new_codes = {(item.get('code'), item.get('ref')) for item in plan['reasons']}
+        return old_codes == new_codes
+
     def _reevaluate(self, memory_id, *, trigger='delivery', force=False, proposed=None,
                     confidence=None, reasons=None, evidence=None, auto_apply=None, note=''):
         """Evaluate (or accept an external suggestion for) one memory and persist one proposal."""
@@ -1220,6 +1263,15 @@ class MemoryWeights:
                     connection.rollback()
                     return {'ok': False, 'reason': 'no_change',
                             'detail': plan['policy_note']}
+                if not external:
+                    latest = connection.execute(
+                        "SELECT metrics_json, reasons_json FROM memory_importance_proposals "
+                        "WHERE memory_id=? AND status IN ('applied','rejected','reverted') "
+                        'ORDER BY created_at DESC, rowid DESC LIMIT 1', (memory_id,)).fetchone()
+                    if latest is not None and self._same_evidence(plan, latest):
+                        connection.rollback()
+                        return {'ok': False, 'reason': 'no_change',
+                                'detail': '证据没有新增，跳过重复评估'}
                 now = parse_time(self._now())
                 allow, reason_code = self._should_create(connection, plan, values, now, force=force)
                 if not allow:

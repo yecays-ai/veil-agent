@@ -2905,6 +2905,12 @@ class Memory:
                     brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
                 finally:
                     connection.close()
+            weights = getattr(self, 'weights', None)
+            if weights is not None:
+                try:
+                    weights.drop_retries_for(memory_id)
+                except Exception:
+                    pass
         else:
             files = list(self._bucket_files(memory_id))
             if any(not in_archive for _, in_archive in files):

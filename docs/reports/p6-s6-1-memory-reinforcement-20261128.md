@@ -10,7 +10,7 @@
 - 保护性衰减只对 `importance <= 6` 且未置顶的**活跃度投影**生效；`importance >= 7` 与 `pinned` 永不衰减；衰减不改重要度、不删除、不隐藏。
 - 活跃度排序是**可选信号**，默认关闭。理由：#455 的 `AB-R5b` 只有 `+1/53` 且无冷门重要样本，证据不足；本单只保证信号可靠，等真实多日送达数据积累后再决定。
 - 隔离真实链路（VEIL Lab，mock，¥0）已验证：送达后更新、重复确认幂等、回滚不增加、重启保留、60 天后低保真衰减而高重要度不动、5→6 自动重评并写版本。
-- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 46 项 Python 测试与 3 项桌面测试，合流 S6-2 后桌面全套 64/64。
+- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 47 项 Python 测试与 3 项桌面测试，合流 S6-2 后桌面全套 64/64。
 
 ## 2. 范围、前置与并行边界
 
@@ -65,7 +65,7 @@
 | --- | --- |
 | `veil/brain/memory_weights.py`（新） | 设置校验/持久化、送达记账、衰减投影、证据评估、提案/决策/撤回、统一 `propose()` 接口 |
 | `veil/brain/storage/brain_writer.py` | 四张派生表 DDL、索引、待审唯一约束、`reeval_pending` 迁移；硬删除清理 |
-| `veil/brain/storage/brain_backup.py` | 恢复合并按墓碑删除派生行 |
+| `veil/brain/storage/brain_backup.py` | 恢复合并按墓碑删除派生行，并为保留记忆同步派生状态 |
 | `veil/brain/memory_agent.py` | 构造 `weights`；`confirm_delivery(request_id, session_key, regenerated, activation)` 接送达；预算最终裁剪同步移除待确认 ID；`search_candidates()` 合并可选排序设置；生命周期诊断写入 `effective_used/activity` |
 | `veil/core/veil_agent.py` | `_finalize_recall_delivery()` 交付确认时传会话键、重生成标记与用户可见标志；异常向后兼容 |
 | `veil/brain/recall/brain_retrieval.py` | 可选 `activation_ranking\(_enabled\)` 排序项与诊断；默认关闭 |
@@ -73,12 +73,12 @@
 | `veil/brain/brain_p4_api.py` | 记忆库投影 `activation/reeval`、活跃度排序、权重状态/设置、提案列表/决策、手动重评 |
 | `veil/server/web_agent.py` | `GET/POST /api/brain/memory-weights`、`GET /memory-proposals`、`POST /memory-proposal`、`POST /memory-reevaluate` |
 | `desktop/workspace-brain.js` | 记忆监控权重面板、记忆详情活跃度/待审/历史/撤回、过滤与排序 |
-| `tests/test_p6_s6_memory_weights.py`（新） | 46 项 |
+| `tests/test_p6_s6_memory_weights.py`（新） | 47 项 |
 | `desktop/tests/memory-weights.test.cjs`（新） | 3 项（含实际渲染记忆详情） |
 
 ## 5. 单元与集成证据
 
-    python -m unittest tests.test_p6_s6_memory_weights -v          # 46 项通过
+    python -m unittest tests.test_p6_s6_memory_weights -v          # 47 项通过
     python -m unittest tests.test_p6_s5_retrieval_judge_association \
       tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store \
       tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget \
@@ -165,16 +165,16 @@
 
 ## 8. 完整回归
 
-- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2559 项，18 失败 + 3 错误 + 29 跳过**。
+- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2560 项，18 失败 + 3 错误 + 29 跳过**。
 - `origin/main = 81dba35` 同命令基线：**2513 项，18 失败 + 3 错误 + 29 跳过**。
-- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 46 项全部来自本单新增测试且通过。
+- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 47 项全部来自本单新增测试且通过。
 
 | 项 | 本分支（合流后） | origin/main = 81dba35 基线 |
 | --- | --- | --- |
-| 测试数 / 失败 / 错误 / 跳过 | 2559 / 18 / 3 / 29 | 2513 / 18 / 3 / 29 |
+| 测试数 / 失败 / 错误 / 跳过 | 2560 / 18 / 3 / 29 | 2513 / 18 / 3 / 29 |
 | 失败/错误名称集合 | 21 个（maintenance / OpenCode / 备份 / APPDATA 桌面数据类） | 21 个，同名同序 |
 | 记忆/检索/Brain 相关失败 | 0 | 0 |
-| 新增测试 | +46（全部通过） | — |
+| 新增测试 | +47（全部通过） | — |
 
 已知既有失败类别（与 #461 记录一致）：Maintenance CRLF、OpenCode 未安装、APPDATA desktop-data、备份组件清单。本单未改这些模块。
 
@@ -186,8 +186,9 @@
 - 衰减只作用于活跃度投影，不写 `importance`；没有"遗忘删除"。
 - 投递明细有界（默认 20000 条，可调），淘汰只删最旧明细；幂等 receipt 与 `distinct_days/distinct_sessions` 聚合不随明细淘汰，旧请求重放不会重复计数；receipt 长期增长（约每条送达一行），需按实际节奏再评估上限。
 - 重评提案为保留审计暂不自动清理；`reeval_pending` 标记最多由启动时前 5 条补做，剩余等后续送达；后台线程不保证进程被杀时立即完成。
-- 瞬时存储失败进入最多 100 条的本机重试队列；队列本身写失败（磁盘满/目录只读）时只能记诊断，该次激活丢失但不产生虚假强化。
-- `brain_backup` 的“备份后新增记录合并”只合并记忆内容相关表；恢复合并会按墓碑删除派生行，但不从源库补入恢复点之后的派生激活/提案，之后从真实送达重新积累，不伪造历史。
+- 瞬时存储失败进入最多 100 条的本机重试队列；队列本身写失败（磁盘满/目录只读）或超过 100 条时只记录容量诊断（含丢弃条数/请求 ID），该次激活可能丢失但不产生虚假强化；不静默当作已记账。
+- 已知窗口：回复已经显示、`confirm_delivery()` 尚未执行时进程被杀，这轮不更新激活；这是“宁可不记也不虚记”的取舍，要零丢失需发送前持久化 outbox，留给后续工单。
+- `brain_backup` 的“备份后新增记录合并”对保留的记忆同步当前库的激活汇总/receipts/提案决定，使 `last_active`、重要度与撤销历史一致；墓碑对应的派生行删除，不伪造历史。
 - 重评提案的拒绝冷却从拒绝时刻计算；接受时若记忆已被手动改动，待审建议会标记 `superseded`（需要重新评估），不会静默覆盖用户改动。
 - 自主闲暇（S6-2）只有真正发给 Lan 的消息才计入本单活跃度；内部回复不计数。
 - 实验脚本与合成数据只在 veil-lab 本地；未提交、未外发。
