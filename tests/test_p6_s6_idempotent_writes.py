@@ -28,12 +28,16 @@ class IdempotentWriteTests(unittest.TestCase):
         except FileNotFoundError:
             return 0
 
+    def write(self, name, args, operation_id='op', profile=None):
+        target = profile or self.profile
+        return target.invoke(name, dict(args), operation_id=operation_id)
+
     def test_profile_append_retry_returns_same_result_and_writes_once(self):
         args = {'section': 'facts', 'text': 'Lan likes blue.'}
-        first = self.profile.invoke('profile_append', dict(args))
+        first = self.write('profile_append', args, 'blue')
         versions = self.versions_count()
         body = self.profile.path.read_bytes()
-        second = self.profile.invoke('profile_append', dict(args))
+        second = self.write('profile_append', args, 'blue')
         self.assertEqual(first, second)
         self.assertEqual(body, self.profile.path.read_bytes())
         self.assertEqual(versions, self.versions_count())
@@ -41,23 +45,41 @@ class IdempotentWriteTests(unittest.TestCase):
         self.assertEqual(1, self.profile.read()['facts']['text'].count('Lan likes blue.'))
 
     def test_replace_retry_after_old_text_is_gone_returns_original_success(self):
-        self.profile.invoke('profile_append', {'section': 'growth', 'text': 'Old note.'})
+        self.write('profile_append', {'section': 'growth', 'text': 'Old note.'}, 'old')
         args = {'section': 'growth', 'old_text': 'Old note.', 'new_text': 'New note.'}
-        first = self.profile.invoke('profile_replace', dict(args))
+        first = self.write('profile_replace', args, 'replace')
         versions = self.versions_count()
-        second = self.profile.invoke('profile_replace', dict(args))
+        second = self.write('profile_replace', args, 'replace')
         self.assertEqual(first, second)
         self.assertEqual(versions, self.versions_count())
         self.assertEqual('New note.', self.profile.read()['growth']['text'])
 
     def test_ongoing_add_retry_returns_same_item_id_and_one_row(self):
         args = {'action': 'add', 'text': 'Buy stamps.'}
-        first = self.profile.invoke('ongoing_update', dict(args))
-        second = self.profile.invoke('ongoing_update', dict(args))
+        first = self.write('ongoing_update', args, 'stamps')
+        second = self.write('ongoing_update', args, 'stamps')
         self.assertEqual(first, second)
         items = self.profile.read()['ongoing']['items']
         self.assertEqual(1, len(items))
         self.assertIn(items[0]['id'], first[0])
+
+    def test_same_todo_text_with_a_new_operation_creates_another_item(self):
+        args = {'action': 'add', 'text': 'Buy stamps.'}
+        first = self.write('ongoing_update', args, 'stamps-1')
+        second = self.write('ongoing_update', args, 'stamps-2')
+        self.assertEqual('成功', first[1])
+        self.assertEqual('成功', second[1])
+        self.assertNotEqual(first[0], second[0])
+        items = self.profile.read()['ongoing']['items']
+        self.assertEqual(2, len(items))
+        self.assertEqual({'Buy stamps.'}, {row['text'] for row in items})
+        self.assertEqual(2, len({row['id'] for row in items}))
+
+    def test_same_paragraph_without_a_shared_operation_is_written_again(self):
+        args = {'section': 'facts', 'text': 'Lan likes blue.'}
+        self.profile.invoke('profile_append', dict(args))
+        self.profile.invoke('profile_append', dict(args))
+        self.assertEqual(2, self.profile.read()['facts']['text'].count('Lan likes blue.'))
 
     def test_relationship_append_retry_returns_same_item_and_one_version(self):
         self.profile.root.joinpath('chat.jsonl').write_text(
@@ -65,16 +87,16 @@ class IdempotentWriteTests(unittest.TestCase):
                        ensure_ascii=False) + '\n', encoding='utf-8')
         args = {'section': 'relationship', 'text': '周末不发消息。', 'status': 'confirmed',
                 'sources': ['chat:u1']}
-        first = self.profile.invoke('profile_append', dict(args))
+        first = self.write('profile_append', args, 'weekend')
         versions = self.versions_count()
-        second = self.profile.invoke('profile_append', dict(args))
+        second = self.write('profile_append', args, 'weekend')
         self.assertEqual(first, second)
         self.assertEqual(versions, self.versions_count())
         items = self.profile.read()['relationship']['items']
         self.assertEqual(1, len(items))
 
     def test_retry_after_lost_response_and_process_restart(self):
-        self.profile.invoke('profile_append', {'section': 'facts', 'text': 'Warm tea.'})
+        self.write('profile_append', {'section': 'facts', 'text': 'Warm tea.'}, 'tea')
         args = {'section': 'facts', 'text': 'A quiet morning walk.'}
         real_commit = self.profile._commit_with_version
 
@@ -84,11 +106,11 @@ class IdempotentWriteTests(unittest.TestCase):
 
         with patch.object(self.profile, '_commit_with_version', side_effect=commit_then_lose_response):
             with self.assertRaises(ConnectionError):
-                self.profile.invoke('profile_append', dict(args))
+                self.write('profile_append', args, 'walk')
         self.assertEqual(1, self.profile.read()['facts']['text'].count('A quiet morning walk.'))
         versions = self.versions_count()
         restarted = self.reopen()
-        replay = restarted.invoke('profile_append', dict(args))
+        replay = self.write('profile_append', args, 'walk', profile=restarted)
         self.assertEqual('成功', replay[1])
         self.assertEqual(versions, self.versions_count())
         self.assertEqual(1, restarted.read()['facts']['text'].count('A quiet morning walk.'))
@@ -100,7 +122,7 @@ class IdempotentWriteTests(unittest.TestCase):
 
         def worker():
             try:
-                results.append(self.profile.invoke('ongoing_update', dict(args)))
+                results.append(self.profile.invoke('ongoing_update', dict(args), operation_id='plants'))
             except Exception as exc:  # pragma: no cover - surfaced below
                 errors.append(exc)
 
@@ -128,21 +150,21 @@ class IdempotentWriteTests(unittest.TestCase):
         return self.profile.read()['ongoing']['items'][-1]['id']
 
     def test_complete_reopen_complete_does_not_replay_the_first_receipt(self):
-        self.profile.invoke('ongoing_update', {'action': 'add', 'text': 'Buy stamps.'})
+        self.write('ongoing_update', {'action': 'add', 'text': 'Buy stamps.'}, 'add-stamps')
         item_id = self._ongoing_id()
         done = {'action': 'complete', 'id': item_id}
-        first = self.profile.invoke('ongoing_update', dict(done))
+        first = self.write('ongoing_update', done, 'complete-stamps')
         self.assertEqual('成功', first[1])
-        reopened = self.profile.invoke('ongoing_update', {'action': 'reopen', 'id': item_id})
+        reopened = self.write('ongoing_update', {'action': 'reopen', 'id': item_id}, 'reopen-stamps')
         self.assertEqual('成功', reopened[1])
         self.assertEqual('active', self.profile.read()['ongoing']['items'][0]['status'])
         versions = self.versions_count()
-        second = self.profile.invoke('ongoing_update', dict(done))
+        second = self.write('ongoing_update', done, 'complete-stamps')
         self.assertEqual('成功', second[1])
         self.assertEqual('completed', self.profile.read()['ongoing']['items'][0]['status'])
         self.assertGreater(self.versions_count(), versions)
         versions = self.versions_count()
-        replay = self.profile.invoke('ongoing_update', dict(done))
+        replay = self.write('ongoing_update', done, 'complete-stamps')
         self.assertEqual(second, replay)
         self.assertEqual(versions, self.versions_count())
 
@@ -158,17 +180,17 @@ class IdempotentWriteTests(unittest.TestCase):
         self.assertEqual({'completed', 'active'}, {row['status'] for row in items})
 
     def test_append_retry_survives_an_unrelated_edit(self):
-        self.profile.invoke('profile_append', {'section': 'facts', 'text': 'Paragraph A.'})
+        self.write('profile_append', {'section': 'facts', 'text': 'Paragraph A.'}, 'para-a')
         args = {'section': 'facts', 'text': 'Paragraph B.'}
-        first = self.profile.invoke('profile_append', dict(args))
+        first = self.write('profile_append', args, 'para-b')
         self.assertEqual('成功', first[1])
-        edited = self.profile.invoke('profile_replace', {
+        edited = self.write('profile_replace', {
             'section': 'facts', 'old_text': 'Paragraph A.', 'new_text': 'Paragraph C.',
-        })
+        }, 'edit-a')
         self.assertEqual('成功', edited[1])
         versions = self.versions_count()
         body = self.profile.path.read_bytes()
-        second = self.profile.invoke('profile_append', dict(args))
+        second = self.write('profile_append', args, 'para-b')
         self.assertEqual(first, second)
         self.assertEqual(body, self.profile.path.read_bytes())
         self.assertEqual(versions, self.versions_count())
@@ -183,19 +205,19 @@ class IdempotentWriteTests(unittest.TestCase):
             + json.dumps({'id': 'uB', 'role': 'user', 'content': '周末不发消息。'}, ensure_ascii=False) + '\n',
             encoding='utf-8')
         base = {'section': 'relationship', 'text': '周末不发消息。', 'status': 'confirmed'}
-        first = self.profile.invoke('profile_append', {**base, 'sources': ['chat:uA']})
+        first = self.write('profile_append', {**base, 'sources': ['chat:uA']}, 'src-a')
         self.assertEqual('成功', first[1])
         self.assertEqual(['chat:uA'], self.profile.read()['relationship']['items'][0]['sources'])
-        second = self.profile.invoke('profile_append', {**base, 'sources': ['chat:uB']})
+        second = self.write('profile_append', {**base, 'sources': ['chat:uB']}, 'src-b')
         self.assertEqual('成功', second[1])
         self.assertEqual(['chat:uB'], self.profile.read()['relationship']['items'][0]['sources'])
         versions = self.versions_count()
-        again = self.profile.invoke('profile_append', {**base, 'sources': ['chat:uA']})
+        again = self.write('profile_append', {**base, 'sources': ['chat:uA']}, 'src-a')
         self.assertEqual('成功', again[1])
         self.assertEqual(['chat:uA'], self.profile.read()['relationship']['items'][0]['sources'])
         self.assertGreater(self.versions_count(), versions)
         versions = self.versions_count()
-        retry = self.profile.invoke('profile_append', {**base, 'sources': ['chat:uA']})
+        retry = self.write('profile_append', {**base, 'sources': ['chat:uA']}, 'src-a')
         self.assertEqual(again, retry)
         self.assertEqual(versions, self.versions_count())
         self.assertEqual(1, len(self.profile.read()['relationship']['items']))
@@ -221,12 +243,26 @@ class IdempotentWriteTests(unittest.TestCase):
         self.assertEqual(versions, self.versions_count())
         self.assertEqual(1, self.profile.read()['facts']['text'].count('Keep this paragraph.'))
 
-    def test_evicted_auto_receipt_still_does_not_append_twice(self):
-        with patch.object(lc_mod, 'IDEMPOTENCY_LIMIT', 1):
-            self.profile.invoke('profile_append', {'section': 'facts', 'text': 'Alpha stay.'})
-            self.profile.invoke('profile_append', {'section': 'facts', 'text': 'Beta push.'})
+    def test_expired_call_identity_is_rejected_instead_of_rewriting(self):
+        with patch.object(lc_mod, 'EXPLICIT_IDEMPOTENCY_LIMIT', 2):
+            first = self.write('profile_append', {'section': 'facts', 'text': 'Keep this paragraph.'}, 'keep-me')
+            self.assertEqual('成功', first[1])
+            self.write('profile_append', {'section': 'facts', 'text': 'Second paragraph.'}, 'k2')
+            self.write('profile_append', {'section': 'facts', 'text': 'Third paragraph.'}, 'k3')
             versions = self.versions_count()
-            again = self.profile.invoke('profile_append', {'section': 'facts', 'text': 'Alpha stay.'})
+            again = self.write('profile_append', {'section': 'facts', 'text': 'Keep this paragraph.'}, 'keep-me')
+        self.assertEqual('被拒绝', again[1])
+        self.assertIn('过期', again[0])
+        self.assertEqual(versions, self.versions_count())
+        self.assertEqual(1, self.profile.read()['facts']['text'].count('Keep this paragraph.'))
+
+    def test_same_operation_appends_once_even_after_other_writes(self):
+        args = {'section': 'facts', 'text': 'Alpha stay.'}
+        first = self.write('profile_append', args, 'alpha')
+        self.write('profile_append', {'section': 'facts', 'text': 'Beta push.'}, 'beta')
+        versions = self.versions_count()
+        again = self.write('profile_append', args, 'alpha')
+        self.assertEqual(first, again)
         self.assertEqual('成功', again[1])
         self.assertEqual(versions, self.versions_count())
         self.assertEqual(1, self.profile.read()['facts']['text'].count('Alpha stay.'))

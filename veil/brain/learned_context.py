@@ -87,15 +87,17 @@ EVIDENCE_PAGE_ROWS = 200
 EVIDENCE_QUOTE_PAGES = 4
 EVIDENCE_SOURCE_PAGES = 4
 EVIDENCE_STAGE_PAGES = 5
-# Counters are never silently truncated. When the compact payload would exceed this many unique
-# records, verification fails closed with an explicit reason instead of dropping relevant vetoes.
+# A semantic request judges at most this many unique counters. At or below the limit every
+# counter is sent together, including a cross-language veto with no shared tokens. Above it,
+# counters that do not touch this claim or its evidence are irrelevant history: they must not
+# stop a different cognition. Relevant counters are judged in batches of this size. Clearing an
+# earlier batch does not promote; any contradicted batch stops.
 COUNTEREVIDENCE_LIMIT = 120
-# S6 gate: persisted idempotency receipts for model-driven writes. Bounded so the cognition file
-# stays small; receipts are part of the same atomic body/version transaction as the write itself.
+# Persisted receipts for one write. Identity is the tool call (or an explicit idempotency_key),
+# never a hash of the arguments: the same text on a new call is a new write. A retry of the same
+# call replays only while its result is still current. call: and explicit: keys that age out are
+# refused instead of being written again.
 IDEMPOTENCY_LIMIT = 200
-# Explicit keys are not reused as fresh writes after they age out. Auto keys stay deterministic
-# because the model tool schema cannot carry an idempotency_key; a unique default would duplicate
-# a retried tool call. A later add is a new write only once the previous result is no longer current.
 EXPLICIT_IDEMPOTENCY_LIMIT = 200
 
 _BUSY_TIMEOUT_SQL = {
@@ -263,6 +265,29 @@ def _veto_grounded_in_origins(evidence, counters):
                 if ((_CJK_RE.search(anchor) and anchor in normalized)
                         or re.search(r'(?<!\w)' + re.escape(anchor) + r'(?!\w)', normalized)):
                     return True
+    return False
+
+
+def _counter_touches(text, claim_text, evidence_texts):
+    """Whether a stored counter can bear on this claim. Used only above the batch limit.
+
+    Exact or high-overlap wording and any shared lexical token keep the counter in a batch.
+    A cross-language veto with no shared token is not dropped while the full set still fits
+    in one request; past that limit it cannot be told apart from unrelated history without
+    judging every accumulated counter, which is what used to stop every promotion.
+    """
+    if _matches_governed_claim(claim_text, text) or _matches_governed_claim(text, claim_text):
+        return True
+    tokens = _lexical_tokens(text)
+    if tokens and (tokens & _lexical_tokens(claim_text)):
+        return True
+    for evidence in evidence_texts:
+        if not isinstance(evidence, str) or not evidence:
+            continue
+        if _matches_governed_claim(evidence, text) or _matches_governed_claim(text, evidence):
+            return True
+        if tokens and (tokens & _lexical_tokens(evidence)):
+            return True
     return False
 
 
@@ -630,7 +655,20 @@ class LearnedContext:
         if mid in state['seen'] or mid in state['duplicates']:
             self._mark_chat_duplicate(state, mid)
             return
-        self._remember_seen(state, mid)
+        # Once an ID has been evicted, absence from the bounded sets is not proof that this
+        # row is new. Do not cache it: lookup counts the log, so a duplicate stays missing
+        # and a unique old id is still found.
+        admit = not (state.get('seen_truncated') or state.get('duplicates_truncated'))
+        if admit:
+            self._remember_seen(state, mid)
+        else:
+            self._drop_chat_row(mid)
+            state['corrections'] = [row for row in state['corrections'] if row.get('id') != mid]
+            for watcher in state['watchers'].pop(mid, ()):
+                info = self._chat_cache.get(watcher)
+                if info is not None:
+                    info['confirmation_target'] = ''
+                    info.pop('question', None)
         if row.get('recalled'):
             state['question'] = None
             return
@@ -655,12 +693,16 @@ class LearnedContext:
             if qid not in state['duplicates']:
                 info['confirmation_target'] = target
                 info['question'] = {'id': 'chat:' + qid, 'text': question}
-                state['watchers'].setdefault(qid, []).append(mid)
+                if admit:
+                    state['watchers'].setdefault(qid, []).append(mid)
+        if not admit:
+            return
         self._cache_chat_row(mid, info)
         if _REBUTTAL_CUE_RE.search(text):
             state['corrections'].append({'id': mid, 'text': text, 'time': when, 'seq': seq})
             if len(state['corrections']) > CHAT_CORRECTION_LIMIT:
                 state['corrections'] = state['corrections'][-CHAT_CORRECTION_LIMIT:]
+                state['corrections_truncated'] = True
 
     def _remember_chat_samples(self, handle, state):
         st = os.fstat(handle.fileno())
@@ -791,12 +833,70 @@ class LearnedContext:
             return dict(self._chat_cache)
 
     def _chat_corrections(self, budget=None):
+        if not self._chat_path().exists():
+            return []
         state = self._ensure_chat_state(budget)
         if state is None or state.get('scan_incomplete'):
             return None
+        if (state.get('seen_truncated') or state.get('duplicates_truncated')
+                or state.get('corrections_truncated')):
+            # The bounded lists have dropped history. A partial list would miss an old
+            # rebuttal or revive an evicted duplicate, so read the log or fail closed.
+            return self._scan_chat_corrections(budget)
         with self._instance_lock:
             duplicates = state['duplicates']
             return [row for row in state['corrections'] if row.get('id') not in duplicates]
+
+    def _scan_chat_corrections(self, budget):
+        """Every unique user rebuttal in the log. None means the scan did not finish."""
+        rows = []
+        counts = {}
+        line_no = 0
+        try:
+            with self._chat_path().open('rb') as handle:
+                carry = b''
+                while True:
+                    if budget is not None and budget.expired():
+                        return None
+                    chunk = handle.read(CHAT_SCAN_CHUNK)
+                    if not chunk:
+                        break
+                    carry += chunk
+                    start = 0
+                    while True:
+                        newline = carry.find(b'\n', start)
+                        if newline < 0:
+                            break
+                        line = carry[start:newline]
+                        start = newline + 1
+                        if not line.strip():
+                            continue
+                        line_no += 1
+                        try:
+                            row = json.loads(line.decode('utf-8'))
+                        except ValueError:
+                            continue
+                        if not isinstance(row, dict) or row.get('recalled'):
+                            continue
+                        rid = row.get('message_id') or row.get('id')
+                        if not isinstance(rid, str):
+                            continue
+                        counts[rid] = counts.get(rid, 0) + 1
+                        if row.get('role') != 'user':
+                            continue
+                        text = row.get('content') if 'content' in row else row.get('text')
+                        if (not isinstance(text, str) or not text.strip() or '\ufffd' in text
+                                or not _REBUTTAL_CUE_RE.search(text)):
+                            continue
+                        rows.append({
+                            'id': rid, 'text': text,
+                            'time': row.get('time') if isinstance(row.get('time'), str) else '',
+                            'seq': line_no,
+                        })
+                    carry = carry[start:]
+        except OSError:
+            return None
+        return [row for row in rows if counts.get(row['id']) == 1]
 
     def _chat_lookup(self, mid, budget=None):
         """Resolve one chat:<id> row by ID, reading the file on demand for old evidence.
@@ -1220,7 +1320,13 @@ class LearnedContext:
                 unverified_support.append(source)
 
         rebutted = self._is_rebutted_by_lan(claim_text, data)
-        if not rebutted and valid_origins and chat_index is not None and claim_text:
+        corrections = self._chat_corrections(budget)
+        corrections_unavailable = corrections is None
+        if corrections_unavailable:
+            # An unfinished correction scan is not "no rebuttal". Do not promote on a partial index.
+            any_unavailable = True
+            corrections = []
+        if not rebutted and not corrections_unavailable and valid_origins and chat_index is not None and claim_text:
             cited_times = [
                 resolved_infos[oid]['time']
                 for kind, oid in valid_origins
@@ -1229,8 +1335,7 @@ class LearnedContext:
             if cited_times:
                 latest_cited = max(cited_times)
                 claim_tokens = _lexical_tokens(claim_text)
-                corrections = self._chat_corrections(budget)
-                for info in corrections or []:
+                for info in corrections:
                     mid = info['id']
                     if ('chat', mid) in valid_origins:
                         continue
@@ -1243,7 +1348,7 @@ class LearnedContext:
 
         if rebutted:
             evidence_state = 'rebutted'
-        elif any_unavailable and not valid_origins:
+        elif corrections_unavailable or (any_unavailable and not valid_origins):
             evidence_state = 'unavailable'
         elif missing_refs and valid_origins:
             evidence_state = 'partial_stale'
@@ -1256,7 +1361,6 @@ class LearnedContext:
         else:
             evidence_state = 'none'
 
-        corrections = self._chat_corrections(budget)
         return {
             'kept_refs': kept_refs,
             'dropped': dropped,
@@ -1273,7 +1377,8 @@ class LearnedContext:
             'raw_provenance': provenance,
             'source_unavailable': any_unavailable or chat_index is None,
             'chat_index': resolved_infos,
-            'chat_corrections': corrections or [],
+            'chat_corrections': corrections,
+            'corrections_unavailable': corrections_unavailable,
             'evidence_state': evidence_state,
             'rebutted': rebutted,
             'budget_exhausted': bool(budget is not None and budget.expired()),
@@ -1388,8 +1493,8 @@ class LearnedContext:
                 elif other['source'] == 'lan' and other['id'] in corrected_ids:
                     add('lan', other['text'], other['id'])
         # Corrections are selected by turn order relative to the cited origin, not by overlap:
-        # a low-overlap paraphrase can still contradict. The compact corrections index is built
-        # incrementally with the chat log, so long histories do not rescan every message here.
+        # a low-overlap paraphrase can still contradict. When the bounded index has evicted
+        # history, _chat_corrections has already reread the log or marked the pass unavailable.
         cited = {row['id'] for row in ev['raw_origins']}
         cited_seqs = [row.get('seq') or 0 for row in ev['raw_origins'] if row.get('seq')]
         threshold = min(cited_seqs) if cited_seqs else 0
@@ -1399,6 +1504,27 @@ class LearnedContext:
             if (row.get('seq') or 0) > threshold and _REBUTTAL_CUE_RE.search(row.get('text') or ''):
                 add('correction', row['text'], row['id'])
         return [rows[key] for key in sorted(rows)]
+
+    def _select_counter_batch(self, item, ev, counters):
+        """(batch, index, count). The full set is kept until it no longer fits in one request."""
+        if len(counters) <= COUNTEREVIDENCE_LIMIT:
+            return list(counters), 0, 1
+        evidence_texts = [
+            row.get('text') for row in (ev.get('raw_origins') or [])
+            if isinstance(row, dict) and isinstance(row.get('text'), str)
+        ]
+        relevant = [
+            row for row in counters
+            if _counter_touches(row.get('text') or '', item.get('text') or '', evidence_texts)
+        ]
+        if not relevant:
+            return [], 0, 1
+        batch_count = (len(relevant) + COUNTEREVIDENCE_LIMIT - 1) // COUNTEREVIDENCE_LIMIT
+        raw_index = (item.get('verification') or {}).get('counter_batch') or 0
+        if type(raw_index) is not int or isinstance(raw_index, bool) or raw_index < 0 or raw_index >= batch_count:
+            raw_index = 0
+        start = raw_index * COUNTEREVIDENCE_LIMIT
+        return relevant[start:start + COUNTEREVIDENCE_LIMIT], raw_index, batch_count
 
     @staticmethod
     def _semantic_replacement_target(data, item):
@@ -1416,17 +1542,16 @@ class LearnedContext:
             return 'manual', None, None
         if ev['rebutted'] or self._automatic_write_error(data, item['text'], source='evidence', previous=item):
             return 'contradicted', None, None
+        if ev.get('corrections_unavailable'):
+            return 'stale', None, None
         # `seq` is local ordering metadata. It is not part of the receipt fingerprint: adding it
         # would miss receipts saved before this field existed and send the same cognition to the
         # model again.
         evidence = _fingerprint_evidence(ev['raw_origins'])
-        counters = self._semantic_counters(data, item, ev)
-        if _veto_grounded_in_origins(evidence, counters):
+        all_counters = self._semantic_counters(data, item, ev)
+        if _veto_grounded_in_origins(evidence, all_counters):
             return 'contradicted', None, None
-        if len(counters) > COUNTEREVIDENCE_LIMIT:
-            # Never drop relevant vetoes to fit a request. Fail closed with an explicit state so
-            # the summary can explain why promotion is paused; a new candidate is not approved.
-            return 'counterevidence_overflow', None, None
+        counters, batch_index, batch_count = self._select_counter_batch(item, ev, all_counters)
         known = item.get('verification') or {}
         if known.get('replaces') and self._semantic_replacement_target(data, item) is None:
             return 'stale', None, None
@@ -1451,6 +1576,11 @@ class LearnedContext:
             'evidence': evidence_fp,
             'counters': _fingerprint(counters),
         }
+        # Batch fields stay out of the single-request fingerprint so receipts saved before
+        # batching, and any set that still fits in one request, keep the same key.
+        if batch_count > 1:
+            fingerprints['batch'] = batch_index
+            fingerprints['batch_count'] = batch_count
         return 'pending', fingerprints, payload
 
     def _semantic_current(self, data, item, ev, rule):
@@ -1616,12 +1746,23 @@ class LearnedContext:
                 if (verdict == 'supported' and not commit_without_recheck
                         and not current[0][1]['evidence']):
                     verdict = 'insufficient'
+                batch_index = receipt.get('batch', 0)
+                batch_count = receipt.get('batch_count', 1)
+                # A cleared batch is not a promotion. The next pending scan judges the next
+                # slice; only the last clear batch, or a single request, may promote.
+                intermediate = (
+                    verdict == 'supported' and type(batch_index) is int and type(batch_count) is int
+                    and not isinstance(batch_index, bool) and batch_index + 1 < batch_count
+                )
                 receipt.update(state=verdict, reason=reason if reason in SEMANTIC_REASONS else verdict)
                 receipt.pop('targets', None)
                 now = _now()
                 for item, _ in current:
                     requested = (item.get('verification') or {}).get('requested', item['status'])
-                    if verdict == 'supported':
+                    if intermediate:
+                        item.setdefault('verification', {})['counter_batch'] = batch_index + 1
+                        item.update(source='peter', status='uncertain', evidence_state='none')
+                    elif verdict == 'supported':
                         previous = self._semantic_replacement_target(data, item)
                         if previous is not None:
                             previous.update(status='outdated', superseded_by=item['id'], updated_at=now)
@@ -2015,8 +2156,13 @@ class LearnedContext:
             self._recover_storage_transaction()
 
     @staticmethod
-    def _operation_identity(name, args):
-        """(key, args_fingerprint). Explicit keys must not be reused for different arguments."""
+    def _operation_identity(name, args, operation_id=None):
+        """(key or None, args fingerprint). The same arguments are not a retry.
+
+        An explicit idempotency_key wins. Otherwise the key is the tool-call identity threaded
+        from the chat loop. No identity means a new write: hashing the arguments would collapse
+        a deliberate second todo into a replay of the first.
+        """
         explicit = args.get('idempotency_key') if isinstance(args, dict) else None
         payload = {k: v for k, v in (args or {}).items() if k != 'idempotency_key'}
         if isinstance(payload.get('sources'), list):
@@ -2027,11 +2173,16 @@ class LearnedContext:
             if not isinstance(explicit, str) or not explicit.strip() or len(explicit.strip()) > 100:
                 raise UserError('idempotency_key must be a non-empty string of at most 100 characters.')
             return 'explicit:' + explicit.strip(), fingerprint
-        # Auto keys stay a pure function of the operation. The model tools cannot pass
-        # idempotency_key, so a unique default would turn one lost response into a second write.
-        # A retry is replayed only while the guard still matches; a later edit, completion or
-        # reopen falls through and writes again.
-        return 'auto:' + fingerprint, fingerprint
+        if operation_id is not None:
+            if not isinstance(operation_id, str) or not operation_id.strip() or len(operation_id.strip()) > 512:
+                raise UserError('operation_id must be a non-empty string of at most 512 characters.')
+            return 'call:' + operation_id.strip(), fingerprint
+        return None, fingerprint
+
+    @staticmethod
+    def _durable_idempotency_key(key):
+        text = str(key)
+        return text.startswith('explicit:') or text.startswith('call:')
 
     @staticmethod
     def _idempotent_guard_ok(data, guard):
@@ -2113,14 +2264,14 @@ class LearnedContext:
             expired.remove(key)
         block[key] = {'args': fingerprint, 'result': list(result), 'at': _now(),
                       'guard': guard or {}}
-        auto = [item for item in block if not str(item).startswith('explicit:')]
-        explicit = [item for item in block if str(item).startswith('explicit:')]
-        if len(auto) > IDEMPOTENCY_LIMIT:
-            for stale in sorted(auto, key=lambda item: block[item].get('at', ''))[:len(auto) - IDEMPOTENCY_LIMIT]:
+        legacy = [item for item in block if not LearnedContext._durable_idempotency_key(item)]
+        durable = [item for item in block if LearnedContext._durable_idempotency_key(item)]
+        if len(legacy) > IDEMPOTENCY_LIMIT:
+            for stale in sorted(legacy, key=lambda item: block[item].get('at', ''))[:len(legacy) - IDEMPOTENCY_LIMIT]:
                 block.pop(stale, None)
-        if len(explicit) > EXPLICIT_IDEMPOTENCY_LIMIT:
-            overflow = sorted(explicit, key=lambda item: block[item].get('at', ''))
-            overflow = overflow[:len(explicit) - EXPLICIT_IDEMPOTENCY_LIMIT]
+        if len(durable) > EXPLICIT_IDEMPOTENCY_LIMIT:
+            overflow = sorted(durable, key=lambda item: block[item].get('at', ''))
+            overflow = overflow[:len(durable) - EXPLICIT_IDEMPOTENCY_LIMIT]
             for stale in overflow:
                 block.pop(stale, None)
                 if stale not in expired:
@@ -2640,29 +2791,29 @@ class LearnedContext:
 
     # ---------- Peter's tools ----------
 
-    def invoke(self, name, args):
+    def invoke(self, name, args, operation_id=None):
         if not isinstance(args, dict):
             return 'arguments must be an object.', '被拒绝', name
         try:
             if name in ('profile_append', 'profile_replace'):
-                return self._invoke_profile(name, args)
+                return self._invoke_profile(name, args, operation_id)
             if name == 'ongoing_update':
-                return self._invoke_ongoing(args)
+                return self._invoke_ongoing(args, operation_id)
             return 'Unknown profile tool.', '被拒绝', name
         except UserError as exc:
             self._log_error(name, exc)
             return str(exc), '被拒绝', name
 
-    def _invoke_profile(self, name, args):
+    def _invoke_profile(self, name, args, operation_id=None):
         section = args.get('section') or 'facts'
         if section == 'relationship':
-            return self._invoke_relationship(name, args)
+            return self._invoke_relationship(name, args, operation_id)
         if section not in SECTIONS:
             return 'section must be facts, growth or relationship.', '被拒绝', name
         with self.lock:
             data = self._load()
             try:
-                key, fingerprint = self._operation_identity(name, args)
+                key, fingerprint = self._operation_identity(name, args, operation_id)
                 replayed = self._idempotent_result(data, key, fingerprint)
             except UserError as exc:
                 return str(exc), '被拒绝', name
@@ -2695,15 +2846,6 @@ class LearnedContext:
             error = self._automatic_write_error(data, candidate)
             if error:
                 return error, '被拒绝', name
-            if name == 'profile_append':
-                present = [_norm_text(part) for part in re.split(r'\n[ \t]*\n', before) if part.strip()]
-                if _norm_text(candidate) in present:
-                    after_bytes = self._section_bytes(data, section)
-                    limit = self.section_budgets[section]
-                    return (
-                        f'Saved. {section} is now {after_bytes} of {limit} bytes; '
-                        f'it takes effect from the next request.'
-                    ), '成功', name
             old_data = json.loads(json.dumps(data, ensure_ascii=False))
             data[section]['text'] = after
             data[section]['updated_at'] = _now()
@@ -2725,11 +2867,12 @@ class LearnedContext:
                          'paragraph': _norm_text(candidate)}
             else:
                 guard = {'kind': 'section_text', 'section': section, 'text': _norm_text(after)}
-            self._remember_idempotent(data, key, fingerprint, result, guard=guard)
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result, guard=guard)
             self._commit_with_version(name, old_data, data)
             return result
 
-    def _invoke_relationship(self, name, args):
+    def _invoke_relationship(self, name, args, operation_id=None):
         """Ticket 422 / P6-S3: Peter updates the stable relationship base through unified governance."""
         requested = args.get('status') or 'uncertain'
         if requested not in ('confirmed', 'uncertain'):
@@ -2740,7 +2883,7 @@ class LearnedContext:
         with self.lock:
             data = self._load()
             try:
-                key, fingerprint = self._operation_identity(name, args)
+                key, fingerprint = self._operation_identity(name, args, operation_id)
                 replayed = self._idempotent_result(data, key, fingerprint)
             except UserError as exc:
                 return str(exc), '被拒绝', name
@@ -2788,12 +2931,13 @@ class LearnedContext:
                             block['updated_at'] = now
                             result = (f'Relationship evidence updated ({state}). Nothing duplicated.',
                                       '成功', name)
-                            self._remember_idempotent(
-                                data, key, fingerprint, result,
-                                guard={'kind': 'relationship_refresh', 'id': existing['id'],
-                                       'status': existing.get('status'),
-                                       'text': _norm_text(existing.get('text')),
-                                       'sources': sorted(str(source) for source in existing.get('sources') or [])})
+                            if key is not None:
+                                self._remember_idempotent(
+                                    data, key, fingerprint, result,
+                                    guard={'kind': 'relationship_refresh', 'id': existing['id'],
+                                           'status': existing.get('status'),
+                                           'text': _norm_text(existing.get('text')),
+                                           'sources': sorted(str(source) for source in existing.get('sources') or [])})
                             self._commit_with_version(name + '_refresh_evidence', before, data)
                             return result
                     return (
@@ -2937,11 +3081,12 @@ class LearnedContext:
                          'sources': sorted(str(source) for source in (replacement.get('sources') or []))}
             else:
                 guard = {'kind': 'relationship_retired', 'id': previous['id']}
-            self._remember_idempotent(data, key, fingerprint, result, guard=guard)
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result, guard=guard)
             self._commit_with_version(name, before, data)
             return result
 
-    def _invoke_ongoing(self, args):
+    def _invoke_ongoing(self, args, operation_id=None):
         action = args.get('action')
         text = args.get('text')
         item_id = args.get('id')
@@ -2953,7 +3098,7 @@ class LearnedContext:
         with self.lock:
             data = self._load()
             try:
-                key, fingerprint = self._operation_identity('ongoing_update', args)
+                key, fingerprint = self._operation_identity('ongoing_update', args, operation_id)
                 replayed = self._idempotent_result(data, key, fingerprint)
             except UserError as exc:
                 return str(exc), '被拒绝', 'ongoing_update'
@@ -2969,14 +3114,6 @@ class LearnedContext:
                 error = self._automatic_write_error(data, text.strip())
                 if error:
                     return error, '被拒绝', 'ongoing_update'
-                existing = next((row for row in items
-                                 if row.get('status') in ('active', 'uncertain')
-                                 and _norm_text(row.get('text')) == _norm_text(text)), None)
-                if existing is not None:
-                    after_bytes = self._section_bytes(data, 'ongoing')
-                    limit = self.section_budgets['ongoing']
-                    return (f'Added ongoing {existing["id"]}. ongoing: {after_bytes} of {limit} bytes used.',
-                            '成功', 'ongoing_update')
                 item = {
                     'id': uuid.uuid4().hex[:12], 'text': text.strip(), 'status': 'active',
                     'sources': sources, 'created_at': now, 'updated_at': now,
@@ -3035,10 +3172,11 @@ class LearnedContext:
                       '成功', 'ongoing_update')
             guard_id = item['id'] if action in ('update', 'complete', 'reopen') else items[-1]['id']
             guarded = item if action in ('update', 'complete', 'reopen') else items[-1]
-            self._remember_idempotent(data, key, fingerprint, result,
-                                      guard={'kind': 'ongoing_item', 'id': guard_id,
-                                             'status': guarded.get('status'),
-                                             'text': _norm_text(guarded.get('text'))})
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result,
+                                          guard={'kind': 'ongoing_item', 'id': guard_id,
+                                                 'status': guarded.get('status'),
+                                                 'text': _norm_text(guarded.get('text'))})
             self._commit_with_version(f'ongoing_{action}', before, data)
             return result
 

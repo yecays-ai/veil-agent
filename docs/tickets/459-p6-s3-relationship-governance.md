@@ -59,7 +59,7 @@
 | 聊天历史全量读取 | 已关闭：增量解析、400 条有界缓存、旧证据按需查询、删除/改写失效重建 | `docs/tickets/461-p5-s6-gates.md`；`tests/test_p6_s6_chat_evidence_budget.py`；5 万条基准 |
 | 实时证据时间预算 | 已关闭：一次核验共享墙钟预算，分页查询，超限/截断保守降级 | 同上（含真实 SQLite 排他锁） |
 | 追加重试幂等 | 已关闭：持久化回执 + 状态守卫，丢响应/并发/重启只落一次 | `tests/test_p6_s6_idempotent_writes.py` |
-| 反证长期积累 | 已关闭：去重 + 120 条上限 + `counterevidence_overflow` 安全降级，不截断否决 | 同上；`CounterEvidenceBoundsTests` |
+| 反证长期积累 | 已关闭：超限按相关性分批，不因无关反证停止全部晋升；相关否决不丢 | `CounterEvidenceBoundsTests` |
 | 任意跨语言同义否决 | 已关闭（能力边界内）：无锚点翻译候选经语义核验；DeepSeek 合成实验 contradicted 不注入，无关正例 supported 并注入；Lan 可显式恢复 | `docs/reports/461-cross-language-live-20261127.md` |
 
 ## 验收步骤

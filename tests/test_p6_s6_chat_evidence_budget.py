@@ -122,6 +122,62 @@ class ChatEvidenceIndexTests(unittest.TestCase):
         self.assertEqual('missing', status)
         self.assertIsNone(info)
 
+    def test_seen_eviction_does_not_resurrect_a_duplicate_or_drop_a_unique_id(self):
+        rows = [self.user_row('old-dup', '第一次出现')]
+        rows.extend(self.user_row('u%d' % i, '唯一消息 %d' % i) for i in range(6))
+        rows.append(self.user_row('old-dup', '淘汰之后又出现'))
+        self.write_rows(rows)
+        with patch.object(lc_mod, 'CHAT_SEEN_LIMIT', 3):
+            index = self.lc._chat_user_index()
+            self.assertNotIn('old-dup', index)
+            self.assertEqual('missing', self.lc._chat_lookup('old-dup')[1])
+            info, status = self.lc._chat_lookup('u0')
+        self.assertEqual('ok', status)
+        self.assertEqual('唯一消息 0', info['text'])
+
+    def test_evicted_duplicate_id_stays_missing(self):
+        self.write_rows([
+            self.user_row('d1', '重复甲'),
+            self.user_row('d1', '重复甲'),
+            self.user_row('d2', '重复乙'),
+            self.user_row('d2', '重复乙'),
+            self.user_row('d1', '重复甲又来了'),
+        ])
+        with patch.object(lc_mod, 'CHAT_DUP_LIMIT', 1):
+            index = self.lc._chat_user_index()
+            self.assertNotIn('d1', index)
+            self.assertNotIn('d2', index)
+            self.assertEqual('missing', self.lc._chat_lookup('d1')[1])
+            self.assertEqual('missing', self.lc._chat_lookup('d2')[1])
+
+    def test_evicted_correction_is_still_returned(self):
+        rows = [self.user_row('c0', '不对，旧的纠正必须留下', time='2026-11-20T09:00:00+08:00')]
+        rows.extend(self.user_row('u%d' % i, '普通消息 %d' % i) for i in range(3))
+        rows.append(self.user_row('c1', '不对，新的纠正也在', time='2026-11-20T12:00:00+08:00'))
+        self.write_rows(rows)
+        with patch.object(lc_mod, 'CHAT_CORRECTION_LIMIT', 1):
+            corrections = self.lc._chat_corrections()
+        self.assertEqual(['c0', 'c1'], [row['id'] for row in corrections])
+
+    def test_unfinished_correction_scan_is_unavailable_not_empty(self):
+        claim = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
+        self.write_rows([
+            self.user_row('origin', claim, time='2026-11-20T08:00:00+08:00'),
+            self.user_row('c0', '不对，旧的纠正必须留下', time='2026-11-20T09:00:00+08:00'),
+            self.user_row('c1', '不对，新的纠正也在', time='2026-11-20T12:00:00+08:00'),
+        ])
+        with patch.object(lc_mod, 'CHAT_CORRECTION_LIMIT', 1):
+            self.assertEqual(['c0', 'c1'], [row['id'] for row in self.lc._chat_corrections()])
+            budget = _EvidenceBudget(1000)
+            budget.deadline = time.monotonic() - 1
+            self.assertIsNone(self.lc._scan_chat_corrections(budget))
+            with patch.object(self.lc, '_scan_chat_corrections', return_value=None):
+                ev = self.lc._evaluate_sources(['chat:origin'], claim, self.lc.read())
+        self.assertTrue(ev['corrections_unavailable'])
+        self.assertEqual(1, ev['valid_origin_count'])
+        self.assertEqual('unavailable', ev['evidence_state'])
+        self.assertEqual([], ev['chat_corrections'])
+
 
 class EvidencePageAndBudgetTests(unittest.TestCase):
     def setUp(self):
@@ -282,6 +338,7 @@ class CounterEvidenceBoundsTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.lc = LearnedContext(Path(tmp.name), 'fake', {'file': 'learned-context.json'})
         self.lc.root.mkdir()
+        self.chat = self.lc.root / 'chat.jsonl'
 
     def test_identical_vetoes_are_deduplicated(self):
         data = self.lc.read()
@@ -292,19 +349,90 @@ class CounterEvidenceBoundsTests(unittest.TestCase):
         counters = self.lc._semantic_counters(data, item, ev)
         self.assertEqual(1, len([row for row in counters if row['kind'] == 'veto']))
 
-    def test_overflow_fails_closed_without_truncating_vetoes(self):
+    def test_unrelated_overflow_does_not_block_a_standing_agreement(self):
+        claim = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
         data = self.lc.read()
         data['relationship']['vetoed'] = [
             {'text': '用户否决的独立事项 %d' % i, 'norm_text': '用户否决的独立事项 %d' % i}
             for i in range(121)
         ]
-        item = {'id': 'r1', 'text': 'A calm new note.', 'status': 'uncertain', 'source': 'peter'}
-        ev = {'raw_origins': [], 'raw_provenance': {}, 'source_unavailable': False,
-              'missing_refs': [], 'valid_origin_count': 0, 'kept_refs': [],
-              'chat_corrections': [], 'chat_index': {}, 'evidence_state': 'none', 'rebutted': False}
-        state, fingerprints, payload = self.lc._semantic_basis(data, item, ev, 'rule')
-        self.assertEqual('counterevidence_overflow', state)
-        self.assertIsNone(payload)
+        self.lc._write(data)
+        self.chat.write_text(json.dumps({'id': 'u1', 'role': 'user', 'content': claim},
+                                        ensure_ascii=False) + '\n', encoding='utf-8')
+        _, state, _ = self.lc.submit_candidate('relationship', claim, status='confirmed',
+                                               sources=('chat:u1',))
+        self.assertEqual('成功', state)
+        item = self.lc.relationship_items()[0]
+        self.assertEqual('literal', item['semantic_state'])
+        self.assertEqual('confirmed', item['status'])
+        self.assertIn(claim, relationship_base.build(self.lc)['text'])
+        self.assertNotIn('not confirmed', relationship_base.build(self.lc)['text'])
+
+    def test_relevant_veto_still_blocks_when_unrelated_history_overflows(self):
+        claim = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
+        data = self.lc.read()
+        data['relationship']['vetoed'] = [
+            {'text': '用户否决的独立事项 %d' % i, 'norm_text': '用户否决的独立事项 %d' % i}
+            for i in range(120)
+        ]
+        data['relationship']['vetoed'].append({'text': '不要在重逢时先拥抱', 'norm_text': '不要在重逢时先拥抱'})
+        self.lc._write(data)
+        self.chat.write_text(json.dumps({'id': 'u1', 'role': 'user', 'content': claim},
+                                        ensure_ascii=False) + '\n', encoding='utf-8')
+        _, state, _ = self.lc.submit_candidate('relationship', claim, status='confirmed',
+                                               sources=('chat:u1',))
+        self.assertEqual('成功', state)
+        self.assertNotIn(claim, relationship_base.build(self.lc)['text'])
+        task, = self.lc.pending_relationship_semantics()
+        texts = [row['text'] for row in task['payload']['counterevidence']]
+        self.assertIn('不要在重逢时先拥抱', texts)
+        self.assertFalse(any(text.startswith('用户否决的独立事项') for text in texts))
+        self.assertTrue(self.lc.claim_relationship_semantic(task['claim_id']))
+        self.assertTrue(self.lc.finish_relationship_semantic(task['claim_id'], verdict='contradicted'))
+        self.assertNotIn(claim, relationship_base.build(self.lc)['text'])
+        self.assertEqual('contradicted', self.lc.relationship_items()[0]['semantic_state'])
+
+    def test_exact_veto_still_rejects_the_write_above_the_batch_limit(self):
+        claim = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
+        data = self.lc.read()
+        data['relationship']['vetoed'] = [
+            {'text': '用户否决的独立事项 %d' % i, 'norm_text': '用户否决的独立事项 %d' % i}
+            for i in range(120)
+        ]
+        data['relationship']['vetoed'].append({'text': claim, 'norm_text': claim})
+        self.lc._write(data)
+        _, state, _ = self.lc.submit_candidate('relationship', claim, status='confirmed', sources=())
+        self.assertEqual('被拒绝', state)
+        self.assertNotIn(claim, relationship_base.build(self.lc)['text'])
+
+    def test_relevant_counters_promote_only_after_the_last_clear_batch(self):
+        claim = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
+        data = self.lc.read()
+        data['relationship']['vetoed'] = [
+            {'text': '不要拥抱事项%d' % i, 'norm_text': '不要拥抱事项%d' % i}
+            for i in range(121)
+        ]
+        self.lc._write(data)
+        self.chat.write_text(json.dumps({'id': 'u1', 'role': 'user', 'content': claim},
+                                        ensure_ascii=False) + '\n', encoding='utf-8')
+        _, state, _ = self.lc.submit_candidate('relationship', claim, status='confirmed',
+                                               sources=('chat:u1',))
+        self.assertEqual('成功', state)
+        first, = self.lc.pending_relationship_semantics()
+        self.assertEqual(120, len(first['payload']['counterevidence']))
+        self.assertTrue(self.lc.claim_relationship_semantic(first['claim_id']))
+        self.assertTrue(self.lc.finish_relationship_semantic(first['claim_id'], verdict='supported'))
+        item = self.lc.relationship_items()[0]
+        self.assertNotEqual('confirmed', item.get('effective_status', item['status']))
+        self.assertNotIn(claim, relationship_base.build(self.lc)['text'])
+        self.assertEqual(1, self.lc.read()['relationship']['items'][0]['verification']['counter_batch'])
+        second, = self.lc.pending_relationship_semantics()
+        self.assertNotEqual(first['claim_id'], second['claim_id'])
+        self.assertEqual(1, len(second['payload']['counterevidence']))
+        self.assertTrue(self.lc.claim_relationship_semantic(second['claim_id']))
+        self.assertTrue(self.lc.finish_relationship_semantic(second['claim_id'], verdict='supported'))
+        self.assertEqual('confirmed', self.lc.relationship_items()[0]['status'])
+        self.assertIn(claim, relationship_base.build(self.lc)['text'])
 
 
 if __name__ == '__main__':

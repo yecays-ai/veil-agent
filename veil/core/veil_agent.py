@@ -4885,7 +4885,9 @@ class Chat:
                 if not isinstance(args, dict):
                     result, state, summary = 'arguments must be an object.', '被拒绝', call.function.name
                 else:
-                    result, state, summary = self.profile.invoke(call.function.name, args)
+                    result, state, summary = self.profile.invoke(
+                        call.function.name, args,
+                        operation_id=f'{request_id}:{tool_call_id}' if tool_call_id else None)
             elif call.function.name == 'autonomy_history':
                 from veil.autonomy.autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
                 args = json.loads(call.function.arguments or '{}')

@@ -69,14 +69,19 @@ class CrossLanguageVetoTests(unittest.TestCase):
         self.assertTrue(self.item(claim)['prompt_vetoed'])
 
     def test_unrelated_positive_still_promotes_with_the_same_veto_present(self):
-        self.add_lan_veto('以后见面不要用那个称呼叫我。')
-        self.write_chat({'id': 'u2', 'role': 'user', 'content': '下午我想喝茶。'})
-        claim = 'Lan likes tea in the afternoon.'
+        veto = '以后见面不要用那个称呼叫我。'
+        evidence = '我们约好了，每次分开超过三天，重逢时先拥抱再开口。'
+        claim = 'Whenever we have been apart for more than three days, we hug before either of us speaks.'
+        self.add_lan_veto(veto)
+        self.write_chat({'id': 'u2', 'role': 'user', 'content': evidence})
+        self.assertFalse(_matches_governed_claim(claim, veto))
+        self.assertFalse(_matches_governed_claim(evidence, veto))
         _, state, _ = self.profile.submit_candidate('relationship', claim, status='confirmed',
                                                     sources=('chat:u2',))
         self.assertEqual('成功', state)
         task = self.pending(claim)
-        self.assertTrue(task['payload']['counterevidence'])
+        self.assertIn(veto, [row['text'] for row in task['payload']['counterevidence']])
+        self.assertNotIn(claim, relationship_base.build(self.profile)['text'])
         self.finish(task, 'supported')
         self.assertIn(claim, relationship_base.build(self.profile)['text'])
         self.assertEqual('confirmed', self.item(claim)['status'])
