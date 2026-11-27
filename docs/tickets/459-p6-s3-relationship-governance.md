@@ -1,0 +1,38 @@
+# P6-S3｜关系底座解耦、证据链晋升与认知治理
+
+- **工单编号**：459（分支 `ticket/459-p6-s3-relationship-governance`，worktree `worktrees/459-p6-s3`）
+- **基线提交**：`main = 2a264a7`（PR #458 已合并，含 P6-S0/S1/S2/S4、P4/P5 管理中心及仓库目录结构重整）
+- **产品格**：A（陪伴核心：关系认知、长期记忆与行为一致性）
+- **做完后 Lan 能多做的一件事**：`facts` 和 `growth` 接近满载时，Peter 仍能正常记录和修订关系共识与进行中事项；从真实聊天及事件中形成有可靠用户原话证据支持的 `confirmed` 认知，杜绝自猜自证；Lan 随时拥有锁定、纠正、删除、恢复历史版本的最高控制权，并在 Brain 管理中心与召回诊断里区分“已存储”和“实际注入”。
+- **与 P6-S5 并行边界**：
+  - S3 独占/主责：`veil/brain/learned_context.py`、`veil/brain/relationship_base.py`、`veil/tools/learned_tools.py`、`veil/prompts/defaults/memory.learned.*`、`veil/prompts/defaults/memory.relationship*`、`desktop/peter-page.js`。
+  - S3 与 S5 共享只读/接口衔接：`veil/core/veil_agent.py`（仅改 `profile` 配置解析、`relationship_base` 注入、预算裁剪及 `debug['relationship_base']` / `request_snapshots` 字段，不改检索/判官/联想逻辑）、`veil/brain/brain_p4_api.py` / `veil/server/web_agent.py` / `desktop/workspace-brain.js` / `desktop/chat.js`（仅改 `cognition` / `peter-page` / `relationship_base` 展示）。S3 不修改 `brain_retrieval.py`、`recall_judge.py`、`natural_association.py` 或 `memory_agent.py` 检索与判官逻辑。
+
+## 基线审计与真实缺口（基于 `2a264a7`）
+
+### 1. 四区独立预算与存量迁移
+- **现状**：`learned_context.py` 使用 `DEFAULT_MAX_BYTES = 4000` 共享上限；`veil_agent.py` 默认 `profile.max_bytes = 3000`；`_validate()` 在 `_load()` 时直接调用 `_check_budget()`，导致存量超限时整个 `LearnedContext` 读取失败。
+- **缺口**：缺乏 `facts=1800B / growth=2000B / relationship=1500B / ongoing=900B`（合计 6200B）四区独立计算、独立写入校验与超限降级状态；缺少无损幂等迁移入口（含 dry-run 与回滚保护）；旧 `profile.max_bytes` 会隐式覆盖或误导 UI/工具提示。
+
+### 2. 关系认知严格证据链晋升与失效降级
+- **现状**：`_verified_sources()` 仅校验 `chat:<message_id>`（`chat.jsonl` 中 `role == 'user'`），`event:` / `memory:` 仅作为指针保留，无法追溯 `brain.db` 中的 `event_ledger(kind='stage-evidence', role='user')` 与 `quotes(speaker='user')`。
+- **缺口**：缺少经 `event:` / `memory:` 追溯真实用户原话的统一核验入口、同源证据去重、用户后续反驳/纠正校验、`stale_ref` 失效检测与安全降级（不足证据时降级而非继续作为 `confirmed` 注入），且缺少带缓存/索引的有界查询。
+
+### 3. Lan 最高控制权与写入一致性
+- **现状**：`relationship` 条目仅有 `source='lan'|'evidence'|'peter'`，无 `locked` 字段；Peter 可通过 `profile_replace` 修改或淘汰任意条目；Lan 删除的认知无否决墓碑保护；`save_relationship` 仅保留 `sources`/`superseded_by` 会剥离新增治理元数据。
+- **缺口**：需要 `locked`、删除/否决保护（`vetoed`/`rejected` 记录防旧证据或恢复复活）、历史版本恢复入口、统一权限/锁定复核、正文与版本记录一致性保证。
+
+### 4. 每轮最小关系底座与诊断
+- **现状**：`relationship_base.select()` 按 `(status, source, updated_at, id)` 排序，超长单条整条丢弃，未优先保护 `locked`，未排除证据完全失效的模型认知，未记录“已存储 / 当前有效 / 本轮选中 / 实际注入 / 未注入原因”的完整分层诊断。
+- **缺口**：补齐 `locked` 最高优先、超长高优先级条目的保义压缩呈现（仅作用于呈现层）、失效认知隔离、跨区冲突提示及真实请求快照后的注入状态回填。
+
+## 当前状态
+
+- 已完成开发与隔离回归验证（分支 `ticket/459-p6-s3-relationship-governance`，待 Lan 审核与合并；未部署正式目录）。
+
+## 验收步骤
+
+1. 在隔离副本打开 Brain「关系与成长」与「Peter 档案」页，确认四区各自显示独立字节预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`）；当 `facts` 和 `growth` 接近满载时，仍可新增 `relationship` 与 `ongoing` 条目。
+2. 通过真实工具链路提交带有效 `chat:` 或 `event:`/`memory:`（含 `stage-evidence(chat, user)` / `quotes`）的认知，确认晋升为 `confirmed`；提交无证据或仅引用 assistant/tool/自猜的认知，确认保持 `uncertain`。
+3. 在管理界面锁定或纠正一条关系认知，确认 Peter 无法覆盖，且下一次对话请求立即使用最新状态；删除一条认知后，旧证据不会将其自动复活。
+4. 在「召回诊断」与「关系与成长」中核对：已存储认知、当前有效认知、本轮选中认知、实际注入认知与未注入原因（去重/预算/失效）区分清晰。

@@ -1585,9 +1585,11 @@ function recallDetails(r){
   const base=r.relationship_base||{},baseItems=Array.isArray(base.items)?base.items:[];
   const baseState=!hasBase?'未记录（这条诊断早于关系底色功能）'
     :baseItems.length
-      ?`${baseItems.length} 条（${base.chars||0} 字，${base.tokens||0} tokens）：${baseItems.join(', ')}`
+      ?`${baseItems.length} 条（${base.chars||0} 字，${base.tokens||0} tokens；存储 ${base.stored_count??'?'} / 有效 ${base.active_count??'?'} / 选中 ${n(base.selected_items)||baseItems.length}）：${baseItems.join(', ')}`
       :`0 条${base.reason?`（${base.reason}）`:''}`;
   lines.push(`关系底色：${baseState}`);
+  if(n(base.compressed_items))lines.push(`关系底色保义压缩：${ids(base.compressed_items)}`);
+  if(n(base.cross_section_conflicts))lines.push(`跨区冲突提示：${ids(base.cross_section_conflicts)}`);
   if(base.degraded)lines.push(`关系底色没全放进去：${base.reason||'空间不足'}`+(n(base.dropped)?`；舍弃 ${base.dropped.map(x=>`${x.id}（${x.reason||'?'}）`).join('；')}`:''));
   if(base.space_tokens!==null&&base.space_tokens!==undefined)lines.push(`本轮必需块之后剩 ${base.space_tokens} tokens 给记忆`);
   if(n(r.relevant_recall))lines.push('相关召回：'+ids(r.relevant_recall));

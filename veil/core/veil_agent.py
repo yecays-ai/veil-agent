@@ -1073,7 +1073,22 @@ def load_character(root, character_id):
                 raise ValueError('profile.file has an invalid name')
             profile = {'file': profile_file, 'max_bytes': positive_int(profile.get('max_bytes', 3000))}
             if learned:
+                from veil.brain.learned_context import SECTION_BUDGETS
                 profile['learned'] = True
+                section_budgets = dict(SECTION_BUDGETS)
+                raw_budgets = raw_profile.get('section_budgets')
+                if isinstance(raw_budgets, dict):
+                    for sec in section_budgets:
+                        if sec in raw_budgets:
+                            section_budgets[sec] = positive_int(raw_budgets[sec])
+                for sec in section_budgets:
+                    key = f'{sec}_max_bytes'
+                    if key in raw_profile:
+                        section_budgets[sec] = positive_int(raw_profile[key])
+                if 'max_bytes' in raw_profile:
+                    profile['legacy_max_bytes'] = positive_int(raw_profile['max_bytes'])
+                profile['section_budgets'] = section_budgets
+                profile['max_bytes'] = sum(section_budgets.values())
                 legacy = profile.get('legacy_file', 'about-lan.md')
                 if (not isinstance(legacy, str) or Path(legacy).name != legacy
                         or not legacy.endswith('.md')):
@@ -2316,7 +2331,9 @@ class Chat:
                 from veil.persona.profile_notes import ProfileNotes
                 self.profile = ProfileNotes(store.root, cfg.id, cfg.profile)
             if tools and hasattr(tools, 'announce_profile_notes'):
-                tools.announce_profile_notes(cfg.profile['max_bytes'])
+                tools.announce_profile_notes(
+                    cfg.profile.get('section_budgets') or cfg.profile['max_bytes']
+                )
                 self.pending_capability_event = tools.capability_event
                 self.pending_capability_event_model = capability_model_notice(tools)
         self.user_persona = None
@@ -4307,6 +4324,10 @@ class Chat:
         observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
+        relationship_selected_ids = [
+            item.get('id') for item in relationship.get('items', [])
+            if isinstance(item, dict) and item.get('id')
+        ]
         # Ticket 422 review: the relationship base is a required block, so it must not be what makes a
         # turn exceed the provider limit. Whole entries are dropped (lowest priority first) and the
         # diagnostic says so; the recent exchange and the user's own message are never touched here.
@@ -4565,8 +4586,14 @@ class Chat:
                     base_tokens = 0
                 debug['relationship_base'] = {
                     'chars': relationship.get('chars', 0), 'tokens': base_tokens,
+                    'stored_count': relationship.get('stored_count', 0),
+                    'active_count': relationship.get('active_count', 0),
+                    'selected_items': relationship_selected_ids,
                     'items': [item.get('id') for item in relationship.get('items', [])],
                     'statuses': {item.get('id'): item.get('status') for item in relationship.get('items', [])},
+                    'locked_items': [item.get('id') for item in relationship.get('items', []) if item.get('locked')],
+                    'compressed_items': list(relationship.get('compressed_items') or []),
+                    'cross_section_conflicts': list(relationship.get('cross_section_conflicts') or []),
                     'dropped': list(relationship.get('dropped') or []),
                     'degraded': bool(relationship.get('degraded')),
                     'reason': relationship.get('reason') or '',

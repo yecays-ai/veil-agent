@@ -674,6 +674,30 @@ class Hub(ScreenPopMixin):
                                            expected_updated_at=body.get('expected_updated_at'),
                                            force=body.get('force') is True)
             return self.peter_page()
+        if action == 'lock_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'set_relationship_lock'):
+                raise UserError('这个角色没有启用关系锁定。')
+            chat.profile.set_relationship_lock(body.get('id'), bool(body.get('locked')),
+                                               expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'restore_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'restore_relationship_item'):
+                raise UserError('这个角色没有启用关系恢复。')
+            chat.profile.restore_relationship_item(body.get('id'),
+                                                   expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'reverify_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'reverify_relationship_evidence'):
+                raise UserError('这个角色没有启用证据核验。')
+            chat.profile.reverify_relationship_evidence()
+            return self.peter_page()
+        if action == 'migrate_learned':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'migrate_storage'):
+                raise UserError('这个角色没有启用认知迁移。')
+            plan = chat.profile.migrate_storage(dry_run=body.get('apply') is not True)
+            page = self.peter_page()
+            page['migration'] = plan
+            return page
         if action == 'restore':
             section = body.get('section')
             version = body.get('version')

@@ -672,18 +672,58 @@
     const versions = verRes.data?.items || verRes.data?.versions || [];
 
     const grid = el('div', 'overview-grid');
+    const learned = page.learned || {};
+    const secBudgets = learned.budgets?.sections || {};
+    const relItems = learned.relationship?.items || [];
+
     const relCard = el('article', 'veil-card');
     relCard.append(el('h3', '', '关系阶段与核心羁绊'));
-    const relText = page.relationship || page.relationship_base || page.summary || '（暂无关系描述）';
-    relCard.append(el('div', 'reader-prose', typeof relText === 'string' ? relText : JSON.stringify(relText, null, 2)));
-    const fullProfileBtn = btn('打开完整 Peter 档案页', 'sm');
+    const relBudget = secBudgets.relationship || {};
+    relCard.append(el('p', 'muted',
+      `关系区独立预算：${relBudget.used_bytes ?? 0} / ${relBudget.max_bytes ?? 1500} B`
+      + (relBudget.degraded ? `（超限 ${relBudget.over_bytes} B，待整理）` : '')
+    ));
+    if (relItems.length) {
+      for (const item of relItems) {
+        const box = el('div', 'layer-item');
+        box.style.marginBottom = '8px';
+        const badges = [item.status || 'uncertain', item.source || 'peter'];
+        if (item.locked) badges.push('已锁定');
+        if (item.stale_ref) badges.push('引用失效');
+        if (item.evidence_degraded) badges.push('证据降级');
+        if (item.superseded_by) badges.push(`→ ${item.superseded_by}`);
+        box.append(el('strong', '', `[${item.id}] ${badges.join(' · ')}`));
+        box.append(el('div', 'reader-prose', item.text || ''));
+        if (Array.isArray(item.sources) && item.sources.length) {
+          box.append(el('small', 'muted', `证据：${item.sources.join(', ')}`));
+        }
+        relCard.append(box);
+      }
+    } else {
+      relCard.append(el('p', 'muted', '（暂无关系条目）'));
+    }
+    const fullProfileBtn = btn('打开完整 Peter 档案页（编辑/锁定/恢复）', 'sm');
     fullProfileBtn.addEventListener('click', () => window.veilWorkspace?.go('peter'));
     relCard.append(fullProfileBtn);
 
     const learnedCard = el('article', 'veil-card');
-    learnedCard.append(el('h3', '', '习得偏好与约定记忆'));
-    const learnedText = page.learned_context || page.learned || '';
-    learnedCard.append(el('div', 'reader-prose', typeof learnedText === 'string' ? learnedText : JSON.stringify(learnedText, null, 2)));
+    learnedCard.append(el('h3', '', '四区独立容量与习得认知'));
+    const budgetList = el('div', 'layer-list');
+    for (const [sec, label] of [['facts', 'Lan 事实'], ['growth', '个人成长'], ['relationship', '关系共识'], ['ongoing', '进行中事项']]) {
+      const b = secBudgets[sec] || {};
+      const item = el('div', 'layer-item');
+      item.append(el('strong', '', label), el('small', '', `${b.used_bytes ?? 0} / ${b.max_bytes ?? '-'} B${b.degraded ? '（超限）' : ''}`));
+      budgetList.append(item);
+    }
+    learnedCard.append(budgetList);
+    if (learned.sections?.facts?.text) {
+      learnedCard.append(el('h4', '', 'Lan 事实 (facts)'));
+      learnedCard.append(el('div', 'reader-prose', learned.sections.facts.text));
+    }
+    if (learned.sections?.growth?.text) {
+      learnedCard.append(el('h4', '', '个人成长 (growth)'));
+      learnedCard.append(el('div', 'reader-prose', learned.sections.growth.text));
+    }
 
     if (versions.length) {
       const verTitle = el('h4', '', `近期认知版本历史 (${versions.length})`);
@@ -770,8 +810,18 @@
       for (const [label, val] of layers) {
         if (!val && val !== 0) continue;
         const card = el('div', 'layer-item');
-        const cnt = Array.isArray(val) ? val.length : (val?.count ?? val?.items?.length ?? '已注入');
-        card.append(el('strong', '', label), el('small', '', typeof val === 'string' ? val.slice(0, 80) : `命中 ${cnt}`));
+        let summary;
+        if (label === '关系底座' && val && typeof val === 'object' && !Array.isArray(val)) {
+          const inj = Array.isArray(val.items) ? val.items.length : 0;
+          const sel = Array.isArray(val.selected_items) ? val.selected_items.length : inj;
+          const act = val.active_count ?? sel;
+          const sto = val.stored_count ?? act;
+          summary = `存储 ${sto} / 有效 ${act} / 选中 ${sel} / 注入 ${inj}`;
+        } else {
+          const cnt = Array.isArray(val) ? val.length : (val?.count ?? val?.items?.length ?? '已注入');
+          summary = typeof val === 'string' ? val.slice(0, 80) : `命中 ${cnt}`;
+        }
+        card.append(el('strong', '', label), el('small', '', summary));
         layerGrid.append(card);
       }
       detailPane.append(layerGrid);

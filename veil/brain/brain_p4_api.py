@@ -460,11 +460,16 @@ def overview(hub):
             'id': 'cognition',
             'name': '关系底座与习得认知',
             'enabled': bool(learned_status.get('available', True)),
-            'ready': bool(learned_status.get('available', True)),
+            'ready': bool(learned_status.get('available', True)) and not learned_status.get('capacity_degraded'),
             'running': True,
-            'tone': 'good',
-            'status_text': '已启用 · 就绪 · 每轮注入',
-            'detail': f"共享预算 {learned_status.get('bytes', 0)} / {learned_status.get('max_bytes', 4000)} B",
+            'tone': 'warn' if learned_status.get('capacity_degraded') else 'good',
+            'status_text': '部分分区超限降级' if learned_status.get('capacity_degraded') else '已启用 · 就绪 · 每轮注入',
+            'detail': (
+                f"四区独立预算：facts {(learned_status.get('budgets') or {}).get('sections', {}).get('facts', {}).get('used_bytes', 0)}/{(learned_status.get('budgets') or {}).get('sections', {}).get('facts', {}).get('max_bytes', 1800)}B · "
+                f"growth {(learned_status.get('budgets') or {}).get('sections', {}).get('growth', {}).get('used_bytes', 0)}/{(learned_status.get('budgets') or {}).get('sections', {}).get('growth', {}).get('max_bytes', 2000)}B · "
+                f"rel {(learned_status.get('budgets') or {}).get('sections', {}).get('relationship', {}).get('used_bytes', 0)}/{(learned_status.get('budgets') or {}).get('sections', {}).get('relationship', {}).get('max_bytes', 1500)}B · "
+                f"ongoing {(learned_status.get('budgets') or {}).get('sections', {}).get('ongoing', {}).get('used_bytes', 0)}/{(learned_status.get('budgets') or {}).get('sections', {}).get('ongoing', {}).get('max_bytes', 900)}B"
+            ),
         },
         {
             'id': 'short_notes',

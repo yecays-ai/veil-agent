@@ -1,20 +1,16 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
+> 更新时间：2026-11-27T14:52:00+08:00 · 基线 `main` = `2a264a7` · 当前分支 `ticket/459-p6-s3-relationship-governance`（已完成 P6-S3 开发与回归验证，待 Lan 审核与 PR 合并；未部署正式目录）
 
 ## 当前停点
 
-- **本单（工单 458 · 仓库目录结构重整）**：
-  - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
-  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
-  - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
-  - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
-  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
-  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
-  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
-  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
-  - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
-- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
+- **本单（工单 459 · P6-S3 关系底座解耦、证据链晋升与认知治理）**：
+  - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
+  - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。
+  - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本原子回滚。
+  - `veil/brain/relationship_base.py` & `veil/core/veil_agent.py`：`locked` 最高优先、超长高优先级条目呈现层保义压缩、失效认知降级隔离、跨区冲突检测、`debug['relationship_base']` 区分存储/有效/选中/实际注入。
+  - `veil/tools/learned_tools.py`、`veil/prompts/defaults/`、`veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/peter-page.js`、`desktop/workspace-brain.js`、`desktop/chat.js` 同步接入四区预算、锁定/恢复/核验与诊断展示。
+  - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
 
 ## 下一个窗口第一步
 
