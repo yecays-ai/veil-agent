@@ -32,6 +32,13 @@ def _json_load(text, default):
         return default
 
 
+def _as_number(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_dt(value):
     if not isinstance(value, str) or not value.strip():
         return None
@@ -59,6 +66,135 @@ def _brain_db_path(hub):
         if candidate.is_file():
             return candidate
     return None
+
+
+def _weights_for(hub):
+    """The live MemoryWeights object, or one built from the role store when Memory is absent."""
+    chat = getattr(hub, 'chat', None)
+    memory = getattr(chat, 'memory', None)
+    live = getattr(memory, 'weights', None)
+    if live is not None:
+        return live
+    cfg = getattr(chat, 'cfg', None)
+    store = getattr(memory, 'store', None) or getattr(chat, 'store', None)
+    if cfg is None or store is None:
+        return None
+    try:
+        from veil.brain.memory_weights import MemoryWeights
+        return MemoryWeights(cfg, store, brain_authority=getattr(memory, 'brain_authority', None))
+    except Exception:
+        return None
+
+
+def _proposal_map(db, memory_ids):
+    """One bounded query for the newest proposal of every memory shown on this page."""
+    ids = [mid for mid in memory_ids if mid]
+    if not ids:
+        return {}
+    try:
+        conn = _ro_connect(db)
+    except sqlite3.Error:
+        return {}
+    marks = ','.join('?' * len(ids))
+    try:
+        # Bounded by the page: the newest row per memory, any pending row, and status counts.
+        latest = conn.execute(
+            'SELECT p.* FROM memory_importance_proposals p WHERE p.memory_id IN (%s) '
+            'AND p.rowid IN (SELECT MAX(rowid) FROM memory_importance_proposals '
+            'WHERE memory_id IN (%s) GROUP BY memory_id)' % (marks, marks),
+            [*ids, *ids]).fetchall()
+        pending = conn.execute(
+            "SELECT p.* FROM memory_importance_proposals p WHERE p.memory_id IN (%s) "
+            "AND p.status='pending'" % marks, ids).fetchall()
+        counts = {}
+        for row in conn.execute(
+                'SELECT memory_id, status, COUNT(*) AS n FROM memory_importance_proposals '
+                'WHERE memory_id IN (%s) GROUP BY memory_id, status' % marks, ids):
+            counts.setdefault(row['memory_id'], {})[row['status']] = row['n']
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    mapping = {}
+    for row in latest:
+        mapping[row['memory_id']] = {
+            'pending': None, 'latest': _proposal_item(row),
+            'applied': counts.get(row['memory_id'], {}).get('applied', 0),
+            'rejected': counts.get(row['memory_id'], {}).get('rejected', 0),
+            'reverted': counts.get(row['memory_id'], {}).get('reverted', 0),
+        }
+    for row in pending:
+        entry = mapping.setdefault(row['memory_id'], {
+            'pending': None, 'latest': None,
+            'applied': counts.get(row['memory_id'], {}).get('applied', 0),
+            'rejected': counts.get(row['memory_id'], {}).get('rejected', 0),
+            'reverted': counts.get(row['memory_id'], {}).get('reverted', 0),
+        })
+        entry['pending'] = _proposal_item(row)
+    return mapping
+
+
+def _proposal_item(row):
+    return {
+        'proposal_id': row['proposal_id'], 'memory_id': row['memory_id'],
+        'created_at': row['created_at'], 'status': row['status'],
+        'current_importance': row['current_importance'],
+        'proposed_importance': row['proposed_importance'], 'delta': row['delta'],
+        'confidence': row['confidence'], 'trigger': row['trigger'],
+        'policy_version': row['policy_version'],
+        'reasons': _json_load(row['reasons_json'], []),
+        'evidence': _json_load(row['evidence_json'], []),
+        'metrics': _json_load(row['metrics_json'], {}),
+        'auto_applied': bool(row['auto_applied']), 'applied_at': row['applied_at'] or '',
+        'version_seq': row['version_seq'], 'decided_at': row['decided_at'] or '',
+        'decided_by': row['decided_by'] or '', 'note': row['note'] or '',
+    }
+
+
+def memory_weights_status(hub):
+    weights = _weights_for(hub)
+    if weights is None:
+        return {'available': False, 'error': '记忆权重模块未就绪'}
+    try:
+        return weights.status()
+    except Exception as exc:
+        return {'available': False, 'error': type(exc).__name__}
+
+
+def set_memory_weights(hub, values):
+    weights = _weights_for(hub)
+    if weights is None:
+        return {'ok': False, 'error': '记忆权重模块未就绪', 'status_code': 503}
+    try:
+        result = weights.update_settings(values if isinstance(values, dict) else {})
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
+    return {**result, 'status': weights.status()}
+
+
+def memory_proposals(hub, *, memory_id='', status='', limit=50):
+    weights = _weights_for(hub)
+    if weights is None:
+        return {'items': [], 'source': 'unavailable'}
+    try:
+        items = weights.proposals(memory_id=memory_id, status=status, limit=limit)
+    except Exception:
+        items = []
+    return {'items': items, 'source': 'brain.db', 'limit': limit}
+
+
+def decide_memory_proposal(hub, proposal_id, action, note=''):
+    weights = _weights_for(hub)
+    if weights is None:
+        return {'ok': False, 'error': '记忆权重模块未就绪', 'status_code': 503}
+    return weights.decide(proposal_id, action, note=note)
+
+
+def reevaluate_memory(hub, memory_id):
+    weights = _weights_for(hub)
+    if weights is None:
+        return {'ok': False, 'error': '记忆权重模块未就绪', 'status_code': 503}
+    return weights.reevaluate(str(memory_id or ''), trigger='manual', force=True)
 
 
 def compute_line_diff(old_text, new_text):
@@ -142,6 +278,14 @@ def library(hub, query_params):
             for er in conn.execute('SELECT event_id, title, memory_id FROM events WHERE memory_id IS NOT NULL'):
                 event_by_mem[er['memory_id']] = {'event_id': er['event_id'], 'title': er['title'] or er['event_id']}
 
+        weights = _weights_for(hub)
+        activation = {}
+        if weights is not None:
+            try:
+                activation = weights.activation_map([r['id'] for r in rows])
+            except Exception:
+                activation = {}
+        proposals = _proposal_map(db, [r['id'] for r in rows])
         titles = {r['id']: (r['title'] or r['name'] or r['id']) for r in rows}
         continued_by = {}
         parsed_links = {}
@@ -181,7 +325,11 @@ def library(hub, query_params):
             last_src_time = ''
             if sources and isinstance(sources[-1], dict):
                 last_src_time = str(sources[-1].get('time') or '')
-            updated_at = max((t for t in (r['created'] or '', last_ver_time or '', last_src_time, r['last_active'] or '') if t), default='')
+            # P6-S6-1: 'last_active' is now an activity timestamp, not an edit. Keeping it out of
+            # updated_at preserves the existing "recently updated" meaning; activity has its own
+            # field and sort order.
+            updated_at = max((t for t in (r['created'] or '', last_ver_time or '', last_src_time or '')
+                              if t), default='')
             ev_info = event_by_mem.get(mid)
 
             # Filtering
@@ -200,6 +348,8 @@ def library(hub, query_params):
                 continue
             if kind == 'fragment' and not (len(body) < 40 and not pinned and not why and not ev_info):
                 continue
+            if kind == 'proposal' and not (proposals.get(mid, {}).get('pending')):
+                continue
 
             if source != 'all' and src_kind != source:
                 continue
@@ -212,10 +362,23 @@ def library(hub, query_params):
             # Hash the stored body exactly as the edit endpoint does; a stripped copy would
             # produce a permanent 409 for memories whose stored body ends with whitespace.
             sha = r['body_sha256'] or hashlib.sha256(raw_body.encode('utf-8')).hexdigest()
+            activation_row = activation.get(mid)
             items.append({
                 'memory_id': mid,
                 'title': title,
                 'created': r['created'] or '',
+                # memories.last_active starts as the creation timestamp; only an activation row
+                # proves the memory was actually delivered.
+                'last_active': (activation_row or {}).get('last_active') or '',
+                'activation': activation_row or {
+                    'last_active': '', 'last_delivery_at': '',
+                    'first_delivery_at': '', 'deliveries': 0, 'distinct_days': 0,
+                    'distinct_sessions': 0, 'score': 0.0, 'display': 0, 'stored_score': 0.0,
+                    'protected': bool(pinned) or (_as_number(r['importance']) or 5) >= 7,
+                    'decayed': False, 'last_request_id': '',
+                },
+                'reeval': proposals.get(mid) or {'pending': None, 'latest': None,
+                                                 'applied': 0, 'rejected': 0, 'reverted': 0},
                 'updated_at': updated_at,
                 'kind': r['type'] or '',
                 'bucket': r['bucket'] or 'dynamic',
@@ -244,6 +407,9 @@ def library(hub, query_params):
         total_live = sum(1 for r in rows if not (r['title'] or '').strip() == '原文来源')
         if sort == 'importance':
             items.sort(key=lambda x: (float(x['importance']) if str(x['importance']).replace('.', '', 1).isdigit() else 0.0, x['updated_at']), reverse=True)
+        elif sort == 'activity':
+            items.sort(key=lambda x: ((x.get('activation') or {}).get('score', 0.0) or 0.0,
+                                      x['updated_at']), reverse=True)
         elif sort == 'recalled':
             items.sort(key=lambda x: (x['recalled'], x['updated_at']), reverse=True)
         elif sort == 'created':

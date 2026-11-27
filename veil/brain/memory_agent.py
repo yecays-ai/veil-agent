@@ -159,6 +159,18 @@ class Memory:
             except Exception as exc:
                 raise UserError('P3-3 可见性迁移失败，已停止：%s' % exc) from exc
         self.runtime_monitor = runtime_monitor
+        # P6-S6-1: delivered-memory activation, protective decay and versioned importance
+        # re-evaluation. It owns its own tables and never blocks the chat path: apply_delivery()
+        # returns an error dict instead of raising, and confirm_delivery() still completes.
+        from veil.brain.memory_weights import MemoryWeights
+        self.weights = MemoryWeights(cfg, self.store, brain_authority=self.brain_authority)
+        # Replay deliveries whose derived-state write hit a transient storage failure last run.
+        # Bounded and non-fatal: the chat path must start even if the database is still busy.
+        try:
+            self.weights.drain_retries(limit=5)
+            self.weights.drain_pending_reeval(limit=5)
+        except Exception:
+            pass
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
@@ -979,6 +991,14 @@ class Memory:
         self.last_context_kinds = {key: value for key, value in self.last_context_kinds.items()
                                    if key not in dropped}
         self.last_injected_refs = [key for key in self.last_injected_refs if key not in dropped]
+        # P6-S6-1: the final assembled request no longer contains these blocks, so the confirmed
+        # delivery payload must not count them as delivered either. Only this turn's pending entry
+        # is edited; a future turn builds a new one.
+        with self.mutex:
+            pending = getattr(self, '_pending_delivery', None)
+            if isinstance(pending, dict):
+                for key in ('injected_ids', 'opening_ids', 'association_ids', 'carried_ids'):
+                    pending[key] = [mid for mid in (pending.get(key) or []) if mid not in dropped]
 
     def _association_switch_path(self):
         return f'{self.cfg.id}/recall-association.json'
@@ -1203,7 +1223,16 @@ class Memory:
         """
         if getattr(self, 'last_recall_debug', None) is None:
             self.last_recall_debug = {}
-        settings = getattr(self, 'retrieval_settings', None) or {'backend': 'ombre'}
+        settings = dict(getattr(self, 'retrieval_settings', None) or {'backend': 'ombre'})
+        # P6-S6-1: merge the UI-persisted activation settings on use (next-turn effective). The
+        # ranking signal is off by default until the real-run comparison supports it; merging here
+        # never changes the configured vector/keyword weights.
+        weights = getattr(self, 'weights', None)
+        if weights is not None:
+            try:
+                settings.update(weights.retrieval_overrides())
+            except Exception:
+                pass
         brain_db = self.store.root / self.cfg.id / 'brain.db'
         cfg = getattr(self, 'cfg', None)
         model = str(((getattr(cfg, 'memory', None) or {}).get('model')) or '').strip()
@@ -1549,14 +1578,19 @@ class Memory:
             self._save_rotation()
         return True
 
-    def confirm_delivery(self, request_id=''):
+    def confirm_delivery(self, request_id='', session_key='', regenerated=False, activation=True):
         """P6-S5: mark the matching finish_recall() payload as actually delivered to the user.
 
         Verifies request_id ownership per concurrent request, persists rotation/association state
         only after confirmed delivery, and separates retrieved / judged / injected / delivered /
-        effective_used (reserved for S6 activity reinforcement and consolidation) so budget drops,
-        cancellations, failures, crashes, and mismatched requests never persist state or fire
-        delivery consumers.
+        effective_used (S6 activity reinforcement) so budget drops, cancellations, failures,
+        crashes, and mismatched requests never persist state or fire delivery consumers.
+
+        P6-S6-1: the same confirmed event feeds MemoryWeights.apply_delivery() exactly once per
+        (request_id, memory_id). A regenerated reply is a real exposure but must not count as a new
+        reinforcement, so it is passed through as such instead of being silently counted twice.
+        activation=False keeps S5's cooldown persistence but skips S6-1 accounting when the
+        autonomy reply was internal and never shown to Lan.
         """
         req_id = str(request_id or '').strip()
         with self.mutex:
@@ -1610,6 +1644,8 @@ class Memory:
                 'wake_mode': str(pending.get('wake_mode') or ''),
                 'delivered': True,
                 'effective_used': None,
+                'session_key': str(session_key or ''),
+                'regenerated': bool(regenerated),
             }
             self.last_delivered_recall = event
             debug = getattr(self, 'last_recall_debug', None)
@@ -1619,6 +1655,39 @@ class Memory:
                     lifecycle['delivered'] = True
                     lifecycle['rolled_back'] = False
             listeners = list(getattr(self, 'delivery_listeners', None) or [])
+        # P6-S6-1: one confirmed delivery is the only input to activation/reinforcement. Run the
+        # derived-state writes outside self.mutex (SQLite I/O must not serialize other turns), and
+        # record a failure in the turn diagnostic instead of failing the confirmed delivery.
+        weights = getattr(self, 'weights', None)
+        if weights is not None and not activation:
+            event['activity'] = {'status': 'skipped', 'reason': 'not_user_visible'}
+            self.last_delivered_recall = event
+        elif weights is not None:
+            try:
+                activity = weights.apply_delivery({'request_id': event['request_id'],
+                                                   'injected_ids': event['injected_ids'],
+                                                   'opening_ids': event['opening_ids'],
+                                                   'association_ids': event['association_ids'],
+                                                   'carried_ids': event['carried_ids'],
+                                                   'session_key': event['session_key'],
+                                                   'regenerated': event['regenerated']})
+            except Exception as exc:
+                activity = {'status': 'error', 'reason': type(exc).__name__}
+            event['activity'] = activity
+            self.last_delivered_recall = event
+            with self.mutex:
+                debug = getattr(self, 'last_recall_debug', None)
+                if isinstance(debug, dict):
+                    lifecycle = debug.get('lifecycle')
+                    if isinstance(lifecycle, dict):
+                        lifecycle['effective_used'] = list(activity.get('counted_ids') or [])
+                        lifecycle['activity'] = {
+                            'status': activity.get('status'),
+                            'counted': len(activity.get('counted_ids') or []),
+                            'duplicates': len(activity.get('duplicate_ids') or []),
+                            'proposals': len(activity.get('proposals') or []),
+                            'reason': activity.get('reason') or '',
+                        }
         # Persist rotation & association cooldown only after confirmed delivery.
         self._save_rotation()
         for listener in listeners:
@@ -2836,6 +2905,12 @@ class Memory:
                     brain_writer.hard_delete(connection, memory_id, 'erase after confirmed delete')
                 finally:
                     connection.close()
+            weights = getattr(self, 'weights', None)
+            if weights is not None:
+                try:
+                    weights.drop_retries_for(memory_id)
+                except Exception:
+                    pass
         else:
             files = list(self._bucket_files(memory_id))
             if any(not in_archive for _, in_archive in files):

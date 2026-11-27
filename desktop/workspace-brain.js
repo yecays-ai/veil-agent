@@ -92,14 +92,21 @@
   }
 
   async function reqJson(req, url, options) {
-    const res = await req(url, options);
-    let data = null;
+    // A dropped connection must surface as a failed request, not as an unhandled rejection that
+    // leaves a just-disabled control impossible to retry. Write requests are never auto-retried:
+    // the server may already have committed.
     try {
-      data = await res.json();
-    } catch {
-      data = null;
+      const res = await req(url, options);
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      return { ok: false, status: 0, data: null, error: err };
     }
-    return { ok: res.ok, status: res.status, data };
   }
 
   function buildLineDiffNode(diffLines) {
@@ -189,6 +196,235 @@
   function renderEmptyState(title, subtitle) {
     const box = el('div', 'empty-pane');
     box.append(el('span', 'empty-pane-mark'), el('strong', '', title), el('small', '', subtitle));
+    return box;
+  }
+
+  function memorySwitchRow(label, checked, detail, onChange) {
+    const item = el('div', 'layer-item');
+    const top = el('div', 'layer-item-top');
+    top.append(el('strong', '', label));
+    const sw = el('button', 'workspace-switch');
+    sw.type = 'button';
+    sw.setAttribute('role', 'switch');
+    sw.setAttribute('aria-checked', String(Boolean(checked)));
+    sw.setAttribute('aria-label', label + '开关');
+    sw.title = checked ? '点击关闭' : '点击启用';
+    sw.addEventListener('click', () => {
+      const next = !Boolean(checked);
+      checked = next;
+      sw.setAttribute('aria-checked', String(next));
+      onChange(next);
+    });
+    top.append(sw);
+    item.append(top);
+    if (detail) item.append(el('small', '', detail));
+    return item;
+  }
+
+  function memoryNumberRow(label, value, options, onChange) {
+    const item = el('div', 'layer-item');
+    item.append(el('strong', '', label));
+    const input = el('input', 'veil-input');
+    input.type = 'number';
+    input.value = String(value);
+    if (options.min !== undefined) input.min = String(options.min);
+    if (options.max !== undefined) input.max = String(options.max);
+    if (options.step !== undefined) input.step = String(options.step);
+    input.style.maxWidth = '140px';
+    input.addEventListener('change', () => {
+      const num = Number(input.value);
+      if (!Number.isFinite(num)) {
+        input.value = String(value);
+        return;
+      }
+      value = num;
+      onChange(num);
+    });
+    item.append(input);
+    if (options.detail) item.append(el('small', '', options.detail));
+    return item;
+  }
+
+  // P6-S6-1: the experimental switches and parameters live in this panel and are persisted in
+  // data/<role>/memory-weights.json. The note states the hard guards so the UI never implies that
+  // a toggle can weaken them.
+  function buildMemoryWeightsPanel(req, host, data) {
+    const draft = { ...(data.settings || {}) };
+    const sub = el('div', 'veil-subpanel');
+    sub.style.marginTop = '10px';
+    const head = el('div', 'veil-card-head');
+    const counters = data.counters || {};
+    head.append(
+      el('strong', '', '记忆权重与保护性衰减'),
+      pill('策略 ' + (data.policy_version || 's6-1'), ''),
+      pill('已跟踪 ' + (counters.tracked_memories || 0) + ' 条', ''),
+    );
+    const grid = el('div', 'six-layer-grid');
+    grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
+    grid.append(
+      memorySwitchRow('送达后激活', draft.activation_enabled === true,
+        '只有真正送达你的回复才更新 last_active 与强化次数；取消、失败、重启不写入。',
+        v => { draft.activation_enabled = v; }),
+      memorySwitchRow('保护性衰减', draft.decay_enabled === true,
+        '只降低 importance<=6 且未置顶记忆的活跃度；importance>=7 与置顶永不衰减，衰减不删除、不隐藏。',
+        v => { draft.decay_enabled = v; }),
+      memorySwitchRow('活跃度参与排序（实验）', draft.ranking_enabled === true,
+        '#455 的 AB-R5b 证据不足，默认关闭；打开后只加在检索分数上，不改重要度。',
+        v => { draft.ranking_enabled = v; }),
+      memorySwitchRow('动态重评', draft.reeval_enabled === true,
+        '新经历会生成有证据、可追溯的版本化重评建议。',
+        v => { draft.reeval_enabled = v; }),
+      memorySwitchRow('自动应用安全增量', draft.reeval_auto_apply === true,
+        '只自动提升到 ' + (draft.reeval_max_auto_importance || 7) + ' 及以下；降权、置顶、锁定与重要记忆只提建议。',
+        v => { draft.reeval_auto_apply = v; }),
+    );
+    grid.append(
+      memoryNumberRow('衰减半衰期（天）', draft.decay_half_life_days, {
+        min: 7, max: 365, step: 1, detail: '越大，低重要度记忆的活跃度消退越慢。',
+      }, v => { draft.decay_half_life_days = v; }),
+      memoryNumberRow('活跃度排序权重', draft.ranking_weight, {
+        min: 0, max: 0.2, step: 0.01,
+        detail: '现网 importance 静态加分上限为 0.05；默认 0.05，排序开关关闭时不生效。',
+      }, v => { draft.ranking_weight = v; }),
+      memoryNumberRow('重评冷却（小时）', draft.reeval_cooldown_hours, {
+        min: 1, max: 720, step: 1, detail: '同一条记忆两次重评之间的最小间隔。',
+      }, v => { draft.reeval_cooldown_hours = v; }),
+      memoryNumberRow('自动上限重要度', draft.reeval_max_auto_importance, {
+        min: 5, max: 7, step: 1, detail: '自动提升不会越过这个值，硬上限 7；更高区间需要你确认。',
+      }, v => { draft.reeval_max_auto_importance = v; }),
+    );
+    const actions = el('div', 'workspace-links');
+    const saveBtn = btn('保存并下一轮生效', 'sm primary');
+    const proposalsBtn = btn('重评建议（' + (counters.proposals_pending || 0) + '）', 'sm');
+    const statusLine = el('small', 'muted', '');
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      statusLine.textContent = '正在校验并持久化…';
+      const res = await reqJson(req, '/api/brain/memory-weights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: draft }),
+      });
+      saveBtn.disabled = false;
+      if (!res.ok || !res.data?.ok) {
+        statusLine.textContent = res.data?.error || '保存失败，已保留原设置。';
+        return;
+      }
+      const rejected = res.data.rejected || {};
+      if (Object.keys(rejected).length) {
+        statusLine.textContent = '已保存；被拒绝的参数：' + Object.keys(rejected).join('、');
+      } else {
+        statusLine.textContent = '已保存到 ' + (res.data.persistence_path || '本机数据目录') + '，下一轮生效。';
+      }
+      if (typeof renderBrainHome === 'function') renderBrainHome(host, req);
+    });
+    proposalsBtn.addEventListener('click', () => openMemoryProposals(req, '', () => renderBrainHome(host, req)));
+    actions.append(saveBtn, proposalsBtn);
+    sub.append(head, grid, actions, statusLine);
+    return sub;
+  }
+
+  async function openMemoryProposals(req, memoryId, refresh) {
+    const query = '/api/brain/memory-proposals?status=pending'
+      + (memoryId ? '&memory_id=' + encodeURIComponent(memoryId) : '');
+    const res = await reqJson(req, query);
+    const items = (res.data && res.data.items) || [];
+    openBrainModal('重评建议', '证据驱动的长期重要度建议；降权、置顶、锁定与重要记忆都要你确认，每次应用都会留下版本', body => {
+      if (!items.length) {
+        body.append(el('p', '', '当前没有待确认的重评建议。'));
+        return;
+      }
+      for (const p of items) {
+        const card = el('div', 'veil-subpanel');
+        card.append(el('strong', '', (p.title || p.memory_id) + ' · 重要度 ' + p.current_importance + ' → ' + p.proposed_importance));
+        card.append(el('small', 'muted', '置信度 ' + Math.round((p.confidence || 0) * 100) + '% · 触发 ' + (p.trigger || '') + ' · 策略 ' + (p.policy_version || '')));
+        if (Array.isArray(p.reasons) && p.reasons.length) {
+          const ul = el('ul', 'flat-list');
+          for (const r of p.reasons) ul.append(el('li', '', (r.label || r.code) + '：' + (r.detail || '')));
+          card.append(ul);
+        }
+        if (Array.isArray(p.evidence) && p.evidence.length) {
+          const ev = el('details', 'tech-evidence');
+          ev.append(el('summary', '', '查看证据引用'));
+          const ul = el('ul', 'flat-list');
+          for (const e of p.evidence) ul.append(el('li', '', (e.kind || '') + ' · ' + (e.ref || '') + ' · ' + (e.detail || '')));
+          ev.append(ul);
+          card.append(ev);
+        }
+        const actions = el('div', 'workspace-links');
+        const accept = btn('接受并写入版本', 'sm primary');
+        const reject = btn('拒绝', 'sm');
+        const line = el('small', 'muted', '');
+        accept.addEventListener('click', async () => {
+          accept.disabled = true;
+          const out = await reqJson(req, '/api/brain/memory-proposal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: p.proposal_id, action: 'accept' }),
+          });
+          accept.disabled = false;
+          line.textContent = out.ok && out.data?.ok ? '已应用，可在记忆详情里查看版本或撤回。' : (out.data?.error || '应用失败。');
+          if (out.ok && out.data?.ok) {
+            if (typeof refresh === 'function') refresh();
+            card.remove();
+          }
+        });
+        reject.addEventListener('click', async () => {
+          reject.disabled = true;
+          const out = await reqJson(req, '/api/brain/memory-proposal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: p.proposal_id, action: 'reject' }),
+          });
+          reject.disabled = false;
+          line.textContent = out.ok && out.data?.ok ? '已拒绝；同类建议近期不会重复。' : (out.data?.error || '拒绝失败。');
+          if (out.ok && out.data?.ok) {
+            if (typeof refresh === 'function') refresh();
+            card.remove();
+          }
+        });
+        actions.append(accept, reject);
+        card.append(actions, line);
+        body.append(card);
+      }
+    });
+  }
+
+  async function renderMemoryReevalHistory(req, item, refresh) {
+    const res = await reqJson(req, '/api/brain/memory-proposals?memory_id=' + encodeURIComponent(item.memory_id) + '&limit=30');
+    const box = el('div', 'veil-subpanel');
+    box.append(el('strong', '', '重评历史'));
+    const items = (res.data && res.data.items) || [];
+    if (!items.length) {
+      box.append(el('p', '', '还没有重评记录。新经历积累到有证据时会自动生成。'));
+      return box;
+    }
+    for (const p of items) {
+      const row = el('div', 'flat-entry');
+      const statusLabel = { applied: '已应用', pending: '待确认', rejected: '已拒绝', reverted: '已撤回', superseded: '已失效' }[p.status] || p.status;
+      row.append(el('strong', '', '重要度 ' + p.current_importance + ' → ' + p.proposed_importance + ' · ' + statusLabel));
+      row.append(el('small', 'muted', (p.created_at || '') + ' · ' + (p.trigger || '') + (p.auto_applied ? ' · 自动' : '')));
+      const ul = el('ul', 'flat-list');
+      for (const r of p.reasons || []) ul.append(el('li', '', (r.label || r.code) + '：' + (r.detail || '')));
+      row.append(ul);
+      if (p.status === 'applied') {
+        const revert = btn('撤回这次重评', 'sm');
+        const line = el('small', 'muted', '');
+        revert.addEventListener('click', async () => {
+          revert.disabled = true;
+          const out = await reqJson(req, '/api/brain/memory-proposal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: p.proposal_id, action: 'revert', note: '界面撤回' }),
+          });
+          revert.disabled = false;
+          line.textContent = out.ok && out.data?.ok ? '已撤回，重要度回到 ' + out.data.importance + '。' : (out.data?.error || '撤回失败。');
+          if (out.ok && out.data?.ok && typeof refresh === 'function') refresh();
+        });
+        row.append(revert, line);
+      }
+      box.append(row);
+    }
     return box;
   }
 
@@ -357,6 +593,12 @@
         assocSub.append(diagLine);
       }
       layerCard.append(assocSub);
+    }
+
+    // 2c. P6-S6-1 memory weights: activation, protective decay and versioned re-evaluation.
+    const weightsRes = await reqJson(req, '/api/brain/memory-weights');
+    if (weightsRes.ok && weightsRes.data?.available) {
+      layerCard.append(buildMemoryWeightsPanel(req, host, weightsRes.data));
     }
 
     // 3. Memory Growth Analysis & One-Click Report
@@ -892,8 +1134,8 @@
       return sel;
     };
     const statusSel = mkSelect([['active', '状态: 活跃'], ['archived', '状态: 已归档'], ['locked', '状态: 已锁定'], ['pending_vector', '状态: 待补向量'], ['all', '状态: 全部']]);
-    const kindSel = mkSelect([['all', '类型: 全部'], ['pinned', '仅置顶'], ['event_link', '关联事件'], ['fragment', '短碎片']]);
-    const sortSel = mkSelect([['updated', '排序: 最近更新'], ['recalled', '排序: 召回频次'], ['importance', '排序: 重要度'], ['created', '排序: 创建时间']]);
+    const kindSel = mkSelect([['all', '类型: 全部'], ['pinned', '仅置顶'], ['event_link', '关联事件'], ['fragment', '短碎片'], ['proposal', '有待重评建议']]);
+    const sortSel = mkSelect([['updated', '排序: 最近更新'], ['recalled', '排序: 召回频次'], ['importance', '排序: 重要度'], ['activity', '排序: 活跃度'], ['created', '排序: 创建时间']]);
     filterBar.append(qInput, statusSel, kindSel, sortSel);
 
     const split = el('div', 'split-reader');
@@ -927,15 +1169,21 @@
       if (item.locked) badgeRow.append(pill('锁定', 'warn'));
       if (item.archived) badgeRow.append(pill('已归档'));
       if (item.vector_state && item.vector_state !== 'ready') badgeRow.append(pill('待补索引', 'warn'));
+      if (item.reeval && item.reeval.pending) badgeRow.append(pill('待重评', 'warn'));
 
       const title = el('h3', 'reader-title', item.title);
+      const act = item.activation || {};
       const meta = el('div', 'reader-meta-grid');
       meta.append(
         el('span', '', `编号: ${item.memory_id}`),
+        el('span', '', `重要度: ${item.importance ?? '—'} / 10`),
         el('span', '', `更新: ${formatTime(item.updated_at)}`),
         el('span', '', `召回: ${item.recalled ?? 0} 次`),
         el('span', '', `版本: ${item.version_count ?? 0}`),
         el('span', '', `校验: ${shortSha(item.sha256)}`),
+        el('span', '', `最近活跃: ${item.last_active ? formatTime(item.last_active) : '—'}`),
+        el('span', '', `活跃度: ${act.display ?? 0}% · 送达 ${act.deliveries ?? 0} 次 · 跨 ${act.distinct_days ?? 0} 天 / ${act.distinct_sessions ?? 0} 会话`),
+        el('span', '', act.protected ? '保护: 重要或置顶，永不衰减' : (act.decayed ? '活跃度: 已按半衰期衰减' : '活跃度: 未衰减')),
       );
 
       readerPane.append(badgeRow, title, meta);
@@ -1088,7 +1336,86 @@
         actions.append(evJump);
       }
 
-      readerPane.append(bodyEditor, draftArea, actions, actionStatus, extraArea);
+      // P6-S6-1: activation + versioned re-evaluation live next to the existing edit/version tools.
+      const reevalArea = el('div', '');
+      const reevalActions = el('div', 'workspace-links');
+      const reevaluateBtn = btn('重新评估长期重要度', 'sm');
+      const historyBtn = btn('查看重评历史', 'sm');
+      reevalActions.append(reevaluateBtn, historyBtn);
+      reevalArea.append(reevalActions);
+      const pendingProposal = item.reeval && item.reeval.pending;
+      if (pendingProposal) {
+        const p = pendingProposal;
+        const card = el('div', 'veil-subpanel');
+        card.append(el('strong', '', `待你确认的重评：重要度 ${p.current_importance} → ${p.proposed_importance}`));
+        card.append(el('small', 'muted', `置信度 ${Math.round((p.confidence || 0) * 100)}% · 策略 ${p.policy_version || ''}`));
+        const ul = el('ul', 'flat-list');
+        for (const r of p.reasons || []) ul.append(el('li', '', (r.label || r.code) + '：' + (r.detail || '')));
+        card.append(ul);
+        const line = el('small', 'muted', '');
+        const accept = btn('接受并写入版本', 'sm primary');
+        const reject = btn('拒绝', 'sm');
+        accept.addEventListener('click', async () => {
+          accept.disabled = true;
+          const out = await reqJson(req, '/api/brain/memory-proposal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: p.proposal_id, action: 'accept' }),
+          });
+          accept.disabled = false;
+          if (out.ok && out.data?.ok) {
+            await loadLibrary(item.memory_id);
+          } else {
+            line.textContent = out.data?.error || '应用失败。';
+          }
+        });
+        reject.addEventListener('click', async () => {
+          reject.disabled = true;
+          const out = await reqJson(req, '/api/brain/memory-proposal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: p.proposal_id, action: 'reject' }),
+          });
+          reject.disabled = false;
+          if (out.ok && out.data?.ok) {
+            await loadLibrary(item.memory_id);
+          } else {
+            line.textContent = out.data?.error || '拒绝失败。';
+          }
+        });
+        card.append(accept, reject, line);
+        reevalArea.append(card);
+      }
+      reevaluateBtn.addEventListener('click', async () => {
+        reevaluateBtn.disabled = true;
+        const out = await reqJson(req, '/api/brain/memory-reevaluate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: item.memory_id }),
+        });
+        reevaluateBtn.disabled = false;
+        if (out.ok && out.data?.ok) {
+          await loadLibrary(item.memory_id);
+        } else {
+          const reasons = {
+            no_change: '现有证据不足以调整长期重要度。',
+            cooldown: '距离上次重评还不到冷却时间。',
+            pending_exists: '已有一条待你确认的建议。',
+            no_new_evidence: '没有出现新的证据。',
+            memory_missing: '这条记忆不存在或已删除。',
+            reeval_disabled: '动态重评已关闭。',
+          };
+          actionStatus.textContent = reasons[out.data?.reason] || out.data?.error || '本次没有可调整的长期重要度证据。';
+        }
+      });
+      historyBtn.addEventListener('click', async () => {
+        const old = reevalArea.querySelector('.reeval-history');
+        if (old) { old.remove(); return; }
+        const box = await renderMemoryReevalHistory(req, item, () => loadLibrary(item.memory_id));
+        box.classList.add('reeval-history');
+        reevalArea.append(box);
+      });
+      readerPane.append(bodyEditor, draftArea, actions, actionStatus, reevalArea, extraArea);
     }
 
     async function loadLibrary(focusId) {
@@ -1790,6 +2117,12 @@
   // =========================================================================
   // 6. Strictly Read-Only P5 Health Center (brain-health)
   // =========================================================================
+  function validHealthSettings(settings) {
+    return Boolean(settings && typeof settings === 'object'
+      && typeof settings.enabled === 'boolean'
+      && ['daily_night', 'every_6h', 'manual_only'].includes(settings.schedule));
+  }
+
   async function renderHealthWorkspace(host, req) {
     host.replaceChildren(el('p', '', '正在加载只读健康报告与巡检设置…'));
     let healthSettings = null;
@@ -1801,8 +2134,18 @@
     async function drawHealth(payload) {
       const report = payload?.report || payload || {};
       // A scan response carries only the report; keep the saved settings instead of redrawing
-      // the form with defaults that a later save would write back to disk.
-      const settings = payload?.settings || healthSettings || { enabled: true, schedule: 'daily_night', idle_only: true };
+      // the form with defaults that a later save would write back to disk. A malformed/missing
+      // settings payload must not produce a saveable form: that form's defaults would overwrite
+      // the real schedule on the next save.
+      const candidate = payload && Object.prototype.hasOwnProperty.call(payload, 'settings')
+        ? payload.settings : healthSettings;
+      if (!validHealthSettings(candidate)) {
+        host.replaceChildren(renderEmptyState(
+          '巡检设置未能加载，已停止显示保存表单',
+          '为避免用默认值覆盖你的原配置，请检查后端服务后重新打开本页。'));
+        return;
+      }
+      const settings = candidate;
       healthSettings = settings;
       const sum = report.summary || { status: 'good', status_label: '尚未运行检查', total_checks: 0, good_count: 0, warn_count: 0, error_count: 0 };
       const checks = report.checks || [];
@@ -2071,8 +2414,14 @@
       host.replaceChildren(wrap);
     }
 
-    const { data } = await reqJson(req, '/api/brain/health');
-    await drawHealth(data || {});
+    const healthRes = await reqJson(req, '/api/brain/health');
+    if (!healthRes.ok || !healthRes.data || !validHealthSettings(healthRes.data.settings)) {
+      // Do not render a writable settings form from defaults after a failed/partial read: a later
+      // save would silently overwrite the real schedule. Show the failure and let the user retry.
+      host.replaceChildren(renderEmptyState('暂时无法读取健康巡检数据', '请检查后端服务后重新打开本页。'));
+      return;
+    }
+    await drawHealth(healthRes.data);
   }
 
   window.veilBrain = {

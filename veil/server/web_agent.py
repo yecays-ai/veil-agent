@@ -2725,6 +2725,26 @@ def make_handler(hub, token):
                     self._send(200, brain_library(hub, query))
                 except sqlite3.Error:
                     self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/memory-weights':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import memory_weights_status
+                self._send(200, memory_weights_status(hub))
+            elif url.path == '/api/brain/memory-proposals':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import memory_proposals
+                try:
+                    limit_num = max(1, min(200, int((query.get('limit') or ['50'])[0] or 50)))
+                except ValueError:
+                    self._send(400, {'error': 'limit 必须为整数。'})
+                    return
+                self._send(200, memory_proposals(
+                    hub,
+                    memory_id=(query.get('memory_id') or [''])[0],
+                    status=(query.get('status') or [''])[0],
+                    limit=limit_num,
+                ))
             elif url.path == '/api/brain/health':
                 self._get_brain_health(query)
             elif url.path == '/api/brain/health/export':
@@ -3852,6 +3872,34 @@ def make_handler(hub, token):
                     return
                 from veil.brain.brain_p4_api import toggle_layer
                 res = toggle_layer(hub, str(body.get('layer_id') or ''), bool(body.get('enabled')))
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/brain/memory-weights':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import set_memory_weights
+                values = body.get('values') if isinstance(body.get('values'), dict) else body
+                res = set_memory_weights(hub, values)
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/brain/memory-proposal':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import decide_memory_proposal
+                res = decide_memory_proposal(
+                    hub, str(body.get('proposal_id') or ''),
+                    str(body.get('action') or ''), note=str(body.get('note') or ''))
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/brain/memory-reevaluate':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import reevaluate_memory
+                memory_id = str(body.get('id') or body.get('memory_id') or '')
+                if not memory_id:
+                    self._send(400, {'error': '缺少记忆 ID。'})
+                    return
+                res = reevaluate_memory(hub, memory_id)
                 code = 200 if res.get('ok') else int(res.get('status_code') or 400)
                 self._send(code, res)
             elif url.path == '/api/pending-approvals':

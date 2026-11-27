@@ -4007,7 +4007,36 @@ class Chat:
             if delivered:
                 confirm = getattr(self.memory, 'confirm_delivery', None)
                 if callable(confirm):
-                    confirm(req_id)
+                    # P6-S6-1: the confirmed turn carries the conversation key and whether this
+                    # reply replaced a previous one, so activation counts a regenerated reply as
+                    # a real exposure without a second reinforcement. A test/minimal Chat without
+                    # a session path simply has no conversation key, and a memory implementation
+                    # that only accepts request_id still gets the plain call.
+                    try:
+                        session_key = self._conversation_key()
+                    except (AttributeError, OSError, ValueError):
+                        session_key = ''
+                    kwargs = {}
+                    try:
+                        import inspect
+                        parameters = inspect.signature(confirm).parameters
+                        kinds = {item.kind for item in parameters.values()}
+                        if (inspect.Parameter.VAR_KEYWORD in kinds
+                                or 'session_key' in parameters):
+                            kwargs['session_key'] = session_key
+                        if (inspect.Parameter.VAR_KEYWORD in kinds
+                                or 'regenerated' in parameters):
+                            kwargs['regenerated'] = bool(
+                                getattr(self, 'regeneration_parent_message_id', None))
+                        if (inspect.Parameter.VAR_KEYWORD in kinds
+                                or 'activation' in parameters):
+                            # Autonomy can succeed with an internal reply that was never shown to
+                            # Lan. S5 keeps its cooldown, but S6-1 must not count that as delivered.
+                            kwargs['activation'] = bool(
+                                self.sent_messages or getattr(self, 'reply_row_saved', False))
+                    except (TypeError, ValueError):
+                        kwargs = {}
+                    confirm(req_id, **kwargs)
             elif (getattr(self.memory, 'last_recall_marks', None)
                   or getattr(self.memory, 'last_association_marks', None)
                   or getattr(self.memory, '_has_association_rollback', False)):

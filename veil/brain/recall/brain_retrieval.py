@@ -20,6 +20,14 @@ DEFAULTS = {
     'stopwords_enabled': False,
     # P6-S5: explicit hybrid retrieval candidate count K (also bounds judge's hybrid pool).
     'candidate_k': 8,
+    # P6-S6-1: optional current-activation signal. P6-S4 AB-R5b did not have enough cold-important
+    # samples to prove a net gain, so this stays off until a real-run comparison supports it. When
+    # on, only memories with delivered activation and importance <= 6 (unpinned) are decayed; the
+    # stored activation of importance >= 7 / pinned memories is never reduced.
+    'activation_ranking_enabled': False,
+    'activation_weight': 0.05,
+    'activation_half_life_days': 30,
+    'activation_decay_enabled': True,
 }
 VISIBLE_BUCKETS = ('dynamic', 'permanent')
 HIDDEN_TYPES = ('archived', 'letter', 'plan', 'i', 'feel')
@@ -81,6 +89,15 @@ def load_settings(raw):
     candidate_k = raw.get('candidate_k')
     if type(candidate_k) is int and 1 <= candidate_k <= 32:
         settings['candidate_k'] = candidate_k
+    for key in ('activation_ranking_enabled', 'activation_decay_enabled'):
+        if type(raw.get(key)) is bool:
+            settings[key] = raw[key]
+    weight = raw.get('activation_weight')
+    if type(weight) in (int, float) and not isinstance(weight, bool) and 0 <= float(weight) <= 0.2:
+        settings['activation_weight'] = float(weight)
+    half_life = raw.get('activation_half_life_days')
+    if type(half_life) is int and not isinstance(half_life, bool) and 1 <= half_life <= 3650:
+        settings['activation_half_life_days'] = half_life
     return settings
 
 
@@ -107,11 +124,18 @@ def tokenize(text, *, stopwords_enabled=False):
 class BrainIndex:
     """Read-only index over brain.db. Rebuilt when the file changes; never writes to it."""
 
-    def __init__(self, db_path, *, weight_vector=0.65, weight_keyword=0.35, stopwords_enabled=False):
+    def __init__(self, db_path, *, weight_vector=0.65, weight_keyword=0.35, stopwords_enabled=False,
+                 activation_ranking_enabled=False, activation_weight=0.05,
+                 activation_half_life_days=30, activation_decay_enabled=True):
         self.db_path = Path(db_path)
         self.weight_vector = weight_vector
         self.weight_keyword = weight_keyword
         self.stopwords_enabled = bool(stopwords_enabled)
+        self.activation_ranking_enabled = bool(activation_ranking_enabled)
+        self.activation_weight = float(activation_weight)
+        self.activation_half_life_days = int(activation_half_life_days)
+        self.activation_decay_enabled = bool(activation_decay_enabled)
+        self.activation_ready = False
         self.lock = threading.RLock()
         self.signature = None
         self.rows = []
@@ -132,20 +156,53 @@ class BrainIndex:
     def _connect(self):
         return sqlite3.connect('file:%s?mode=ro' % self.db_path, uri=True)
 
+    def _activation_usable(self, connection):
+        if not self.activation_ranking_enabled:
+            return False
+        try:
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'memory_activation' not in tables:
+                return False
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
+            return 'pinned' in columns
+        except sqlite3.Error:
+            return False
+
     def _load(self):
         connection = self._connect()
         try:
-            query = ('SELECT id, title, body, created, importance, bucket, type, is_tombstone, '
-                     'is_deleted FROM memories '
-                     'WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0')
+            self.activation_ready = self._activation_usable(connection)
+            fields = ('m.id, m.title, m.body, m.created, m.importance, m.bucket, m.type, '
+                      'm.is_tombstone, m.is_deleted')
+            join = ''
+            if self.activation_ready:
+                fields += ', m.pinned, a.activity_score, a.score_updated_at'
+                join = ' LEFT JOIN memory_activation a ON a.memory_id=m.id'
+            query = ('SELECT ' + fields + ' FROM memories m' + join +
+                     ' WHERE m.bucket IN (?,?) AND m.is_tombstone=0 AND m.is_deleted=0')
+            def run(statement):
+                try:
+                    return connection.execute(
+                        statement + " AND m.id NOT IN (SELECT memory_id FROM delete_requests "
+                        "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
+                except sqlite3.OperationalError as exc:
+                    if 'no such table: delete_requests' not in str(exc).casefold():
+                        raise
+                    return connection.execute(statement, VISIBLE_BUCKETS).fetchall()
+
             try:
-                rows = connection.execute(
-                    query + " AND id NOT IN (SELECT memory_id FROM delete_requests "
-                            "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
-            except sqlite3.OperationalError as exc:
-                if 'no such table: delete_requests' not in str(exc).casefold():
+                rows = run(query)
+            except sqlite3.OperationalError:
+                if not self.activation_ready:
                     raise
-                rows = connection.execute(query, VISIBLE_BUCKETS).fetchall()
+                # A partial/older activation table must degrade to the base order, never break
+                # automatic recall. The next refresh retries once the schema is complete.
+                self.activation_ready = False
+                base_fields = ('m.id, m.title, m.body, m.created, m.importance, m.bucket, m.type, '
+                               'm.is_tombstone, m.is_deleted')
+                rows = run('SELECT ' + base_fields + ' FROM memories m '
+                           'WHERE m.bucket IN (?,?) AND m.is_tombstone=0 AND m.is_deleted=0')
             visible = [row for row in rows if (row[6] or '') not in HIDDEN_TYPES]
             vectors = {}
             # P6-S1 G-A14: no hard-coded dimension. The stored length is the vector's real size;
@@ -255,7 +312,10 @@ class BrainIndex:
         diag = diagnostics if isinstance(diagnostics, dict) else {}
         diag.update({'model_mismatch': False, 'skipped_dim': 0, 'skipped_created': 0,
                      'date_filtered': 0, 'embedding_model': embedding_model,
-                     'keyword_only': False})
+                     'keyword_only': False, 'activation_ranking': bool(self.activation_ready),
+                     'activation_weight': (float(self.activation_weight)
+                                           if self.activation_ready else 0.0),
+                     'activation_ranked': 0})
         if start_date or end_date:
             kept = []
             for row in rows:
@@ -302,6 +362,12 @@ class BrainIndex:
         # every BM25 hit would score 0 and the documented local fallback would return nothing.
         vector_weight = self.weight_vector if query_vector else 0.0
         keyword_weight = self.weight_keyword if (query_vector or self.weight_keyword) else 1.0
+        from veil.brain.memory_weights import effective_score, normalized_score
+
+        activation_now = None
+        if self.activation_ready:
+            from datetime import datetime, timezone
+            activation_now = datetime.now(timezone.utc)
         scored = []
         for row in rows:
             memory_id = row[0]
@@ -314,6 +380,16 @@ class BrainIndex:
             except (TypeError, ValueError):
                 importance = 5
             score += min(0.05, max(0.0, (importance - 5) * 0.01))
+            if self.activation_ready and len(row) > 11:
+                # P6-S6-1 optional signal: delivered activation only, decayed only for
+                # importance <= 6 and unpinned. An undelivered memory contributes nothing.
+                activation = effective_score(
+                    row[10], row[11], importance, row[9],
+                    half_life_days=self.activation_half_life_days, now=activation_now,
+                    decay_enabled=self.activation_decay_enabled)
+                if activation > 0:
+                    score += self.activation_weight * normalized_score(activation)
+                    diag['activation_ranked'] += 1
             scored.append((score, memory_id, row))
         scored.sort(key=lambda item: (-item[0], item[1]))
         result = [{'id': memory_id, 'title': row[1] or '', 'body': row[2] or '',
@@ -330,15 +406,31 @@ _INDEX_LOCK = threading.Lock()
 
 def get_index(db_path, settings):
     stopwords = bool(settings.get('stopwords_enabled', False))
+    activation = bool(settings.get('activation_ranking_enabled', False))
+    # Inactive activation settings must not create a separate full index per value; the index
+    # ignores them anyway when the switch is off.
+    activation_key = ((settings.get('activation_weight', 0.05),
+                       settings.get('activation_half_life_days', 30),
+                       bool(settings.get('activation_decay_enabled', True)))
+                      if activation else (0, 0, False))
     key = (str(Path(db_path).resolve()) + '|' + str(settings['weight_vector']) + '|'
-           + str(settings['weight_keyword']) + '|' + str(int(stopwords)))
+           + str(settings['weight_keyword']) + '|' + str(int(stopwords)) + '|'
+           + str(int(activation)) + '|' + '|'.join(str(part) for part in activation_key))
     with _INDEX_LOCK:
         index = _INDICES.get(key)
         if index is None:
             index = BrainIndex(db_path, weight_vector=settings['weight_vector'],
                                weight_keyword=settings['weight_keyword'],
-                               stopwords_enabled=stopwords)
+                               stopwords_enabled=stopwords,
+                               activation_ranking_enabled=activation,
+                               activation_weight=settings.get('activation_weight', 0.05),
+                               activation_half_life_days=settings.get('activation_half_life_days', 30),
+                               activation_decay_enabled=settings.get('activation_decay_enabled', True))
             _INDICES[key] = index
+            # Bounded cache: a long-lived process that edits settings must not retain an unbounded
+            # number of full book indexes.
+            while len(_INDICES) > 32:
+                _INDICES.pop(next(iter(_INDICES)))
     return index
 
 
