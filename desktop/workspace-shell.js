@@ -23,12 +23,10 @@
   ]);
 
   const BRAIN_TABS = [
-    { page: 'brain-home', label: '记忆概览' },
-    { page: 'memory', label: '记忆库' },
-    { page: 'workspace-events', label: '事件故事' },
+    { page: 'brain-home', label: '记忆监控', dotId: 'subnav-health-dot' },
+    { page: 'memory', label: '记忆档案' },
     { page: 'brain-cognition', label: '关系与成长' },
-    { page: 'brain-recall', label: '召回诊断' },
-    { page: 'brain-health', label: '健康检查', dotId: 'subnav-health-dot' },
+    { page: 'brain-recall', label: '召回与注入' },
   ];
 
   const CONFIG_TABS = [

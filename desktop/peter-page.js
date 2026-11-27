@@ -297,17 +297,25 @@
     var facts = $p('peter-facts'), growth = $p('peter-growth');
     count($p('peter-facts-count'), facts.value, null);
     count($p('peter-growth-count'), growth.value, null);
-    var used = new TextEncoder().encode((facts.value || '') + (growth.value || '')).length;
-    if (state && state.learned) {
-      state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
-        used += new TextEncoder().encode(item.text || '').length;
-      });
-      // Ticket 422: outdated relationship rows are history; only current ones take the budget.
-      ((state.learned.relationship && state.learned.relationship.items) || []).forEach(function (item) {
-        if (item.status !== 'outdated') used += new TextEncoder().encode(item.text || '').length;
-      });
+    var hasDirtyLearned = dirty.has('facts') || dirty.has('growth') || dirty.has('ongoing') || dirty.has('relationship');
+    var backendBudget = (!hasDirtyLearned && state && state.learned && state.learned.budget && typeof state.learned.budget.used_bytes === 'number')
+      ? state.learned.budget : null;
+    var used = 0;
+    if (backendBudget) {
+      used = backendBudget.used_bytes;
+    } else {
+      used = new TextEncoder().encode((facts.value || '') + (growth.value || '')).length;
+      if (state && state.learned) {
+        state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
+          used += new TextEncoder().encode(item.text || '').length;
+        });
+        // Ticket 422: outdated relationship rows are history; only current ones take the budget.
+        ((state.learned.relationship && state.learned.relationship.items) || []).forEach(function (item) {
+          if (item.status !== 'outdated') used += new TextEncoder().encode(item.text || '').length;
+        });
+      }
     }
-    var max = state && state.learned ? state.learned.max_bytes : 4000;
+    var max = backendBudget ? backendBudget.max_bytes : (state && state.learned ? state.learned.max_bytes : 4000);
     $p('peter-learned-total').textContent = used + ' / ' + max + ' 字节';
     var bar = $p('peter-budget-bar');
     if (bar) bar.style.width = Math.min(100, max ? used / max * 100 : 0) + '%';
