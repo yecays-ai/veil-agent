@@ -132,7 +132,7 @@
 - 单元/集成：`tests/test_p6_s6_memory_weights.py`（46 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
 - 桌面：合流 S6-2 后 `desktop/tests/*.test.cjs` 64/64 通过（本单 3 项 + S6-2 1 项；含实际渲染记忆详情）。
 - 回归：完整 Python 套件与 `origin/main` 基线失败集合对比（见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。
-- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（最终代码 `612f6388...`），快照均为 `peter-20261127T170245 / r3`，mock、¥0；三次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→约 0.244、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；最终 run `digest_valid=true`、receipt 重放 `duplicate`、重要度/可见性/存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
+- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（最终代码 `b59a57bb...`），快照均为 `peter-20261127T170245 / r3`，mock、¥0；四次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→约 0.244、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；最终 run `digest_valid=true`、receipt 重放 `duplicate`、重要度/可见性/存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
 
 ## 六、验收步骤（Lan 在 Windows 上体验）
 

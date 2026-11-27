@@ -122,6 +122,13 @@ def ensure_schema(connection):
             connection.execute(
                 'ALTER TABLE memory_activation ADD COLUMN %s %s'
                 % (name, ACTIVATION_COLUMNS[name]))
+        # Backfill the persisted day from the (still present) events so the first delivery after
+        # an upgrade cannot count an already-counted day a second time.
+        connection.execute(
+            'UPDATE memory_activation SET last_delivered_day=('
+            'SELECT MAX(e.delivered_day) FROM memory_delivery_events e '
+            'WHERE e.memory_id=memory_activation.memory_id AND e.counted=1) '
+            'WHERE last_delivered_day IS NULL')
         try:
             apply_digest(connection)
         except sqlite3.Error:
