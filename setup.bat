@@ -41,7 +41,7 @@ if errorlevel 1 echo Warning: Nowhere is unavailable; the rest of VEIL setup wil
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" setup_fetch.py
+".venv\Scripts\python.exe" -m veil.integrations.setup_fetch
 if errorlevel 1 goto failed
 echo Installed. Follow README.md to add your local persona and .env, then open start.bat.
 pause

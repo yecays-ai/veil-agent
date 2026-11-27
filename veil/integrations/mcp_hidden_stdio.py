@@ -1,6 +1,11 @@
 """Run a stdio MCP command without creating a Windows console."""
+from pathlib import Path
 import subprocess
 import sys
+
+_ROOT = str(Path(__file__).resolve().parents[2])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from veil.windows.windows_process import hidden_subprocess_kwargs
 

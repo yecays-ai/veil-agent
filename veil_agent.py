@@ -2220,7 +2220,7 @@ class Chat:
         self.tools, self.approval, self.output, self.voice = tools, approval, output, voice
         self.tool_aliases = validate_tool_aliases(getattr(cfg, 'tool_aliases', None))
         self.active_tool_aliases = {}
-        from mcp_services import MCPServices
+        from veil.integrations.mcp_services import MCPServices
         integrations = {}
         filesystem_tools = getattr(tools, 'files', tools)
         legacy_web = getattr(cfg, 'web', None) or {}
@@ -2449,7 +2449,7 @@ class Chat:
         thought = [THOUGHT_TOOL] if history else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
         if mcp_tools or (self.cfg.tools or {}).get('enabled', True) and self.mcp_services.has_stateful_services() is True:
-            from mcp_services import STATUS_TOOL_SCHEMA
+            from veil.integrations.mcp_services import STATUS_TOOL_SCHEMA
             mcp_tools = [*mcp_tools, STATUS_TOOL_SCHEMA]
         schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
@@ -6902,7 +6902,7 @@ def main():
                 print('记忆后台需要先选择 API 模型；请打开设置选择后重启。')
             with client, background_client:
                 from veil.tools.tools_agent import FilesystemTools
-                from web_tools import WebTools
+                from veil.integrations.web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:
                     if use_memory:

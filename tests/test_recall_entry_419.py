@@ -11,7 +11,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from away_bridge import AwayBridge, Incoming
+from veil.integrations.away_bridge import AwayBridge, Incoming
 from test_recall_budget_419 import ChatAssemblyBudgetTests
 
 
@@ -137,7 +137,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from away_bridge import AwayBridge, Incoming
+from veil.integrations.away_bridge import AwayBridge, Incoming
 from memory_native import NativeMemoryTools
 from test_recall_budget_419 import ChatAssemblyBudgetTests
 from veil_agent import ActivityState, Chat, Store, load_character, run_chat

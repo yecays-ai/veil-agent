@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil.tools import executor_opencode as ex
-import browser_tools
+from veil.integrations import browser_tools
 from veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,

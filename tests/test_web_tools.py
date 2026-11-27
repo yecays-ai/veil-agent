@@ -5,11 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import web_tools
+from veil.integrations import web_tools
 
 from veil.tools.tools_agent import FilesystemTools
 from veil_agent import Store
-from web_tools import WebTools, public_http_url
+from veil.integrations.web_tools import WebTools, public_http_url
 
 
 class PublicUrlTests(unittest.TestCase):
@@ -56,8 +56,8 @@ class WebToolsTests(unittest.TestCase):
         cfg = SimpleNamespace(id='test', tools={'enabled': True, 'max_result_bytes': max_bytes},
                               web={'enabled': enabled})
         factory = Mock(return_value=worker) if worker is not None else Mock(side_effect=OSError())
-        with patch('web_tools._fetch_python', return_value=Path('fetch-python.exe') if worker else None), \
-                patch('web_tools.DDGS', Mock()):
+        with patch('veil.integrations.web_tools._fetch_python', return_value=Path('fetch-python.exe') if worker else None), \
+                patch('veil.integrations.web_tools.DDGS', Mock()):
             return root, cfg, WebTools(root, cfg, worker_factory=factory), factory
 
     def test_search_returns_bounded_sources_as_untrusted_data_without_logging_query(self):
@@ -68,7 +68,7 @@ class WebToolsTests(unittest.TestCase):
             {'title': 'Weather', 'href': 'https://weather.example/forecast', 'body': 'Sunny'},
             {'title': 'Private result', 'href': 'http://192.168.1.1/', 'body': 'hidden'},
         ]
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, summary = tools.invoke('web_search', {'query': 'Shanghai weather'})
         self.assertEqual(state, '成功', result)
         self.assertIn('Untrusted web search results', result)
@@ -81,24 +81,24 @@ class WebToolsTests(unittest.TestCase):
 
     def test_query_validation_and_network_failure_are_bounded(self):
         _, _, tools, _ = self.make_tools(worker=Mock())
-        with patch('web_tools.DDGS') as ddgs:
+        with patch('veil.integrations.web_tools.DDGS') as ddgs:
             result, state, _ = tools.invoke('web_search', {'query': '   '})
         ddgs.assert_not_called()
         self.assertEqual(state, '被拒绝')
         self.assertIn('1 to 500 characters', result)
         self.assertIn("Received query parameter: '   '", result)
-        with patch('web_tools.DDGS') as ddgs:
+        with patch('veil.integrations.web_tools.DDGS') as ddgs:
             result, state, _ = tools.invoke('web_search', {})
         ddgs.assert_not_called()
         self.assertEqual(state, '被拒绝')
         self.assertIn("Received query parameter: '<missing>'", result)
-        with patch('web_tools.DDGS') as ddgs:
+        with patch('veil.integrations.web_tools.DDGS') as ddgs:
             result, state, _ = tools.invoke('web_search', {'query': 'q' * 1000})
         ddgs.assert_not_called()
         received = result.split('Received query parameter: ', 1)[1]
         self.assertEqual(len(received), 200)
         self.assertEqual(state, '被拒绝')
-        with patch('web_tools.DDGS', side_effect=TimeoutError()):
+        with patch('veil.integrations.web_tools.DDGS', side_effect=TimeoutError()):
             result, state, summary = tools.invoke('web_search', {'query': 'a useful topic'})
         self.assertEqual(state, '出错')
         self.assertNotIn('a useful topic', result)
@@ -111,7 +111,7 @@ class WebToolsTests(unittest.TestCase):
         ddgs.text.side_effect = [
             TimeoutError(), [],
             [{'title': 'Hit', 'href': 'https://ok.example/a', 'body': 'x'}]]
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, summary = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '成功', result)
         self.assertIn('https://ok.example/a', result)
@@ -120,7 +120,7 @@ class WebToolsTests(unittest.TestCase):
         # The engine that answered is tried first on the next search.
         ddgs.text.reset_mock()
         ddgs.text.side_effect = [[{'title': 'Hit', 'href': 'https://ok.example/b', 'body': 'x'}]]
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual([c.kwargs['backend'] for c in ddgs.text.call_args_list], ['mojeek'])
 
@@ -135,8 +135,8 @@ class WebToolsTests(unittest.TestCase):
         tools = self.deepseek_tools()
         ddgs = Mock()
         found = [{'title': 'T', 'href': 'https://ok.example/a', 'body': 'summary'}]
-        with patch('web_tools.deepseek_search', return_value=found) as search, \
-                patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.deepseek_search', return_value=found) as search, \
+                patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '成功', result)
         self.assertIn('https://ok.example/a', result)
@@ -152,17 +152,17 @@ class WebToolsTests(unittest.TestCase):
         tools = self.deepseek_tools()
         ddgs = Mock()
         ddgs.text.return_value = [{'title': 'Hit', 'href': 'https://ok.example/b', 'body': 'x'}]
-        with patch('web_tools.deepseek_search', side_effect=OSError('401 for sk-test-secret')), \
-                patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.deepseek_search', side_effect=OSError('401 for sk-test-secret')), \
+                patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '成功', result)
         self.assertEqual(tools.budget.settle_estimate.call_args.kwargs['settled_amount'], 0)
         self.assertEqual(tools.budget.settle_estimate.call_args.args[1], 'deepseek-search-failed')
         # A free engine answering does not push DeepSeek out of first place next time.
         self.assertEqual(tools._last_engine, 'brave')
-        with patch('web_tools.deepseek_search', return_value=[{'title': 'T', 'href': 'https://ok.example/d',
+        with patch('veil.integrations.web_tools.deepseek_search', return_value=[{'title': 'T', 'href': 'https://ok.example/d',
                                                                 'body': 's'}]) as search, \
-                patch('web_tools.DDGS', return_value=ddgs):
+                patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             ddgs.text.reset_mock()
             tools.invoke('web_search', {'query': 'topic'})
         search.assert_called_once()
@@ -171,8 +171,8 @@ class WebToolsTests(unittest.TestCase):
         tools.budget.reserve_amount.return_value = ('rid2', web_tools.DEEPSEEK_SEARCH_CNY)
         tools._last_engine = None
         ddgs.text.side_effect = TimeoutError()
-        with patch('web_tools.deepseek_search', side_effect=OSError('bad sk-test-secret')), \
-                patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.deepseek_search', side_effect=OSError('bad sk-test-secret')), \
+                patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertNotIn('sk-test-secret', result)
@@ -181,7 +181,7 @@ class WebToolsTests(unittest.TestCase):
         tools.budget.reserve_amount.return_value = ('rid3', web_tools.DEEPSEEK_SEARCH_CNY)
         tools._last_engine = None
         ddgs.text.side_effect = None
-        with patch('web_tools.deepseek_search', return_value=[]), patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.deepseek_search', return_value=[]), patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(tools.budget.settle_estimate.call_args.kwargs['settled_amount'], 0)
 
@@ -190,7 +190,7 @@ class WebToolsTests(unittest.TestCase):
         tools.budget.reserve_amount.side_effect = RuntimeError('over budget')
         ddgs = Mock()
         ddgs.text.return_value = [{'title': 'Hit', 'href': 'https://ok.example/c', 'body': 'x'}]
-        with patch('web_tools.deepseek_search') as search, patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.deepseek_search') as search, patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '成功', result)
         search.assert_not_called()
@@ -204,7 +204,7 @@ class WebToolsTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         opener = Mock()
         opener.open.return_value = response
-        with patch('web_tools.urllib.request.build_opener', return_value=opener) as build:
+        with patch('veil.integrations.web_tools.urllib.request.build_opener', return_value=opener) as build:
             found = web_tools.deepseek_search('查' * 300, 'sk-k', timeout=7)
         # Redirects are refused so the Authorization header never reaches another host.
         self.assertTrue(any(isinstance(h, web_tools._NoRedirect) for h in build.call_args.args))
@@ -219,7 +219,7 @@ class WebToolsTests(unittest.TestCase):
         self.assertEqual(sent, {'query': '查' * 128, 'count': 8, 'need_content': False})
         self.assertEqual(opener.open.call_args.kwargs['timeout'], 7)
         response.read.return_value = b'{"error": 1}'
-        with patch('web_tools.urllib.request.build_opener', return_value=opener), \
+        with patch('veil.integrations.web_tools.urllib.request.build_opener', return_value=opener), \
                 self.assertRaises(OSError):
             web_tools.deepseek_search('q', 'sk-k')
 
@@ -227,7 +227,7 @@ class WebToolsTests(unittest.TestCase):
         _, _, tools, _ = self.make_tools(worker=Mock())
         ddgs = Mock()
         ddgs.text.side_effect = OSError('cannot reach http://user:secret@proxy.example:8080 now')
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertNotIn('secret', result)
@@ -237,7 +237,7 @@ class WebToolsTests(unittest.TestCase):
         _, _, tools, _ = self.make_tools(worker=Mock())
         ddgs = Mock()
         ddgs.text.side_effect = TimeoutError()
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertEqual(ddgs.text.call_count, 5)
@@ -250,9 +250,9 @@ class WebToolsTests(unittest.TestCase):
         ddgs.text.side_effect = TimeoutError()
         clock = iter([0, 0, 25, 25, 25])
         with patch.dict('os.environ', {'DDGS_PROXY': ''}), \
-                patch('web_tools.urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:7890'}), \
-                patch('web_tools.time.monotonic', side_effect=lambda: next(clock)), \
-                patch('web_tools.DDGS', return_value=ddgs) as factory:
+                patch('veil.integrations.web_tools.urllib.request.getproxies', return_value={'http': 'http://127.0.0.1:7890'}), \
+                patch('veil.integrations.web_tools.time.monotonic', side_effect=lambda: next(clock)), \
+                patch('veil.integrations.web_tools.DDGS', return_value=ddgs) as factory:
             result, state, _ = tools.invoke('web_search', {'query': 'topic'})
         self.assertEqual(state, '出错')
         self.assertEqual(factory.call_args.kwargs['proxy'], 'http://127.0.0.1:7890')
@@ -270,7 +270,7 @@ class WebToolsTests(unittest.TestCase):
         ddgs.text.return_value = [
             {'title': f'T{i}', 'href': f'https://site{i}.example/' + ('bad' if i == 2 else ''), 'body': 's'}
             for i in range(1, 7)] + [{'title': 'priv', 'href': 'http://10.0.0.1/', 'body': 'x'}]
-        with patch('web_tools.DDGS', return_value=ddgs):
+        with patch('veil.integrations.web_tools.DDGS', return_value=ddgs):
             result, state, summary = tools.invoke('web_research', {'query': 'topic', 'pages': 3})
         self.assertEqual(state, '成功', result)
         self.assertEqual(worker.call.call_count, 3)

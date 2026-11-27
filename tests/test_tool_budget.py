@@ -16,10 +16,10 @@ from veil_agent import Budget, Chat, Store, load_character
 PETER_GROUPS = ('web', 'github', 'desktop_control', 'memory_admin', 'build', 'desktop_files', 'garden_forum',
                 'garden_play', 'garden_more', 'nowhere', 'xiaohongshu', 'other')
 # Modules whose tool definitions are plain values in the repository (MCP services define theirs at run time).
-SCHEMA_MODULES = ('veil_agent', 'memory_native', 'long_tasks', 'veil.tools.tools_agent', 'browser_tools', 'life_records',
-                  'veil.tools.desktop_files', 'xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'thoughts',
-                  'chat_search', 'mcp_services', 'profile_notes', 'virtual_cards', 'maintenance',
-                  'veil.tools.executor_opencode', 'web_tools', 'github_readonly', 'veil.windows.screen_pop', 'lab_games', 'lab_preview',
+SCHEMA_MODULES = ('veil_agent', 'memory_native', 'long_tasks', 'veil.tools.tools_agent', 'veil.integrations.browser_tools', 'life_records',
+                  'veil.tools.desktop_files', 'veil.integrations.xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'thoughts',
+                  'chat_search', 'veil.integrations.mcp_services', 'profile_notes', 'virtual_cards', 'maintenance',
+                  'veil.tools.executor_opencode', 'veil.integrations.web_tools', 'veil.integrations.github_readonly', 'veil.windows.screen_pop', 'lab_games', 'lab_preview',
                   'lab_sandbox')
 
 

@@ -1471,7 +1471,7 @@ class GlanceController:
         self._budget_available_cache = True
         self._input_clock = clock
         if self.platform_enabled and self._input_clock is None:
-            from qq_channel import IdleClock, _windows_input_clock
+            from veil.integrations.qq_channel import IdleClock, _windows_input_clock
             from veil.windows.desktop_access import register_input_tracker
             self._input_clock = IdleClock(*_windows_input_clock())
             register_input_tracker(self._input_clock)

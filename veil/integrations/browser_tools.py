@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit, unquote
 
 from veil.windows.desktop_access import desktop_access
-from web_tools import public_http_url
+from veil.integrations.web_tools import public_http_url
 from veil.windows.windows_interaction import DesktopInputMonitor
 
 BROWSER_TOOL_NAMES = frozenset({'browser'})

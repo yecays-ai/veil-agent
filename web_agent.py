@@ -3097,7 +3097,7 @@ def make_handler(hub, token):
                 self._send(200, {'ok': True, 'models': view})
 
         def _post_mcp(self, body):
-            from mcp_services import MCPConfigError, MCPConflict
+            from veil.integrations.mcp_services import MCPConfigError, MCPConflict
             if hub.chat is None or hub.stopping or hub.stopped:
                 self._send(409, {'error': 'Peter 尚未就绪。'})
             else:
@@ -3877,7 +3877,7 @@ def serve_chat(chat, hub, channels=(), acceptance=False):
             hub.inbox.put((text, media, complete, req_id, True))
             hub.busy = True
     if channels:
-        from away_bridge import AwayBridge
+        from veil.integrations.away_bridge import AwayBridge
     for channel in channels:
         bridge = AwayBridge(channel, hub)
         hub.away.append(bridge)
@@ -3989,8 +3989,8 @@ def main(argv=None):
             client, model = make_model(config_root, cfg)
             background_client, background_model = make_model(config_root, cfg, provider=cfg.background_provider)
             voice = make_voice(config_root, cfg, store, budget)
-            from email_channel import EmailChannel
-            from qq_channel import QQChannel
+            from veil.integrations.email_channel import EmailChannel
+            from veil.integrations.qq_channel import QQChannel
             channels = [] if args.acceptance else [
                 channel for channel in (EmailChannel.from_env(config_root, cfg, store.root),
                                         QQChannel.from_env(config_root, cfg, store.root)) if channel]
@@ -4017,7 +4017,7 @@ def main(argv=None):
             try:
                 with client, background_client:
                     from veil.tools.tools_agent import FilesystemTools
-                    from web_tools import WebTools
+                    from veil.integrations.web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:
                         if use_memory:

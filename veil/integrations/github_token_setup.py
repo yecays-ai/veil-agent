@@ -5,8 +5,7 @@ import sys
 from pathlib import Path
 
 from maintenance import TOKEN_FILE_NAME, TOKEN_PATTERN
-
-ROOT = Path(__file__).resolve().parent
+from veil.paths import PROJECT_ROOT as ROOT
 
 
 def main():

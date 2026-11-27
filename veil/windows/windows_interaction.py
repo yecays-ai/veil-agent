@@ -1520,7 +1520,7 @@ class WindowsInteractionTools:
                 if app.get('public_web') is not True:
                     return WindowsToolResult('This allowlisted application is not authorized to open webpage URLs.',
                                              activity_detail=f'{summary} 网页打开未授权。'), '被拒绝'
-                from web_tools import public_http_url
+                from veil.integrations.web_tools import public_http_url
                 url = public_http_url(args['url'])
                 if not url:
                     return WindowsToolResult('Only a valid public HTTP(S) webpage URL can be opened.',

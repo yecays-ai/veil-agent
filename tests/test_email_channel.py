@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import email_channel
-from away_bridge import AwayBridge
-from email_channel import EMAIL_PREFIX, EmailChannel, reply_text
+from veil.integrations import email_channel
+from veil.integrations.away_bridge import AwayBridge
+from veil.integrations.email_channel import EMAIL_PREFIX, EmailChannel, reply_text
 from veil_agent import send_message_schema
 from web_agent import Hub
 

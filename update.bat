@@ -67,7 +67,7 @@ if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" setup_fetch.py
+".venv\Scripts\python.exe" -m veil.integrations.setup_fetch
 if errorlevel 1 goto failed
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
 if errorlevel 1 echo Warning: Nowhere is unavailable; Peter can still use VEIL. Rerun setup.bat after resolving the Nowhere installation error.

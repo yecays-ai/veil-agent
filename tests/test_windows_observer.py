@@ -604,7 +604,7 @@ class StuckWindowReadTests(unittest.TestCase):
 
 class QQWindowDiscoveryTests(unittest.TestCase):
     def test_chat_window_is_found_through_the_win32_adapter(self):
-        from qq_channel import QQWindow
+        from veil.integrations.qq_channel import QQWindow
         handles = []
 
         class FakeAuto:

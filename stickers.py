@@ -245,7 +245,7 @@ def download_image(url):
         if parts.scheme not in ('http', 'https') or parts.username or not host:
             raise StickerError('link is not a public web address')
         if proxied:
-            from web_tools import public_http_url
+            from veil.integrations.web_tools import public_http_url
             if public_http_url(current) is None:
                 raise StickerError('link is not a public web address')
         else:

@@ -16,10 +16,10 @@ from types import SimpleNamespace
 from agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
 from capability_state import capability_transaction, save_capabilities
 from attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
-from web_tools import WEB_TOOL_NAMES
-from github_readonly import GITHUB_TOOL_NAMES, GitHubReadTools
-from browser_tools import BROWSER_TOOL_NAMES, BrowserTools
-from xiaohongshu_tools import XHS_TOOL_NAMES, XiaohongshuTools
+from veil.integrations.web_tools import WEB_TOOL_NAMES
+from veil.integrations.github_readonly import GITHUB_TOOL_NAMES, GitHubReadTools
+from veil.integrations.browser_tools import BROWSER_TOOL_NAMES, BrowserTools
+from veil.integrations.xiaohongshu_tools import XHS_TOOL_NAMES, XiaohongshuTools
 from veil.tools.desktop_files import (DESKTOP_FILE_READ_TOOL_NAMES, DESKTOP_FILE_TOOL_NAMES,
                            DesktopFileReadTools, DesktopFileTools, keep_previous_version,
                            replace_file_bytes)
@@ -1891,13 +1891,13 @@ def _filesystem_server_command(workspace, *, executable=None, platform=None, roo
     pythonw = python.with_name('pythonw.exe')
     if not pythonw.is_file():
         pythonw = python
-    proxy = PROJECT_ROOT / 'mcp_hidden_stdio.py'
+    proxy = PROJECT_ROOT / 'veil' / 'integrations' / 'mcp_hidden_stdio.py'
     return str(pythonw), [str(proxy), *args]
 
 
 def _McpWorker(workspace):
     """Start the pinned filesystem MCP server on the shared MCP client."""
-    from mcp_services import open_stdio_client
+    from veil.integrations.mcp_services import open_stdio_client
     command, args = _filesystem_server_command(workspace)
     worker = open_stdio_client('filesystem', command, args, start_timeout=120, call_timeout=60,
                                survive_timeout=True)

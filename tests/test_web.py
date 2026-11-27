@@ -267,7 +267,7 @@ output_cny_per_million = "8"
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
         self.hub.busy = False
         email = SimpleNamespace(name='email', label='Email')
-        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+        with patch('web_agent.run_chat'), patch('veil.integrations.away_bridge.AwayBridge.start'), \
                 patch.object(self.hub, 'request_stop'):
             serve_chat(chat, self.hub, channels=(email,))
         email_bridge = self.hub.away[-1]
@@ -294,7 +294,7 @@ output_cny_per_million = "8"
             'request_id': 'edit-request', 'message_id': 'edit-message'})
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
         self.hub.busy = False
-        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+        with patch('web_agent.run_chat'), patch('veil.integrations.away_bridge.AwayBridge.start'), \
                 patch.object(self.hub, 'request_stop'):
             serve_chat(chat, self.hub, channels=())
         self.hub.busy = False

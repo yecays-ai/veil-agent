@@ -8,4 +8,4 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" github_token_setup.py
+".venv\Scripts\python.exe" -m veil.integrations.github_token_setup

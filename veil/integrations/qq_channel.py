@@ -260,7 +260,7 @@ class QQChannel:
             return False   # poll reports why
 
     def poll(self):
-        from away_bridge import ChannelError, Incoming
+        from veil.integrations.away_bridge import ChannelError, Incoming
         try:
             if not self.away():
                 return []   # she is at the computer: never pull windows in front of her

@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from away_bridge import AwayBridge
-from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
+from veil.integrations.away_bridge import AwayBridge
+from veil.integrations.qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
 from web_agent import Hub
 
 
@@ -254,7 +254,7 @@ class QQChannelTests(unittest.TestCase):
     def test_missing_component_is_reported_not_silent(self):
         import sys
         from unittest.mock import patch
-        from qq_channel import QQWindow
+        from veil.integrations.qq_channel import QQWindow
         self.channel.ui = QQWindow('Lan')
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
         bridge = AwayBridge(self.channel, hub)
