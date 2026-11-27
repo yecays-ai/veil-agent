@@ -11,9 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import tools_agent
-import tool_failures
-from tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
+from veil.tools import tools_agent
+from veil.tools import tool_failures
+from veil.tools.tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
 from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
                         UserError, join_reply_continuation, model_tool_result, request_byte_size,
@@ -249,8 +249,8 @@ class ToolPolicyTests(unittest.TestCase):
             'max_result_bytes': 64, 'persistent_append_file': 'growth-journal.md'})
         worker = SimpleNamespace(tools=[SimpleNamespace(name='write_file',
             description='Write', inputSchema={})], close=Mock())
-        with patch('tools_agent.shutil.which', return_value='node'), \
-             patch('tools_agent._McpWorker', return_value=worker):
+        with patch('veil.tools.tools_agent.shutil.which', return_value='node'), \
+             patch('veil.tools.tools_agent._McpWorker', return_value=worker):
             manager = FilesystemTools(self.root, cfg, store)
         names = {tool.name for tool in manager.tools}
         self.assertEqual(names, {'write_file', 'append_file', 'grant_append',
@@ -271,7 +271,7 @@ class ToolPolicyTests(unittest.TestCase):
                 target.unlink()
                 target.write_text('replacement', encoding='utf-8')
             return real_open(path, flags, *args, **kwargs)
-        with patch('tools_agent.os.open', side_effect=replace_then_open):
+        with patch('veil.tools.tools_agent.os.open', side_effect=replace_then_open):
             result, state, _ = manager.invoke('append_file',
                 {'path': 'growth-journal.md', 'content': 'new'}, lambda _: 'y')
         self.assertEqual(state, '被拒绝')
@@ -500,7 +500,7 @@ class ToolPolicyTests(unittest.TestCase):
         store = Store(self.root / 'data')
         cfg = SimpleNamespace(id='test', tools={'enabled': True, 'folder': 'data/test/workspace',
             'max_steps': 6, 'max_result_bytes': 8192})
-        with patch('tools_agent.shutil.which', return_value=None):
+        with patch('veil.tools.tools_agent.shutil.which', return_value=None):
             manager = FilesystemTools(self.root, cfg, store)
         self.assertEqual(manager.tools, [])
         self.assertIsNone(manager.client)
@@ -1695,7 +1695,7 @@ class FilesystemServerTests(unittest.TestCase):
 
     def test_tool_failure_source_strings_are_english(self):
         root = Path(__file__).resolve().parents[1]
-        paths = ('long_tasks.py', 'memory_native.py', 'tools_agent.py', 'veil_agent.py', 'memory_agent.py')
+        paths = ('long_tasks.py', 'memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'memory_agent.py')
         failure_states = {'被拒绝', '出错', False}
         found = 0
 

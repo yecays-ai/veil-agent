@@ -8,4 +8,4 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" workbench_switch.py
+".venv\Scripts\python.exe" -m veil.tools.workbench_switch

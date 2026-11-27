@@ -28,8 +28,8 @@ PROMPT_MODULES = (
     'short_term_notes.py',
     'user_persona.py',
     'voice_style.py',
-    'executor_opencode.py',
-    'windows_observer.py',
+    'veil/tools/executor_opencode.py',
+    'veil/windows/windows_observer.py',
 )
 
 MIN_CHARS = 100
@@ -149,17 +149,30 @@ def builds_requests(path):
     return False
 
 
+def iter_source_files():
+    """Yield repository-relative source files across root and veil/ (excluding veil/prompts/)."""
+    files = list(ROOT.glob('*.py'))
+    veil_dir = ROOT / 'veil'
+    if veil_dir.is_dir():
+        for path in sorted(veil_dir.rglob('*.py')):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel.startswith('veil/prompts/') or path.name == '__init__.py':
+                continue
+            files.append(path)
+    return files
+
+
 def modules():
-    """The fixed prompt modules plus every root module that imports prompts.
+    """The fixed prompt modules plus every module that imports prompts.
 
     Ticket 405 review: a hand-maintained list is how life_state.py escaped scanning for three
     tickets. Anything that imports prompts is building model text, so it is scanned without
     anyone remembering to add it here.
     """
     found = set(PROMPT_MODULES)
-    for path in ROOT.glob('*.py'):
+    for path in iter_source_files():
         if _imports_prompts(path):
-            found.add(path.name)
+            found.add(path.relative_to(ROOT).as_posix())
     return sorted(found)
 
 

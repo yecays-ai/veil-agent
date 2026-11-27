@@ -18,13 +18,13 @@ class ScanCoverageTests(unittest.TestCase):
     )
 
     def test_every_module_that_imports_prompts_is_scanned(self):
-        importing = {path.name for path in Path(inline.ROOT).glob('*.py')
+        importing = {path.relative_to(inline.ROOT).as_posix() for path in inline.iter_source_files()
                      if inline._imports_prompts(path)}
         self.assertTrue(importing)
         self.assertEqual(sorted(importing - set(inline.modules())), [])
 
     def test_every_module_that_builds_requests_is_scanned(self):
-        builders = {path.name for path in Path(inline.ROOT).glob('*.py')
+        builders = {path.relative_to(inline.ROOT).as_posix() for path in inline.iter_source_files()
                     if inline.builds_requests(path)}
         self.assertTrue(builders)
         self.assertEqual(sorted(builders - set(inline.modules())), [],

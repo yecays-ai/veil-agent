@@ -845,7 +845,7 @@ output_cny_per_million = "8"
         tools.consume_capability_event.assert_called_once_with(notice)
 
     def test_pending_capability_event_survives_restart_and_reaches_model(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
 
         def tools_after_startup():
             tools = FilesystemTools.__new__(FilesystemTools)
@@ -1066,9 +1066,9 @@ output_cny_per_million = "8"
         self.model.assert_not_called()
 
     def test_missing_tools_table_does_not_start_filesystem_server(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
         self.assertIsNone(self.cfg.tools)
-        with patch('tools_agent._McpWorker') as worker:
+        with patch('veil.tools.tools_agent._McpWorker') as worker:
             tools = FilesystemTools(self.root, self.cfg, self.store)
         self.assertEqual(tools.tools, [])
         worker.assert_not_called()
@@ -1234,7 +1234,7 @@ output_cny_per_million = "8"
             return 2 if 'OPTIONAL_CONTEXT' in content else 1
 
         with patch('recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
-             patch('screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
+             patch('veil.windows.screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
              patch('veil_agent.estimate_request_tokens', side_effect=estimate):
             self.chat.send('继续')
 

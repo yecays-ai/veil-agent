@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from unittest.mock import patch
 
 from long_tasks import LongTaskStore
-from tools_agent import FilesystemTools
+from veil.tools.tools_agent import FilesystemTools
 from veil_agent import Budget, Chat, Store, UserError, load_character, model_tool_result
 
 

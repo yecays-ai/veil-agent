@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import web_tools
 
-from tools_agent import FilesystemTools
+from veil.tools.tools_agent import FilesystemTools
 from veil_agent import Store
 from web_tools import WebTools, public_http_url
 
@@ -350,7 +350,7 @@ class FilesystemWebToolIntegrationTests(unittest.TestCase):
             cfg = SimpleNamespace(id='test', tools={'enabled': True,
                 'folder': 'data/test/workspace', 'max_steps': 6, 'max_result_bytes': 8192,
                 'lab': False}, memory={'enabled': False})
-            with patch('tools_agent.shutil.which', return_value=None):
+            with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                 manager = FilesystemTools(root, cfg, store, web_factory=lambda *_: web)
             self.assertIn('web_search', [tool.name for tool in manager.tools])
             self.assertIn('web_fetch', [tool.name for tool in manager.tools])

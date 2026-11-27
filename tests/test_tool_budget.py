@@ -8,18 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import tool_groups
-from tool_groups import (ALWAYS_ON, BUDGET, GROUP_TOOL_NAMES, OVERSIZE_EXEMPT, SOCIAL_PARTS, effective_group,
+from veil.tools import tool_groups
+from veil.tools.tool_groups import (ALWAYS_ON, BUDGET, GROUP_TOOL_NAMES, OVERSIZE_EXEMPT, SOCIAL_PARTS, effective_group,
                          group_of, groups_named, inventory, regroup_text)
 from veil_agent import Budget, Chat, Store, load_character
 
 PETER_GROUPS = ('web', 'github', 'desktop_control', 'memory_admin', 'build', 'desktop_files', 'garden_forum',
                 'garden_play', 'garden_more', 'nowhere', 'xiaohongshu', 'other')
 # Modules whose tool definitions are plain values in the repository (MCP services define theirs at run time).
-SCHEMA_MODULES = ('veil_agent', 'memory_native', 'long_tasks', 'tools_agent', 'browser_tools', 'life_records',
-                  'desktop_files', 'xiaohongshu_tools', 'windows_interaction', 'windows_observer', 'thoughts',
+SCHEMA_MODULES = ('veil_agent', 'memory_native', 'long_tasks', 'veil.tools.tools_agent', 'browser_tools', 'life_records',
+                  'veil.tools.desktop_files', 'xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'thoughts',
                   'chat_search', 'mcp_services', 'profile_notes', 'virtual_cards', 'maintenance',
-                  'executor_opencode', 'web_tools', 'github_readonly', 'screen_pop', 'lab_games', 'lab_preview',
+                  'veil.tools.executor_opencode', 'web_tools', 'github_readonly', 'veil.windows.screen_pop', 'lab_games', 'lab_preview',
                   'lab_sandbox')
 
 
@@ -55,7 +55,7 @@ def repository_schemas():
 
 class RegistryTests(unittest.TestCase):
     def test_every_tool_the_program_defines_is_registered(self):
-        import tools_agent
+        from veil.tools import tools_agent
         known = (tools_agent.ALLOW | tools_agent.ASK | tools_agent.OWN_WORK | tools_agent.LAB_ONLY
                  | tools_agent.NATIVE | tools_agent.AUTONOMY_DIRECT | set(repository_schemas()))
         unregistered = sorted(name for name in known if group_of(name) == 'other')

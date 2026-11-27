@@ -233,7 +233,7 @@ ORIGIN_LABELS = (
 
 def origin_note(tool_summaries, canonical=lambda name: name):
     """Kinds of places Peter used successfully so far in this wake, as a short phrase ('' when none)."""
-    from tool_groups import group_of
+    from veil.tools.tool_groups import group_of
     seen = set()
     for item in tool_summaries or ():
         if isinstance(item, dict) and item.get('state') == '成功':
@@ -1472,7 +1472,7 @@ class GlanceController:
         self._input_clock = clock
         if self.platform_enabled and self._input_clock is None:
             from qq_channel import IdleClock, _windows_input_clock
-            from desktop_access import register_input_tracker
+            from veil.windows.desktop_access import register_input_tracker
             self._input_clock = IdleClock(*_windows_input_clock())
             register_input_tracker(self._input_clock)
         self._enabled = self._read_enabled()
@@ -1525,7 +1525,7 @@ class GlanceController:
                 return False
             current = time.monotonic()
             if current - self._last_lock_check >= 1.0:
-                from windows_observer import WindowsDesktopBackend
+                from veil.windows.windows_observer import WindowsDesktopBackend
                 WindowsDesktopBackend._check_default_desktop()
                 self._last_lock_check = current
                 self._desktop_ready = True
@@ -1579,7 +1579,7 @@ class GlanceController:
         return True
 
     def desktop_items(self):
-        from desktop_files import desktop_item_names
+        from veil.tools.desktop_files import desktop_item_names
         return desktop_item_names()
 
     def _observe(self):

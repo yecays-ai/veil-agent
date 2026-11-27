@@ -155,7 +155,7 @@ class LabGames:
                             (opened.st_ino, opened.st_size, opened.st_mtime_ns))):
                     raise OSError('Score file redirected.')
                 if os.name == 'nt':
-                    from desktop_files import _final_path_for_fd
+                    from veil.tools.desktop_files import _final_path_for_fd
                     final = _final_path_for_fd(fd)
                     if final is None or os.path.normcase(str(final)) != os.path.normcase(str(score_file)):
                         raise OSError('Score file redirected.')

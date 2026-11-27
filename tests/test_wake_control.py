@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from autonomy import AutonomyController
-from tools_agent import tool_policy
+from veil.tools.tools_agent import tool_policy
 from veil_agent import ActivityState, Budget, Chat, Store, load_character
 from web_agent import Hub
 

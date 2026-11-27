@@ -5,7 +5,7 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from desktop_icons import (DesktopIcon, DesktopIconsError, DesktopIconsManager, DisplayMetrics,
+from veil.windows.desktop_icons import (DesktopIcon, DesktopIconsError, DesktopIconsManager, DisplayMetrics,
                            FakeDesktopIconsBackend)
 from veil_agent import Budget, Store
 

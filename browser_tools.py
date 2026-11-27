@@ -14,9 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.parse import urlsplit, unquote
 
-from desktop_access import desktop_access
+from veil.windows.desktop_access import desktop_access
 from web_tools import public_http_url
-from windows_interaction import DesktopInputMonitor
+from veil.windows.windows_interaction import DesktopInputMonitor
 
 BROWSER_TOOL_NAMES = frozenset({'browser'})
 MAX_BYTES = 8192

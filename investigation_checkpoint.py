@@ -138,7 +138,7 @@ class InvestigationCheckpoint:
                 task = {'id': uuid.uuid4().hex, 'goal': goal[:2000], 'request_id': request_id,
                         'status': 'active', 'reason': '', 'evidence': [], 'updated_at': now()}
             from veil_agent import safe_tool_activity_detail
-            from windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
+            from veil.windows.windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
             if side_effect is None:
                 side_effect = canonical not in READ_ONLY_TOOLS | {'browser', 'web_search'}
                 if canonical in WINDOWS_INTERACTION_TOOL_NAMES and canonical not in READ_ONLY_TOOLS:

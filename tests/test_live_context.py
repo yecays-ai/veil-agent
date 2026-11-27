@@ -54,7 +54,7 @@ class LiveContextTest(unittest.TestCase):
         self.assertEqual(self.notes.snapshot()['recent'], [])
 
     def test_hub_lists_every_tool_with_size_group_and_recent_use(self):
-        from tool_groups import inventory
+        from veil.tools.tool_groups import inventory
         schemas = [{'type': 'function', 'function': {'name': name, 'description': 'x', 'parameters': {}}}
                    for name in ('hold', 'trace')]
         self.chat.tool_inventory_snapshot = inventory(schemas, ('memory_admin',))

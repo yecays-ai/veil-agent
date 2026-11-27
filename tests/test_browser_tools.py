@@ -349,7 +349,7 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
     def test_chat_and_wake_offer_browser_keep_evidence_and_forward_stop(self):
         from dataclasses import replace
         from tests.test_tools import ToolLoopTests
-        from tools_agent import FilesystemTools, permitted_tools
+        from veil.tools.tools_agent import FilesystemTools, permitted_tools
         from veil_agent import Chat
         from browser_tools import TOOL
         for autonomous in (False, True):
@@ -359,7 +359,7 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
                 try:
                     cfg = replace(helper.cfg, web=CFG.web,
                                   tools={**helper.cfg.tools, 'max_result_bytes': 8192})
-                    with patch('tools_agent.shutil.which', return_value=None):
+                    with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                         manager = FilesystemTools(helper.root, cfg, helper.store)
                     manager.browser_tools = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
                     manager.tools = [TOOL]

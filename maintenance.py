@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from agent_types import UserError
-from windows_process import hidden_subprocess_kwargs
+from veil.windows.windows_process import hidden_subprocess_kwargs
 
 DEFAULT_GITHUB_REPO = 'yecays-ai/veil-agent'
 TASK_STAGES = frozenset({
@@ -143,7 +143,7 @@ class Runner:
                     pending_input = None
         finally:
             if process.poll() is None:
-                from executor_opencode import kill_tree
+                from veil.tools.executor_opencode import kill_tree
                 kill_tree(process)
             try:
                 process.communicate(timeout=5)

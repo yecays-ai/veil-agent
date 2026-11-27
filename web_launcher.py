@@ -10,7 +10,7 @@ import time
 from ctypes import wintypes
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from windows_process import hidden_subprocess_kwargs
+from veil.windows.windows_process import hidden_subprocess_kwargs
 
 ROOT = Path(__file__).resolve().parent
 ENDPOINT = ROOT / 'data' / 'web_service.json'

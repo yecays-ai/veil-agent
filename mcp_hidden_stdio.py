@@ -2,7 +2,7 @@
 import subprocess
 import sys
 
-from windows_process import hidden_subprocess_kwargs
+from veil.windows.windows_process import hidden_subprocess_kwargs
 
 
 def command_for_call(argv, windows=None):

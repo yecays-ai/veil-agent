@@ -21,9 +21,9 @@ from lab_preview import (
     _make_handler,
     _safe_lab_file,
 )
-from tools_agent import LAB_ONLY, permitted_tools, tool_policy
+from veil.tools.tools_agent import LAB_ONLY, permitted_tools, tool_policy
 from veil_agent import Budget, Chat, Store, load_character
-from windows_observer import observation_image_message
+from veil.windows.windows_observer import observation_image_message
 
 
 class LabPreviewPathTests(unittest.TestCase):

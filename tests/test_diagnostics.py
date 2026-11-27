@@ -429,7 +429,7 @@ class ReviewFixTests(Base):
 
 class SyncTests(unittest.TestCase):
     def test_group_labels_cover_every_registered_group(self):
-        import tool_groups
+        from veil.tools import tool_groups
         registered = set(tool_groups.GROUP_SUMMARIES)
         missing = registered - set(diagnostics.GROUP_LABELS)
         self.assertEqual(missing, set(), 'add the Chinese label for these groups')

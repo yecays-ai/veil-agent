@@ -2,7 +2,7 @@ import unittest
 
 import delegate_agent
 import long_tasks
-from tool_access import TOOL_ACCESS, tools_with
+from veil.tools.tool_access import TOOL_ACCESS, tools_with
 
 
 class ToolAccessTests(unittest.TestCase):

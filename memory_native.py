@@ -391,7 +391,7 @@ class NativeMemoryTools:
         # Read only actual bucket folders, never letters, plans, sources or private files.
         vault_path = role_vault_path(self.memory.store.root, self.memory.cfg.id)
         hidden = self.memory.hidden_ids()
-        from tools_agent import _redirected
+        from veil.tools.tools_agent import _redirected
         if not vault_path.exists():
             return {}
         if _redirected(vault_path):
@@ -592,7 +592,7 @@ class NativeMemoryTools:
         out = []
         if not archive.exists():
             return out
-        from tools_agent import _redirected
+        from veil.tools.tools_agent import _redirected
         if _redirected(vault_path) or _redirected(archive):
             raise ValueError('redirected vault')
         vault = vault_path.resolve()

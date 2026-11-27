@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_files import DesktopFileReadTools
+from veil.tools.desktop_files import DesktopFileReadTools
 
 
 class DesktopExplorationTests(unittest.TestCase):

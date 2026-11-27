@@ -62,7 +62,7 @@ class ScreenPopMixin:
                        if not entry['shown'] and not entry['cancelled'] and not entry['failure']]
             if pending:
                 try:
-                    from screen_pop import screen_state
+                    from veil.windows.screen_pop import screen_state
                     safe, _, reason = screen_state()
                 except Exception:
                     safe, reason = False, 'locked'
@@ -81,7 +81,7 @@ class ScreenPopMixin:
                     time.monotonic() - entry['created'] > 8.0 or self.stopping or self.stopped):
                 return None
             try:
-                from screen_pop import screen_state
+                from veil.windows.screen_pop import screen_state
                 safe, fullscreen, reason = screen_state()
             except Exception:
                 safe, fullscreen, reason = False, False, 'locked'

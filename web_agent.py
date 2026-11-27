@@ -37,7 +37,7 @@ from veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_
                         background_cfg, load_character, memory_available, now,
                         make_model, make_voice, run_chat,
                         safe_tool_activity_detail)
-import workbench_switch
+from veil.tools import workbench_switch
 import persona_versions
 import diagnostics
 from autonomy import AutonomyController, GlanceController
@@ -1942,7 +1942,7 @@ def _get_desktop_icons_manager(hub):
                 mgr = getattr(getattr(tools.files, 'windows_interaction_tools', None), 'desktop_icons_manager', None)
             if mgr:
                 return mgr
-    from desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
+    from veil.windows.desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
     from veil_agent import Store
     backend = Win32DesktopIconsBackend() if os.name == 'nt' else FakeDesktopIconsBackend()
     store = getattr(hub, 'store', None) or (getattr(hub.chat, 'store', None) if hub.chat else None)
@@ -3123,7 +3123,7 @@ def make_handler(hub, token):
             return getattr(interaction, 'approved_apps_path', None), interaction
 
         def _windows_apps_view(self, path, interaction):
-            from windows_interaction import list_approved_apps
+            from veil.windows.windows_interaction import list_approved_apps
             approved = list_approved_apps(path) if path else []
             ids = {row['app_id'] for row in approved}
             builtin, candidates = [], []
@@ -3341,7 +3341,7 @@ def make_handler(hub, token):
                 return
             path, interaction = self._windows_apps_path()
             body = body if isinstance(body, dict) else {}
-            from windows_interaction import remove_approved_app
+            from veil.windows.windows_interaction import remove_approved_app
             if path is not None and isinstance(body.get('add'), str):
                 if interaction is None or not interaction.approve_open_app(body['add']):
                     self._send(400, {'error': '没找到这个软件的窗口，请先把它打开再添加。'})
@@ -4016,7 +4016,7 @@ def main(argv=None):
             failed = False
             try:
                 with client, background_client:
-                    from tools_agent import FilesystemTools
+                    from veil.tools.tools_agent import FilesystemTools
                     from web_tools import WebTools
                     with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
                             root, config, budget=budget)) as tools:

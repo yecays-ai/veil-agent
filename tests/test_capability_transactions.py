@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from autonomy import AutonomyController
 from memory_native import NativeMemoryTools
-from tools_agent import FilesystemTools
+from veil.tools.tools_agent import FilesystemTools
 from veil_agent import ActivityState, Store, UserError
 from web_agent import Hub
 

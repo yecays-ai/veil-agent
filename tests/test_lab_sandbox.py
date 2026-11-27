@@ -23,7 +23,7 @@ from lab_sandbox import (
     _safe_lab_file,
     check_docker_available,
 )
-from tools_agent import FilesystemTools, LAB_ONLY, permitted_tools, tool_policy
+from veil.tools.tools_agent import FilesystemTools, LAB_ONLY, permitted_tools, tool_policy
 
 
 class LabSandboxPathTests(unittest.TestCase):

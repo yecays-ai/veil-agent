@@ -125,7 +125,7 @@ class IdleClockTests(unittest.TestCase):
 
 
     def test_input_made_by_another_part_of_veil_is_not_lan(self):
-        from desktop_access import program_input_made, register_input_tracker
+        from veil.windows.desktop_access import program_input_made, register_input_tracker
         now = [100_000]
         last = [100_000]
         clock = IdleClock(lambda: last[0], lambda: now[0])

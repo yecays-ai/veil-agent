@@ -22,16 +22,16 @@ from pathlib import Path
 import ledger_recovery
 import persona_versions
 import prompts
-import tool_failures
+from veil.tools import tool_failures
 from voice_style import FRAME as VOICE_FRAME, VoiceStyle, voice_path
 from background import append_context_log, background_context, background_path, context_chars, request_kind
 from contextlib import contextmanager, nullcontext
 
 from agent_types import (AUTONOMY_WAKE, BudgetExceeded, CODEX_WATCH_WAKE, EmptyReplyError,
                          GLANCE_WAKE, RequestFailed, TooLong, UserError, now)
-from desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
+from veil.tools.desktop_files import DESKTOP_FILE_READ_TOOL_NAMES
 from bubble_split import MAX_BUBBLES, split_bubbles
-from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
+from veil.tools.tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 from model_settings import SettingsError
 from delegate_agent import TOOL_SCHEMA as DELEGATE_TOOL
 
@@ -233,7 +233,7 @@ def model_tool_result(name, result, state):
     if name in DESKTOP_FILE_READ_TOOL_NAMES or name == 'rummage_desktop':
         return _wrap_untrusted_tool_data(
             'desktop_file', prompts.text('safety.untrusted_desktop_file'), result)
-    from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
+    from veil.windows.windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
     if name in WINDOWS_DESKTOP_TOOL_NAMES:
         return _wrap_untrusted_tool_data(
             'windows_desktop', prompts.text('safety.untrusted_windows'), result)
@@ -924,7 +924,7 @@ def load_character(root, character_id):
                 'reply_later_max_pending': positive_int(tools.get('reply_later_max_pending', 3)),
                 'reply_later_daily_wakes': positive_int(tools.get('reply_later_daily_wakes', 20)),
             }
-            from tool_groups import TOOL_GROUPS
+            from veil.tools.tool_groups import TOOL_GROUPS
             groups = tuple(raw_tools.get('tool_groups', ()))
             if any(not isinstance(item, str) or item not in TOOL_GROUPS for item in groups):
                 raise ValueError('tools.tool_groups may only list: ' + ', '.join(TOOL_GROUPS))
@@ -939,7 +939,7 @@ def load_character(root, character_id):
                                           Path(grant_file).name != grant_file or
                                           grant_file in ('', '.', '..')):
                 raise ValueError('persistent append file must be a filename')
-            from tools_agent import lab_name_problem
+            from veil.tools.tools_agent import lab_name_problem
             lab = tools['lab']
             if lab is not False and (lab_name_problem(lab) or
                     (isinstance(grant_file, str) and lab.casefold() == grant_file.casefold())):
@@ -2324,7 +2324,7 @@ class Chat:
             from user_persona import UserPersona
             self.user_persona = UserPersona(Path(cfg.persona_path).parent, cfg.user_persona)
         self.persona_lock = threading.RLock()
-        from pending_approvals import PendingApprovals
+        from veil.tools.pending_approvals import PendingApprovals
         self.pending_approvals = PendingApprovals(store.root, cfg.id)
         self.sent_messages = []
         self.send_message_count = 0
@@ -2403,7 +2403,7 @@ class Chat:
             pass
 
     def tool_schemas(self, inventory=False, full=False):
-        from tools_agent import permitted_tools
+        from veil.tools.tools_agent import permitted_tools
         task_tools = [{'type': 'function', 'function': {
             'name': tool.name, 'description': tool.description, 'parameters': tool.inputSchema}}
             for tool in self.long_tasks.tools] if self.task_tools_enabled else []
@@ -2439,7 +2439,7 @@ class Chat:
         profile = []
         if self.profile and history:
             if (self.cfg.profile or {}).get('learned'):
-                from learned_tools import PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL
+                from veil.tools.learned_tools import PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL
                 profile = [PROFILE_APPEND, PROFILE_REPLACE, ONGOING_TOOL]
             else:
                 from profile_notes import PROFILE_APPEND, PROFILE_REPLACE
@@ -2465,7 +2465,7 @@ class Chat:
                 delegate_choice = (delegate_provider_name, delegate_provider)
                 schemas.append({'type': 'function', 'function': dict(DELEGATE_TOOL['function'])})
         if self.workbench_ready() and self.tool_mode and not self.glance_mode:
-            from executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
+            from veil.tools.executor_opencode import TOOL_SCHEMA as WORKBENCH_TOOL
             schemas.append({'type': 'function', 'function': dict(WORKBENCH_TOOL['function'])})
         if self.maintenance is not None and not self.glance_mode:
             from maintenance import TOOL_SCHEMA as MAINTENANCE_TOOL
@@ -2484,10 +2484,10 @@ class Chat:
                     'write long work in slices, never whole files.')
                 schema['function'] = function
         if inventory:
-            from tool_groups import inventory as tool_inventory
+            from veil.tools.tool_groups import inventory as tool_inventory
             return tool_inventory(schemas, self.tool_groups, self.tool_aliases)
         if self.tool_groups and not full:
-            from tool_groups import effective_group, expand_schema
+            from veil.tools.tool_groups import effective_group, expand_schema
             # Ticket 357: a tool with work in progress stays offered even when its group is closed.
             pinned = {'maintenance'} if self.maintenance is not None and self.maintenance.active_summary() else set()
             kept, hidden = [], []
@@ -2500,7 +2500,7 @@ class Chat:
                 else:
                     kept.append(schema)
             schemas = kept + ([expand_schema(hidden)] if hidden else [])
-        from tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE, OWN_WORK
+        from veil.tools.tools_agent import ALLOW, ASK, AUTONOMY_DIRECT, LAB_ONLY, NATIVE, OWN_WORK
         reserved_names = (ALLOW | ASK | AUTONOMY_DIRECT | LAB_ONLY | OWN_WORK | NATIVE | {
             'send_message', 'recall_message', 'card_action', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
@@ -2563,7 +2563,7 @@ class Chat:
         if (not isinstance(groups, list) or not groups or not set(args) <= {'groups', 'reason'}
                 or any(not isinstance(item, str) for item in groups)):
             return 'expand_capability needs a list of group names.', '被拒绝', 'expand_capability'
-        from tool_groups import CHAT_WARM_REQUESTS, effective_group, groups_named
+        from veil.tools.tool_groups import CHAT_WARM_REQUESTS, effective_group, groups_named
         opened = groups_named(groups, self.tool_groups)
         if not opened:
             return ('None of those groups can be opened. Choose from the groups in this tool\'s description.',
@@ -2603,7 +2603,7 @@ class Chat:
 
     def current_capability_snapshot(self, schemas=None):
         """Describe only abilities the program will actually offer on this request."""
-        from tools_agent import tool_policy
+        from veil.tools.tools_agent import tool_policy
         if schemas is None:
             schemas = (self._active_capability_schemas if self._capability_request_active
                        else self.current_request_tool_schemas())
@@ -4262,7 +4262,7 @@ class Chat:
             runtime_auxiliary.append(('recent_experiences', {'role': 'system', 'content': experiences}))
         if extra_context and not reply_later_batch:
             runtime_auxiliary.append(('extra', {'role': 'system', 'content': extra_context}))
-        from screen_pop import screen_pop_history_context
+        from veil.windows.screen_pop import screen_pop_history_context
         screen_pop_context = screen_pop_history_context(self.store, self.cfg)
         if screen_pop_context:
             runtime_auxiliary.append(('screen_pop', {'role': 'system', 'content': screen_pop_context}))
@@ -4708,7 +4708,7 @@ class Chat:
 
     def _execute_tool_call(self, call, request_id, tool_call_id, autonomy,
                            offered=_UNSET_TOOL_SCHEMAS):
-        from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
+        from veil.windows.windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from types import SimpleNamespace
         model_name = call.function.name
         if offered is _UNSET_TOOL_SCHEMAS:
@@ -4985,7 +4985,7 @@ class Chat:
         if settings.get('container_image'):
             import shutil
             return shutil.which('docker') is not None
-        from executor_opencode import find_command
+        from veil.tools.executor_opencode import find_command
         return find_command(settings.get('command', '')) is not None
 
     def _approve_run_budget(self, task, limits, requested):
@@ -5019,7 +5019,7 @@ class Chat:
 
     def _run_workbench(self, task, request_id, autonomy, project='', task_id='', budget_cny=None):
         from dotenv import dotenv_values
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         settings = self.cfg.executor
         container = {'image': settings['container_image']} if settings.get('container_image') else None
         command = 'docker' if container else ex.find_command(settings.get('command', ''))
@@ -5034,7 +5034,7 @@ class Chat:
         role = Path(self.store.root) / self.cfg.id
         workspace = (ROOT / (self.cfg.tools or {}).get('folder', f'data/{self.cfg.id}/workspace')).resolve()
         workspace.mkdir(parents=True, exist_ok=True)
-        import workbench_scope
+        from veil.tools import workbench_scope
         workbench_scope.merge_legacy_workbench(role / 'workbench', workspace)
         base = workspace
         maintenance = bool(task_id)
@@ -5139,8 +5139,8 @@ class Chat:
         """Where the workbench works. Peter's task (or his `project` name) picks one of the projects found under
         the configured `project_roots`; Lan never gives a path. No roots, or no match: Peter's own workspace.
         An existing project gets a snapshot first. Returns (folder, note) or an ExecutorResult explaining why not."""
-        import executor_opencode as ex
-        import workbench_scope as scope
+        from veil.tools import executor_opencode as ex
+        from veil.tools import workbench_scope as scope
         roots = self.cfg.executor.get('project_roots') or []
         kind, found = scope.choose_project(project or task, roots) if roots else ('none', None)
         if kind == 'none' and project:
@@ -5238,13 +5238,13 @@ class Chat:
 
     def _trace(self, text, trace):
         """Ticket 226: show a tool line or the model's reasoning inside this reply's thinking block."""
-        from tools_agent import TraceLine
+        from veil.tools.tools_agent import TraceLine
         started = getattr(self, '_trace_started', None)
         self.output(TraceLine(text, trace, getattr(self, '_trace_request_id', None),
                               round(time.monotonic() - started, 1) if started is not None else None))
 
     def _record_tool_result(self, call, execution, result_state, display_detail, summaries, log_tool):
-        from tools_agent import display_call
+        from veil.tools.tools_agent import display_call
         name = call.function.name
         canonical_name = self._resolve_tool_name(name)
         # Ticket 143: a successful message is already its own bubble, and choosing silence or a later reply
@@ -5262,9 +5262,9 @@ class Chat:
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
                    checkpoint_goal='', checkpoint_resuming=False, snapshot=None):
-        from tools_agent import MAX_THOUGHT_CHARS, display_call
-        from windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
-        from windows_observer import observation_image_message
+        from veil.tools.tools_agent import MAX_THOUGHT_CHARS, display_call
+        from veil.windows.windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
+        from veil.windows.windows_observer import observation_image_message
         summaries = []
         self.last_tool_summaries = summaries
         self._trace_request_id, self._trace_started = request_id, time.monotonic()
@@ -6901,7 +6901,7 @@ def main():
             if (cfg.memory and cfg.memory.get('enabled')) and not use_memory:
                 print('记忆后台需要先选择 API 模型；请打开设置选择后重启。')
             with client, background_client:
-                from tools_agent import FilesystemTools
+                from veil.tools.tools_agent import FilesystemTools
                 from web_tools import WebTools
                 with FilesystemTools(ROOT, cfg, store, web_factory=lambda root, config: WebTools(
                         root, config, budget=budget)) as tools:

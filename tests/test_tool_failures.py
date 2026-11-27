@@ -6,12 +6,12 @@ from unittest.mock import Mock
 from pathlib import Path
 from types import SimpleNamespace
 
-import tools_agent
-import tool_failures
-from tool_failures import UNKNOWN, finalize, internal_failure, refusal
+from veil.tools import tools_agent
+from veil.tools import tool_failures
+from veil.tools.tool_failures import UNKNOWN, finalize, internal_failure, refusal
 from veil_agent import Budget, Chat, Store, load_character
-from tools_agent import FilesystemTools
-from windows_observer import WindowsObservationTools
+from veil.tools.tools_agent import FilesystemTools
+from veil.windows.windows_observer import WindowsObservationTools
 
 
 class FinalizeTests(unittest.TestCase):
@@ -165,8 +165,8 @@ class FailureSourceContractTests(unittest.TestCase):
     silently drop back to the one meaningless sentence lan complained about.
     """
 
-    MODULES = ('veil_agent.py', 'tools_agent.py', 'windows_observer.py',
-               'windows_interaction.py', 'memory_agent.py', 'long_tasks.py')
+    MODULES = ('veil_agent.py', 'veil/tools/tools_agent.py', 'veil/windows/windows_observer.py',
+               'veil/windows/windows_interaction.py', 'memory_agent.py', 'long_tasks.py')
     BARE = {
         '参数无效。', '参数无效', 'Error', 'Error.', 'Failed.', 'Failed',
         'The tool failed.', 'Invalid arguments.', 'Invalid arguments',

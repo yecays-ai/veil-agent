@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from autonomy import GlanceController
-from desktop_files import desktop_item_names
+from veil.tools.desktop_files import desktop_item_names
 
 
 def controller(results, root):

@@ -7,7 +7,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent.parent))  # the repo root when run from tools/workbench-verify
-import executor_opencode as ex  # noqa: E402
+from veil.tools import executor_opencode as ex  # noqa: E402
 
 IMAGE = 'veil-workbench'
 WIN = os.name == 'nt'

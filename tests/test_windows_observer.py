@@ -10,10 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from desktop_access import desktop_access
-from tools_agent import tool_policy
+from veil.windows.desktop_access import desktop_access
+from veil.tools.tools_agent import tool_policy
 from veil_agent import Budget, Chat, Store, load_character, model_tool_result
-from windows_observer import (
+from veil.windows.windows_observer import (
     SENSITIVE_LABEL,
     ObservationError,
     ObservationPaused,
@@ -414,7 +414,7 @@ class Win32WindowDiscoveryTests(unittest.TestCase):
     """Ticket 406: discovery is Win32 EnumWindows; UI Automation is only used by HWND after that."""
 
     def backend(self, process_info):
-        from windows_observer import WindowsDesktopBackend
+        from veil.windows.windows_observer import WindowsDesktopBackend
         backend = WindowsDesktopBackend()
         backend._process_info = lambda pid: process_info.get(pid)
         return backend
@@ -622,7 +622,7 @@ class QQWindowDiscoveryTests(unittest.TestCase):
                      'handle': 2},
                 ]
 
-        with patch('windows_observer.WindowsDesktopBackend', FakeBackend):
+        with patch('veil.windows.windows_observer.WindowsDesktopBackend', FakeBackend):
             window = QQWindow('Lan')._chat_window(FakeAuto)
 
         self.assertEqual(window.Name, 'Lan')

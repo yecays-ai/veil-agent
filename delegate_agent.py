@@ -4,7 +4,7 @@ import time
 from typing import NamedTuple
 
 import prompts
-from tool_access import tools_with
+from veil.tools.tool_access import tools_with
 
 
 class DelegateResult(NamedTuple):

@@ -615,7 +615,7 @@ class MaintenanceTests(unittest.TestCase):
                          'VALUE = "$Format:%H$"\n')
 
     def test_real_acceptance_backend_starts_from_snapshot_with_fake_config(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -705,7 +705,7 @@ output_cny_per_million = "8"
             self.manager.workbench_target(task['task_id'])
 
     def test_real_opencode_to_fake_github_delivery(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -733,7 +733,7 @@ output_cny_per_million = "8"
         self.assertTrue(self.gh.merged)
 
     def test_real_opencode_failure_then_fix_delivers_to_fake_github(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -790,7 +790,7 @@ output_cny_per_million = "8"
         self.assertTrue(self.gh.merged)
 
     def test_real_opencode_can_inspect_a_safe_git_snapshot(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -821,7 +821,7 @@ output_cny_per_million = "8"
         self.assertEqual((worktree / '.git').read_bytes(), original_git)
 
     def test_git_snapshot_does_not_copy_secret_directory_into_git_objects(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -840,7 +840,7 @@ output_cny_per_million = "8"
         self.assertNotIn('fixture-private-secret', outcome.text)
 
     def test_git_snapshot_tracks_project_changes_without_touching_host_git(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')

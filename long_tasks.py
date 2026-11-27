@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import uuid
 
 from agent_types import UserError, now
-from tool_access import tools_with
+from veil.tools.tool_access import tools_with
 
 
 TASK_STATUS = ('active', 'paused', 'blocked', 'completed')

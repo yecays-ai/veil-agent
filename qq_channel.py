@@ -16,7 +16,7 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
-from desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
+from veil.windows.desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 
 
 QQ_PREFIX = '[QQ 发送]\n'
@@ -354,7 +354,7 @@ class QQWindow:
     def _chat_window(self, auto):
         # Ticket 406: window discovery goes through the shared Win32 adapter, not the UIA
         # desktop root (which returns no usable children on this machine).
-        from windows_observer import WindowsDesktopBackend
+        from veil.windows.windows_observer import WindowsDesktopBackend
         for item in WindowsDesktopBackend().list_windows(lambda: False):
             try:
                 if item.get('process') != 'qq.exe':

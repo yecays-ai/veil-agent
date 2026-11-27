@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 
 from github_readonly import GitHubReadTools, MCP_URL, TOKEN_ENV, official_code_search, public_get
-from tools_agent import FilesystemTools, permitted_tools, tool_policy
+from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
 from veil_agent import ActivityState, Budget, Character, Chat, Store, load_character
 from autonomy import AutonomyController
-from desktop_files import DesktopFileTools
+from veil.tools.desktop_files import DesktopFileTools
 from web_agent import Hub
 
 SHA = 'a' * 40
@@ -232,7 +232,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
                             web={'github_readonly': True, 'github_repository': 'example/companion'},
                             autonomy={'interval_minutes': 90, 'daily_max_runs': 12,
                                       'daily_budget_cny': Decimal('3'), 'min_alarm_gap_minutes': 15})
-            with patch('tools_agent.shutil.which', return_value=None):
+            with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                 manager = FilesystemTools(root, cfg, store)
             get = Mock(side_effect=fixture_get)
             manager.github_tools = GitHubReadTools(cfg, get=get)
@@ -280,7 +280,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             # Existing file protection remains active, including on repeated wakes.
             self.assertEqual(manager.invoke('desktop_create_file', requests[-1][1])[1], '被拒绝')
             disabled = replace(cfg, tools={**cfg.tools, 'enabled': False})
-            with patch('tools_agent.shutil.which', return_value=None):
+            with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                 closed = FilesystemTools(root, disabled, store)
             self.assertNotIn('mcp__github__github_read', [t.name for t in closed.tools])
             self.assertEqual(closed.invoke('github_read', requests[0][1])[1], '被拒绝')

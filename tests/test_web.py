@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch
 from veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
                         estimate_request_tokens, load_character, run_chat)
 from web_agent import Hub, clean_voice_transcript, serve_chat, start_server, voice_transport_category
-from tools_agent import FilesystemTools
+from veil.tools.tools_agent import FilesystemTools
 
 TOKEN = 'test-token'
 
@@ -374,7 +374,7 @@ output_cny_per_million = "8"
         self.assertIn('旧聊天保留', event['text'])
 
     def test_trace_lines_become_trace_events_not_notices(self):
-        from tools_agent import TraceLine
+        from veil.tools.tools_agent import TraceLine
         self.hub.output(TraceLine('先想想', 'thought', 'req-1', 3.2))
         self.hub.output(TraceLine('🔧 Peter 用了 web_search：x（成功）', 'tool', 'req-1', 4.0))
         events = self.hub.snapshot(0)['events'][-2:]
@@ -752,7 +752,7 @@ output_cny_per_million = "8"
         manager.cap_path = self.store.root / 'test' / 'capabilities.json'
         manager.capability_event = manager.capability_event_model = None
         manager.enabled = True
-        with patch('tools_agent.save_capabilities', side_effect=OSError('fictional')):
+        with patch('veil.tools.tools_agent.save_capabilities', side_effect=OSError('fictional')):
             self.assertFalse(manager.announce_photo_input())
         self.assertTrue(manager.enabled)
 
@@ -1153,7 +1153,7 @@ output_cny_per_million = "8"
         self.assertFalse(reopened.enabled())
 
     def test_activity_availability_transitions_are_dated_in_capability_history(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
         manager = FilesystemTools.__new__(FilesystemTools)
         manager.cap_path = self.store.root / 'test' / 'capabilities.json'
         toolset = SimpleNamespace(tools=[], files=manager, description='Fictional tools.',

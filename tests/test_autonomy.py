@@ -611,7 +611,7 @@ daily_budget_cny = "2"
         self.assertIsNone(status['next_wake_reason'])
 
     def test_set_next_wake_tool_is_offered_as_a_direct_action(self):
-        from tools_agent import tool_policy
+        from veil.tools.tools_agent import tool_policy
         self.activity.set(True)
         names = {schema['function']['name'] for schema in self.chat.tool_schemas()}
         self.assertIn('set_next_wake', names)

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import mcp_services
 from mcp_services import MCPConfigError, MCPConflict, MCPServices
-from windows_process import hidden_subprocess_kwargs
+from veil.windows.windows_process import hidden_subprocess_kwargs
 
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'mcp_echo_server.py'

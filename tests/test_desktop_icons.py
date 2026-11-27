@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_icons import (
+from veil.windows.desktop_icons import (
     DesktopIcon,
     DesktopIconsError,
     DesktopIconsLayoutBlocked,

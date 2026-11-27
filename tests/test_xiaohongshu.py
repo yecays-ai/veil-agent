@@ -12,9 +12,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools_agent import FilesystemTools, permitted_tools, tool_policy
+from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
 import xiaohongshu_tools
-from windows_observer import observation_image_message
+from veil.windows.windows_observer import observation_image_message
 from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, PageFailure, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
@@ -501,8 +501,8 @@ class XiaohongshuTests(unittest.TestCase):
                                'folder': 'data/peter/workspace'}, web=self.cfg.web,
                         autonomy={'interval_minutes': 90, 'daily_max_runs': 12,
                                   'daily_budget_cny': Decimal('3'), 'min_alarm_gap_minutes': 15})
-        with patch('tools_agent.shutil.which', return_value='fake-node'), patch(
-                'tools_agent._McpWorker', return_value=SimpleNamespace(tools=[SimpleNamespace(
+        with patch('veil.tools.tools_agent.shutil.which', return_value='fake-node'), patch(
+                'veil.tools.tools_agent._McpWorker', return_value=SimpleNamespace(tools=[SimpleNamespace(
                     name='write_file', description='Write a file', inputSchema={'type': 'object', 'properties': {
                         'path': {'type': 'string'}, 'content': {'type': 'string'}}, 'required': ['path', 'content']})],
                     close=lambda: None)):

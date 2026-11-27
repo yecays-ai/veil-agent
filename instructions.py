@@ -75,7 +75,7 @@ def _tool_rows(chat):
 
 def _always_on():
     try:
-        from tool_groups import ALWAYS_ON
+        from veil.tools.tool_groups import ALWAYS_ON
         return ALWAYS_ON
     except Exception:
         return frozenset()
