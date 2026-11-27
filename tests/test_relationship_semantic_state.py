@@ -212,6 +212,19 @@ class RelationshipSemanticStateTests(unittest.TestCase):
         self.finish(task['claim_id'], 'contradicted')
         self.assertNotIn(note, relationship_base.build(self.profile)['text'])
 
+    def test_recalled_original_invalidates_cached_verdict_even_with_retained_content(self):
+        self.user(self.raw)
+        self.submit()
+        token = self.pending()[0]['claim_id']
+        self.finish(token, 'supported')
+        self.assertIn(self.claim, relationship_base.build(self.profile)['text'])
+        self.user(extra=[{'id': 'u1', 'role': 'user', 'content': self.raw, 'recalled': True}])
+        self.assertNotIn('u1', self.profile._chat_user_index())
+        self.assertEqual(self.item()['effective_status'], 'uncertain')
+        self.assertNotIn(self.claim, relationship_base.build(self.profile)['text'])
+        self.assertEqual(self.pending(), [])
+        self.assertFalse(self.profile.finish_relationship_semantic(token, verdict='supported'))
+
     def test_lock_or_rule_edit_between_snapshot_and_claim_prevents_dispatch(self):
         self.user(self.raw)
         self.submit()

@@ -53,7 +53,7 @@ SEMANTIC_PROMPT = 'memory.relationship.semantic_verify'
 SEMANTIC_FINISH = frozenset({'supported', 'insufficient', 'contradicted', 'failed', 'budget'})
 SEMANTIC_RETRY = frozenset({'pending', 'budget'})
 SEMANTIC_TRANSIENT = frozenset({'pending', 'dispatched', 'budget'})
-SEMANTIC_PREFLIGHT = frozenset({'payload_too_large', 'invalid_payload'})
+SEMANTIC_PREFLIGHT = frozenset({'payload_too_large', 'invalid_payload', 'sensitive_payload'})
 SEMANTIC_REASONS = SEMANTIC_PREFLIGHT | {
     'budget_exhausted', 'timeout', 'provider_error', 'invalid_response',
     'request_not_sent', 'invalid_usage',
@@ -490,6 +490,8 @@ class LearnedContext:
                 duplicates.add(mid)
                 continue
             seen.add(mid)
+            if row.get('recalled'):
+                continue
             role = row.get('role')
             text = row.get('content') if 'content' in row else row.get('text')
             if not isinstance(text, str) or not text.strip() or '�' in text:

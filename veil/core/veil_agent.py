@@ -4324,6 +4324,17 @@ class Chat:
             auxiliary_context.append(message)
 
         runtime_required = []
+        if not autonomy and persist_user and getattr(self, 'profile', None) and self.tool_mode:
+            current_rows = user_events if isinstance(user_events, list) and user_events else [
+                {'message_id': message_id},
+            ]
+            refs = [row.get('message_id') for row in current_rows if isinstance(row, dict)]
+            if len(refs) <= 8 and refs and all(isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)
+                                               for ref in refs) and any(
+                    tool.get('function', {}).get('name') == 'profile_append' for tool in (tool_schema or [])):
+                runtime_required.append({'role': 'system', 'content':
+                    prompts.text('memory.relationship.capture') + ' ' + ', '.join('chat:' + ref for ref in refs)})
+                labels[id(runtime_required[-1])] = 'memory.relationship.capture'
         if isinstance(self.pending_capability_event_model, str) and self.pending_capability_event_model and not autonomy:
             runtime_required.append({'role': 'system', 'content':
                 'Program-generated capability update: ' + self.pending_capability_event_model})

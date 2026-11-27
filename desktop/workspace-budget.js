@@ -12,7 +12,7 @@
   const verificationReasons = new Map(Object.entries({
     budget: '额度不足', budget_exhausted: '额度不足', timeout: '核验超时', contradicted: '原话反驳',
     insufficient: '证据不足', invalid_response: '核验返回无效', provider_error: '模型请求失败',
-    invalid_payload: '核验材料无效', payload_too_large: '核验材料超长', invalid_usage: '模型用量无法核对',
+    sensitive_payload: '材料含疑似凭据，未发送', invalid_payload: '核验材料无效', payload_too_large: '核验材料超长', invalid_usage: '模型用量无法核对',
     request_not_sent: '请求未发送', stale: '原始证据已变化', stale_ref: '证据引用失效',
     unavailable: '核验暂不可用', interrupted: '核验中断', accounting: '费用尚未核对',
   }));

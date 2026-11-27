@@ -79,7 +79,7 @@ test('semantic settings reuse the models route and display role ledger and verif
   const payload = budgetPayload('10', '25', '11', '26');
   payload.relationship_semantic = {
     daily_cap_cny: '0.06', timeout_seconds: 6, spent_cny: '0.03', pending_cny: '0.01', remaining_cny: '0.02',
-    verification: { pending: 2, promoted: 1, reasons: { timeout: 3, supported: 1 } },
+    verification: { pending: 2, promoted: 1, reasons: { timeout: 3, supported: 1, sensitive_payload: 1 } },
   };
   const view = setup(payload);
   await view.render();
@@ -89,7 +89,7 @@ test('semantic settings reuse the models route and display role ledger and verif
   const text = view.descendants('p').map(node => node.textContent).join(' ');
   assert.match(text, /今日已用 ¥0.03 · 预留 ¥0.01 · 额度余额 ¥0.02/);
   assert.match(text, /待核验 2 条 · 已晋升 1 条/);
-  assert.deepEqual(view.descendants('li').map(node => node.textContent), ['核验超时：3 条']);
+  assert.deepEqual(view.descendants('li').map(node => node.textContent), ['核验超时：3 条', '材料含疑似凭据，未发送：1 条']);
   cap.value = '0';
   timeout.value = '3';
   payload.relationship_semantic.daily_cap_cny = '0';

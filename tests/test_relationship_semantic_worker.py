@@ -104,6 +104,37 @@ class RelationshipSemanticWorkerTests(unittest.TestCase):
         self.model.assert_not_called()
         self.assertFalse(self.chat.profile.pending_relationship_semantics())
 
+    def test_secret_in_any_semantic_material_blocks_dispatch_and_reservation(self):
+        secret = 'password=fictional-test-secret'
+        for location in ('candidate', 'evidence', 'question', 'correction', 'localized_correction'):
+            with self.subTest(location=location):
+                profile = self.chat.profile
+                profile.root.mkdir(parents=True, exist_ok=True)
+                # A valid yes/no question keeps the fake secret in its preceding context.
+                question = 'Do you prefer lighting the candle with ' + secret + '?'
+                rows = [{'role': 'assistant', 'message_id': 'question', 'content': question}] if location == 'question' else []
+                raw = ('Yes.' if location == 'question' else
+                       'I put a yellow candle beside the window each evening. '
+                       + (secret if location == 'evidence' else ''))
+                rows.append({'role': 'user', 'message_id': 'origin', 'content': raw})
+                if location == 'correction':
+                    rows.append({'role': 'user', 'message_id': 'later', 'content': 'Actually, ' + secret})
+                if location == 'localized_correction':
+                    rows.append({'role': 'user', 'message_id': 'later', 'content': '更正：密码：fictional-test-only'})
+                (profile.root / 'chat.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows), encoding='utf-8')
+                claim = 'Lan lights a candle near the window at night.'
+                profile.submit_candidate('relationship', claim + (' ' + secret if location == 'candidate' else ''),
+                                         status='confirmed', sources=('chat:origin',))
+                with patch.object(self.budget, 'reserve', wraps=self.budget.reserve) as reserve:
+                    self.worker.tick()
+                    reserve.assert_not_called()
+                self.model.assert_not_called()
+                self.assertEqual(self.ledger_types(), [])
+                self.assertEqual(profile.relationship_semantic_summary()['reasons'], {'sensitive_payload': 1})
+                self.assertFalse(profile.pending_relationship_semantics())
+                profile.save_relationship([])
+                profile.path.unlink()
+
     def test_unrecognized_or_incomplete_model_response_cannot_promote(self):
         approval = {'verdict': 'supported', 'supporting_evidence_ids': ['e'],
                     'counterevidence': [{'id': 'tail', 'verdict': 'unrelated'}]}

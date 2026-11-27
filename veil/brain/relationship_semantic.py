@@ -16,6 +16,34 @@ MAX_OUTPUT_TOKENS = 2_048
 MAX_RESPONSE_CHARS = 16_000
 
 
+def _contains_secret(*values):
+    """Use the shared activity matcher without its truncation or redaction."""
+    from veil.brain.experience_memory import SECRET
+    from veil.core.veil_agent import (
+        NATURAL_API_KEY_VALUE, OPAQUE_ACTIVITY_TOKEN, SENSITIVE_ACTIVITY_VALUE, _sensitive_activity_key,
+    )
+
+    def matches(value):
+        if isinstance(value, dict):
+            return any(_sensitive_activity_key(k) or matches(k) or matches(v) for k, v in value.items())
+        if isinstance(value, (list, tuple)):
+            return any(matches(v) for v in value)
+        if not isinstance(value, str):
+            return False
+        if any(pattern.search(value) for pattern in (SECRET, SENSITIVE_ACTIVITY_VALUE, NATURAL_API_KEY_VALUE,
+                                                      OPAQUE_ACTIVITY_TOKEN)):
+            return True
+        # Chat content can itself be structured JSON with secret-named keys.
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                return matches(json.loads(value))
+            except ValueError:
+                pass
+        return False
+
+    return any(matches(value) for value in values)
+
+
 def _unique_object(pairs):
     obj = {}
     for key, value in pairs:
@@ -121,9 +149,12 @@ class RelationshipSemanticWorker:
                     or not candidate['text'].strip()):
                 raise ValueError('missing candidate text')
             evidence_ids, counter_ids = _ids(payload['evidence']), _ids(payload['counterevidence'])
+            system = prompts.text('memory.relationship.semantic_verify')
+            if _contains_secret(payload, system):
+                return finish('failed', 'sensitive_payload')
             body = json.dumps(payload, ensure_ascii=False, allow_nan=False)
             messages = [
-                {'role': 'system', 'content': prompts.text('memory.relationship.semantic_verify')},
+                {'role': 'system', 'content': system},
                 {'role': 'user', 'content': body},
             ]
             input_bytes = request_byte_size(messages)
