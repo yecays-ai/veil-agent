@@ -366,11 +366,15 @@ class P4P5BrainRoutesTest(TestCase):
         self.assertFalse(res_err['ok'])
         self.assertEqual(503, res_err['status_code'])
 
-        # Shared budget authority matches UTF-8 calculation
+        # Shared budget authority matches UTF-8 calculation (including 'completed' status excluded)
         learned = {
             'max_bytes': 4000,
             'sections': {'facts': {'text': '事实A'}, 'growth': {'text': '成长B'}},
-            'ongoing': {'items': [{'text': '进行中', 'status': 'active'}, {'text': '已完成', 'status': 'done'}]},
+            'ongoing': {'items': [
+                {'text': '进行中', 'status': 'active'},
+                {'text': '已完成1', 'status': 'done'},
+                {'text': '已完成2', 'status': 'completed'},
+            ]},
             'relationship': {'items': [{'text': '关系1', 'status': 'confirmed'}, {'text': '旧关系', 'status': 'outdated'}]},
         }
         b = brain_p4_api._compute_cognition_budget(learned)
@@ -378,3 +382,35 @@ class P4P5BrainRoutesTest(TestCase):
         self.assertEqual(expected, b['used_bytes'])
         # Strictly read-only DB invariant still holds
         self.assertEqual(self.before_db_bytes, self.db_path.read_bytes())
+
+    def test_pr459_review_threads_validation_events_and_short_notes_runtime_sync(self):
+        from veil.brain import brain_p4_api
+        # 1. Invalid pagination params return 400 instead of raising ValueError
+        self.req.path = '/api/brain/recall-turns?page=abc&limit=xyz'
+        self.req.do_GET()
+        status, payload = self.req._send.call_args.args
+        self.assertEqual(400, status)
+        self.assertIn('整数', payload['error'])
+
+        # 2. Excessive custom date range (> 366 days) returns 400
+        self.req.path = '/api/brain/growth?range=custom&from_date=2020-01-01&to_date=2026-11-27'
+        self.req.do_GET()
+        status, payload = self.req._send.call_args.args
+        self.assertEqual(400, status)
+        self.assertIn('366', payload['error'])
+
+        # 3. Event with first_at is counted in growth_analysis and day_changes
+        res = brain_p4_api.growth_analysis(self.hub, range_key='custom', from_date='2026-11-25', to_date='2026-11-25')
+        self.assertEqual(1, res['summary']['events_created'])
+        dc = brain_p4_api.day_changes(self.hub, '2026-11-25')
+        self.assertTrue(any(c.get('event_id') == 'ev1' for c in dc['changes']))
+
+        # 4. short_notes toggle syncs live chat.short_term_notes start()/stop()
+        events_called = []
+        self.hub.chat.short_term_notes = SimpleNamespace(
+            start=lambda: events_called.append('start'),
+            stop=lambda: events_called.append('stop'),
+        )
+        brain_p4_api.toggle_layer(self.hub, 'short_notes', True)
+        brain_p4_api.toggle_layer(self.hub, 'short_notes', False)
+        self.assertEqual(['start', 'stop'], events_called)

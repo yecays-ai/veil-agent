@@ -114,6 +114,7 @@ def library(hub, query_params):
 
     conn = _ro_connect(db)
     try:
+        conn.execute('BEGIN DEFERRED')
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         rows = conn.execute(
             'SELECT m.id, m.title, m.name, m.created, m.last_active, m.type, m.bucket, '
@@ -656,7 +657,11 @@ def _compute_cognition_budget(learned_status):
 
     growth_b = _utf8_bytes(growth_text)
     facts_b = _utf8_bytes(facts_text)
-    ongoing_b = sum(_utf8_bytes(it.get('text') or '') for it in ongoing_items if isinstance(it, dict) and (it.get('status') or 'active') not in ('done', 'closed', 'archived'))
+    ongoing_b = sum(
+        _utf8_bytes(it.get('text') or '')
+        for it in ongoing_items
+        if isinstance(it, dict) and (it.get('status') or 'active') not in ('done', 'completed', 'closed', 'archived')
+    )
     rel_b = sum(_utf8_bytes(it.get('text') or '') for it in rel_items if isinstance(it, dict) and not it.get('stale') and (it.get('status') or 'current') != 'outdated')
     used = growth_b + facts_b + ongoing_b + rel_b
     return {
@@ -750,12 +755,22 @@ def toggle_layer(hub, layer_id, enabled):
             if not persisted:
                 return {'ok': False, 'error': '短期便签开关无法持久化到磁盘，未修改配置', 'status_code': 503}
             st.enabled = enabled
+            live_notes = getattr(chat, 'short_term_notes', None)
+            if enabled:
+                if live_notes is not None and hasattr(live_notes, 'start'):
+                    live_notes.start()
+            else:
+                if live_notes is not None and hasattr(live_notes, 'stop'):
+                    live_notes.stop()
             actual = bool(_load_layer_switches(store, cfg).get('short_notes', enabled))
             return {'ok': True, 'layer_id': layer_id, 'enabled': actual, 'persisted': True, 'persistence_path': rel}
 
         return {'ok': False, 'error': f'未知的记忆层: {layer_id}', 'status_code': 404}
     except Exception as exc:
         return {'ok': False, 'error': f'切换失败: {exc}', 'status_code': 500}
+
+
+MAX_DATE_RANGE_DAYS = 366
 
 
 def _resolve_date_range(range_key='7d', from_date='', to_date=''):
@@ -768,11 +783,12 @@ def _resolve_date_range(range_key='7d', from_date='', to_date=''):
         try:
             d1 = datetime.strptime(from_date[:10], '%Y-%m-%d').date()
             d2 = datetime.strptime(to_date[:10], '%Y-%m-%d').date()
-            if d1 <= d2:
-                return d1, d2
-            return d2, d1
-        except ValueError:
-            pass
+        except ValueError as exc:
+            raise ValueError('日期格式无效，应为 YYYY-MM-DD。') from exc
+        start_d, end_d = (d1, d2) if d1 <= d2 else (d2, d1)
+        if (end_d - start_d).days + 1 > MAX_DATE_RANGE_DAYS:
+            raise ValueError(f'自定义日期范围不能超过 {MAX_DATE_RANGE_DAYS} 天。')
+        return start_d, end_d
     return today - timedelta(days=6), today
 
 
@@ -843,6 +859,7 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
 
     conn = _ro_connect(db)
     try:
+        conn.execute('BEGIN DEFERRED')
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         before_created = 0
         before_active_delta = 0
@@ -937,10 +954,13 @@ def growth_analysis(hub, range_key='7d', from_date='', to_date=''):
                         summary['actual_updated'] += 1
 
         if 'events' in tables:
-            for er in conn.execute('SELECT event_id, payload_json FROM events'):
+            for er in conn.execute('SELECT event_id, first_at, payload_json FROM events'):
                 summary['total_events'] += 1
                 p = _json_load(er['payload_json'], {})
-                cdt = _parse_dt(p.get('created_at') or p.get('occurred_at') or '')
+                cdt = _parse_dt(
+                    er['first_at'] or p.get('first_saved_at') or p.get('first_at')
+                    or p.get('created_at') or p.get('occurred_at') or ''
+                )
                 if cdt:
                     dk = cdt.date().strftime('%Y-%m-%d')
                     if dk in day_map:
@@ -986,6 +1006,7 @@ def day_changes(hub, date_str):
 
     conn = _ro_connect(db)
     try:
+        conn.execute('BEGIN DEFERRED')
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         mem_current = {}
         if 'memories' in tables:
@@ -1070,9 +1091,12 @@ def day_changes(hub, date_str):
                         'reason': detail.get('reason') or '',
                     })
         if 'events' in tables:
-            for er in conn.execute('SELECT event_id, title, payload_json FROM events'):
+            for er in conn.execute('SELECT event_id, title, first_at, payload_json FROM events'):
                 p = _json_load(er['payload_json'], {})
-                cat = str(p.get('created_at') or p.get('occurred_at') or '')
+                cat = str(
+                    er['first_at'] or p.get('first_saved_at') or p.get('first_at')
+                    or p.get('created_at') or p.get('occurred_at') or ''
+                )
                 if cat.startswith(target):
                     changes.append({
                         'kind': 'event_created',

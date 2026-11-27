@@ -324,12 +324,15 @@
     const dayDrillBox = el('div', 'veil-subpanel');
     dayDrillBox.hidden = true;
 
+    let dayChangeSeq = 0;
     const loadDayChanges = async dateStr => {
+      const seq = ++dayChangeSeq;
       selectedChartDate = dateStr;
       drawGrowthChart();
       dayDrillBox.hidden = false;
       dayDrillBox.replaceChildren(el('p', 'muted', `正在加载 ${dateStr} 的实际记忆变更…`));
       const res = await reqJson(req, `/api/brain/day-changes?date=${encodeURIComponent(dateStr)}`);
+      if (seq !== dayChangeSeq) return;
       if (!res.ok || !res.data) {
         dayDrillBox.replaceChildren(el('p', 'muted', '无法加载当日变更明细。'));
         return;
@@ -556,7 +559,9 @@
       plotArea.append(barsWrap);
     };
 
+    let growthSeq = 0;
     const reloadGrowth = async (rangeKey, fDate = '', tDate = '') => {
+      const seq = ++growthSeq;
       currentRange = rangeKey;
       for (const b of rangeSeg.children) {
         b.setAttribute('aria-pressed', String(b.dataset.range === rangeKey));
@@ -566,6 +571,7 @@
       if (fDate) qs.set('from_date', fDate);
       if (tDate) qs.set('to_date', tDate);
       const res = await reqJson(req, `/api/brain/growth?${qs.toString()}`);
+      if (seq !== growthSeq) return;
       if (res.ok && res.data) {
         currentGrowth = res.data;
         drawGrowthChart();
@@ -1231,8 +1237,8 @@
 
     const activeRel = relItems.filter(it => !it.stale && it.status !== 'outdated');
     const staleRel = relItems.filter(it => it.stale || it.status === 'outdated');
-    const openOngoing = ongoingItems.filter(it => !['done', 'closed', 'archived'].includes(it.status || 'active'));
-    const closedOngoing = ongoingItems.filter(it => ['done', 'closed', 'archived'].includes(it.status || 'active'));
+    const openOngoing = ongoingItems.filter(it => !['done', 'completed', 'closed', 'archived'].includes(it.status || 'active'));
+    const closedOngoing = ongoingItems.filter(it => ['done', 'completed', 'closed', 'archived'].includes(it.status || 'active'));
 
     const usedBytes = (learned.budget && typeof learned.budget.used_bytes === 'number')
       ? learned.budget.used_bytes
@@ -1376,14 +1382,16 @@
     const pager = el('div', 'inline-controls');
     let selectedId = focusTurnId || '';
     let detailSeq = 0;
+    let turnsSeq = 0;
 
     async function loadTurns() {
+      const seq = ++turnsSeq;
       const qs = new URLSearchParams({ page: String(page), limit: '20' });
       if (filterDate) qs.set('date', filterDate);
       if (filterPurpose) qs.set('purpose', filterPurpose);
       if (filterModel) qs.set('model', filterModel);
       const res = await reqJson(req, `/api/brain/recall-turns?${qs.toString()}`);
-      if (renderSeq !== recallRenderSeq) return;
+      if (seq !== turnsSeq || renderSeq !== recallRenderSeq) return;
       const items = res.data?.items || [];
       const total = res.data?.total || 0;
       const trends = res.data?.trends || [];

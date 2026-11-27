@@ -2604,6 +2604,8 @@ def make_handler(hub, token):
                         from_date=(query.get('from_date') or [''])[0],
                         to_date=(query.get('to_date') or [''])[0],
                     ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
                 except sqlite3.Error:
                     self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
             elif url.path == '/api/brain/day-changes':
@@ -2629,16 +2631,24 @@ def make_handler(hub, token):
                         include_health=inc_health,
                         fmt=(query.get('format') or ['full'])[0],
                     ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
                 except sqlite3.Error:
                     self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
             elif url.path == '/api/brain/recall-turns':
                 if not self._guard(self.headers.get('X-Token')):
                     return
                 from veil.brain.brain_p4_api import recall_turns
+                try:
+                    page_num = int((query.get('page') or ['1'])[0] or 1)
+                    limit_num = int((query.get('limit') or ['20'])[0] or 20)
+                except ValueError:
+                    self._send(400, {'error': '分页参数 page 与 limit 必须为整数。'})
+                    return
                 self._send(200, recall_turns(
                     hub,
-                    page=int((query.get('page') or ['1'])[0] or 1),
-                    limit=int((query.get('limit') or ['20'])[0] or 20),
+                    page=page_num,
+                    limit=limit_num,
                     date=(query.get('date') or [''])[0],
                     purpose=(query.get('purpose') or [''])[0],
                     model=(query.get('model') or [''])[0],
