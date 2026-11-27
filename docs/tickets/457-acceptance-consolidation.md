@@ -14,7 +14,7 @@
 
 ## 事实核对
 
-- `main` = `95dc26a`（PR #456 合并）；正式目录已更新到同一提交，桌面 `VEIL.exe` 于 2026-11-27 06:54 重新打包。
+- `main` = `95dc26a`（PR #456 合并）；正式目录已更新到同一提交，桌面 `VEIL.exe` 于 2026-11-27 06:54 +08:00 重新打包。
 - **工单号 ≠ PR 号**，本单逐一核对并写进文档：
 
 | 工单 | PR | 合并提交 |
@@ -48,7 +48,7 @@
 | `.agents/skills/*/SKILL.md` | 同步：ticket、pr-review、impact-complete、integration-complete、reuse-first、handoff，以及两个上游 Skill 的 VEIL 对齐段 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | 增补：工单类型、并行情况、审查器选择、验收清单勾选、提交后暂停 |
 
-## 复查修订（2026-11-27 第二轮）
+## 复查修订（2026-11-27 +08:00 第二轮）
 
 按 Lan 的复查意见在同一 PR 内补充：
 

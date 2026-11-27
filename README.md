@@ -2,7 +2,7 @@
 
 **在本机运行的 AI 伴侣系统。** 角色有自己的身份、长期记忆和可以自主度过的生活；同一套系统也能替你操作电脑。当前第一个角色是 Peter。
 
-> 代码、记忆、人设、花费都在你自己的机器上，模型通过你自己的接口调用。仓库只保存实现与脱敏记录，不保存任何真实人设、聊天、记忆或密钥。
+> 代码、记忆、人设、花费都在你自己的机器上，模型通过你自己的接口调用。仓库只保存实现与脱敏记录，不保存任何真实人设、聊天、记忆或密钥。发起对话或检索时，聊天上下文、人设与召回记忆会发送给你配置的模型供应商，记忆文本与查询语句会发送给你配置的 Embedding 供应商。
 
 ---
 
@@ -99,9 +99,9 @@
 ```powershell
 git clone https://github.com/yecays-ai/veil-agent.git
 cd veil-agent
-setup.bat            # 安装 Python 依赖到本项目 .venv
-setup-desktop.bat    # 安装并构建桌面程序
-start-desktop.vbs    # 启动
+.\setup.bat            # 安装 Python 依赖到本项目 .venv
+.\setup-desktop.bat    # 安装桌面依赖并更新快捷方式（源码模式运行）
+.\start-desktop.vbs    # 启动
 ```
 
 首次启动需要两个本机私有文件（仓库里只有示例）：

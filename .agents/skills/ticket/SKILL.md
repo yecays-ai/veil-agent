@@ -11,8 +11,8 @@ description: 开一张新工单并做到可交付：判定工单类型、写工�
 | --- | --- |
 | 功能开发 | 全部步骤 + `integration-complete` 八项评估 |
 | Bug 修复 | 全部步骤 + `systematic-debugging`（可省 `integration-complete`） |
-| 专项审计 | 步骤 0–3、5（只产出报告）、10；不请求 AI 审查 |
-| 纯文档维护 | 步骤 0–3（工单可省，直接分支/PR）、5（只改 md）、10；不请求 AI 审查 |
+| 专项审计 | 步骤 0–3、5（只产出报告）、6–9（分支/PR、只跑 CI 不主动请求 AI 审查、提交后暂停）、10–11（交接与清理 worktree） |
+| 纯文档维护 | 步骤 0–1、4（只查文档跨引用/链接/编号与实际代码一致性）、5（工单可省，只改 `*.md`）、6–9（分支/PR、只跑 CI 不主动请求 AI 审查、提交后暂停）、10–11（按需验收、交接与清理 worktree） |
 
 判定不清按更严格的一类走，并在 PR 里写明理由。规则原文见 `AGENTS.md` §2。
 
@@ -30,7 +30,7 @@ description: 开一张新工单并做到可交付：判定工单类型、写工�
 
 ## 4. 查全影响
 
-执行 `impact-complete`；修 Bug 用 `systematic-debugging` 找根因；新功能/工具/通道另做 `integration-complete` 八项。凡本次变更造成的相邻功能回归，必须在**同一个 PR** 修完并回归验证。
+执行 `impact-complete`（纯文档维护只核查文档跨引用、链接、编号与实际代码/CI 一致性）；修 Bug 用 `systematic-debugging` 找根因；新功能/工具/通道另做 `integration-complete` 八项。凡本次变更造成的相邻功能回归，必须在**同一个 PR** 修完并回归验证。
 
 ## 5. 写工单 `docs/tickets/<编号>-<短名>.md`
 

@@ -19,8 +19,8 @@
 ```powershell
 git clone https://github.com/yecays-ai/veil-agent.git
 cd veil-agent
-setup.bat            # 按 requirements.lock.txt 装固定版本依赖到 .venv
-setup-desktop.bat    # 安装桌面依赖并构建 VEIL.exe
+.\setup.bat            # 按 requirements.lock.txt 装固定版本依赖到 .venv
+.\setup-desktop.bat    # 安装桌面依赖并更新快捷方式（不打包 VEIL.exe）
 ```
 
 - `setup.bat` 需要联网；它只更新 `.venv` 依赖和文件工具，不安装本地大模型，也不会自动下载模型。
@@ -53,8 +53,8 @@ EMBED_API_KEY=你的硅基流动密钥      # 记忆向量召回用
 
 ## 5. 更新
 
-- **日常更新**：退出 Peter，双击 `update.bat`。它会拉新代码、补装组件、桌面代码有变化时重新打包 `VEIL.exe`，然后启动 Peter。
-- **正式目录更新**：`update-main.cmd` 做同样的事，并额外检查 GitHub 连接、把本地未推送的提交保留成恢复分支；失败时保留现场不乱改 `main`。
+- **日常更新**：退出 Peter，双击 `update.bat`。它会先做更新前备份，再拉新代码、补装 Python 依赖与文件工具、桌面代码有变化时重新打包 `VEIL.exe`，然后启动 Peter。
+- **正式目录更新**：退出 Peter，双击 `update-main.cmd`。它会检查 GitHub 连接、暂存本地改动并把未推送的本地 `main` 保留成恢复分支、同步 `origin/main`、检查 Nowhere 运行时并执行 `npm run package` 重新打包 `VEIL.exe`；失败时保留现场不乱改 `main`。注意：`update-main.cmd` **不**运行 `pip install` 也不自动启动 Peter；若 Python 依赖有变动，请先运行 `setup.bat` 或改用 `update.bat`。
 - 只运行 `git pull` 不会更新桌面程序。
 
 更新脚本不会 stash 或丢弃你的数据；`data/`、`persona/`、`.env` 不受影响。项目换目录后需要重建 `.venv`，并保留 `data`、`.env`、`persona`。
