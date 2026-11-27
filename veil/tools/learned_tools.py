@@ -16,7 +16,9 @@ PROFILE_APPEND = {'type': 'function', 'function': {
     'name': 'profile_append',
     'description': ('Add a passage to Learned Context (independent section budgets). facts = about Lan; '
                     'growth = your own lessons; relationship = shared agreements/boundaries. Use '
-                    'profile_replace to revise existing notes instead of duplicating. Direct use.'),
+                    'profile_replace to revise notes. When Lan establishes a lasting shared ritual or boundary, '
+                    'consider a relationship candidate without waiting to be asked. Cite her saved words via '
+                    'search_chat_history and request confirmed only with evidence. Direct use.'),
     'parameters': {'type': 'object', 'properties': {
         'text': {'type': 'string', 'minLength': 1}, 'section': SECTION_PARAM,
         'status': RELATIONSHIP_STATUS, 'sources': RELATIONSHIP_SOURCES},

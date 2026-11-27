@@ -55,13 +55,15 @@ P3、P4/P5（#456）、P6-S0/S1/S2/S4（#449–#455）、文档归集（#457）�
 
 | 工程事项 | 源码 / 风险 | 验收要求 |
 | --- | --- | --- |
-| 聊天历史全量读取 | [_chat_user_index()](veil/brain/learned_context.py#L409)：文件变化后全量扫描并缓存，长历史拖慢请求并增加内存。 | 对长历史连续追加时不反复全量扫描，缓存有明确上限；旧引用仍可按需核验，删除或替换后不得命中旧缓存。 |
-| 实时证据时间预算 | [_open_brain_ro()](veil/brain/learned_context.py#L481)、[_apply_live_evidence_check()](veil/brain/learned_context.py#L889)：数据库争用时逐引用等待累加。 | 数据库锁定及多条引用组合场景下，全次核验受单一可测量的墙钟预算约束；超限保守降级，不误晋升、不阻断聊天。 |
-| 追加重试幂等 | [_invoke_profile()](veil/brain/learned_context.py#L1564)、[_invoke_ongoing()](veil/brain/learned_context.py#L1765)：写入已提交但响应丢失时，重试可能重复追加认知或待办。 | facts/growth 追加及 ongoing 新增使用持久化幂等键；模拟响应丢失、并发重试和进程重启，同键只落一次且返回原结果与原 ID，不额外写版本。 |
+| 聊天历史全量读取 | [_chat_user_index()](veil/brain/learned_context.py#L455)：文件变化后全量扫描并缓存，长历史拖慢请求并增加内存。 | 对长历史连续追加时不反复全量扫描，缓存有明确上限；旧引用仍可按需核验，删除或替换后不得命中旧缓存。 |
+| 实时证据时间预算 | [_open_brain_ro()](veil/brain/learned_context.py#L481)、[_apply_live_evidence_check()](veil/brain/learned_context.py#L1195)：数据库争用时逐引用等待累加。 | 数据库锁定及多条引用组合场景下，全次核验受单一可测量的墙钟预算约束；超限保守降级，不误晋升、不阻断聊天。 |
+| 追加重试幂等 | [_invoke_profile()](veil/brain/learned_context.py#L1895)、[_invoke_ongoing()](veil/brain/learned_context.py#L2130)：写入已提交但响应丢失时，重试可能重复追加认知或待办。 | facts/growth 追加及 ongoing 新增使用持久化幂等键；模拟响应丢失、并发重试和进程重启，同键只落一次且返回原结果与原 ID，不额外写版本。 |
+| 反证长期积累 | [反证快照](veil/brain/learned_context.py#L806)：历史积累可能触发请求上限。 | 长历史下验证相关反证查询与载荷有界；不得通过截断遗漏用户否决，无法完整核验时安全降级且说明原因。 |
+| 任意跨语言同义否决 | [原文拦截](veil/brain/learned_context.py#L164)仅覆盖可核验的来源与文字锚点。 | 加入无共享锚点的多语言同义反例、无关主题正例及显式恢复对照；模型不能单独解除可疑否决。 |
 
 ## 下一步
 
-PR #460 仅完成审查收口；核对 [GitHub 合并门禁与 CI](https://github.com/yecays-ai/veil-agent/pull/460/checks)，不部署、不合并。S6 不得在上述三项通过验收前开工。
+PR #460 仅完成审查收口；核对 [GitHub 合并门禁与 CI](https://github.com/yecays-ai/veil-agent/pull/460/checks)，不部署、不合并。S6 不得在上述五项通过验收前开工。
 
 ## 验收入口
 
