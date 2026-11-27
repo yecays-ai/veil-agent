@@ -119,10 +119,16 @@ def validate_async_result(envelope: AsyncRerankEnvelope, *,
     dropped = []
     versions = current_versions if isinstance(current_versions, dict) else {}
     for mid in envelope.ranked_ids:
-        if mid in envelope.memory_versions and mid in versions:
+        if mid in envelope.memory_versions:
+            if mid not in versions:
+                dropped.append({'id': mid, 'reason': 'version_missing'})
+                continue
             if envelope.memory_versions[mid] != versions[mid]:
                 dropped.append({'id': mid, 'reason': 'version_changed'})
                 continue
+        elif versions:
+            dropped.append({'id': mid, 'reason': 'version_untracked'})
+            continue
         if callable(is_visible_fn) and not is_visible_fn(mid):
             dropped.append({'id': mid, 'reason': 'not_visible'})
             continue

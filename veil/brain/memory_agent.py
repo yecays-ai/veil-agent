@@ -1568,12 +1568,13 @@ class Memory:
 
         bodies = {}
         if picked_rows:
-            ids = [r['id'] for r in picked_rows]
-            marks = ','.join('?' * len(ids))
             conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
             try:
-                for mid, body in conn.execute(f'SELECT id, body FROM memories WHERE id IN ({marks})', ids):
-                    bodies[mid] = body or ''
+                for row_item in picked_rows:
+                    mid = row_item['id']
+                    rec = conn.execute('SELECT body FROM memories WHERE id = ?', (mid,)).fetchone()
+                    if rec is not None:
+                        bodies[mid] = rec[0] or ''
             finally:
                 conn.close()
         blocks_list = [(r['id'], f"[bucket_id:{r['id']}] {r['title']}\n{bodies.get(r['id'], '')}")
