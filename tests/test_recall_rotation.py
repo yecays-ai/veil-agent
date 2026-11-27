@@ -155,6 +155,11 @@ class RecallRotationTests(unittest.TestCase):
     def test_cooldown_survives_a_restart(self):
         memory = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.recall(memory, 'cooking dumplings')
+        # Before delivery is confirmed, a crash/restart must not persist undelivered cooldown state.
+        crashed = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
+        self.assertEqual(self.recall(crashed, 'cooking dumplings')[1], ['cooking'])
+        # Once delivery is confirmed, cooldown persists across restarts.
+        memory.confirm_delivery()
         restarted = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])
         saved = self.store.read('fake/memory/_agent/recall-rotation.jsonl')[-1]
@@ -167,6 +172,7 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
         memory.rollback_recall()  # ticket 380: that turn produced no reply
         self.assertEqual(self.recall(memory, 'cooking dumplings')[1], ['cooking'])
+        memory.confirm_delivery()  # this retry actually delivered a reply
         restarted = self.memory(recall={'cooldown_turns': 3, 'association_enabled': False})
         memory.rollback_recall()
         memory.rollback_recall()  # nothing left to undo: harmless
