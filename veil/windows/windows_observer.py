@@ -18,7 +18,7 @@ from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 from veil.windows.desktop_access import DesktopBusy, desktop_access
-import prompts
+from veil import prompts
 
 
 WINDOWS_OBSERVATION_TOOL_NAMES = frozenset({

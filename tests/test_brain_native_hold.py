@@ -10,7 +10,7 @@ from veil.brain.storage import veil_brain
 from veil.brain.memory_agent import Memory
 from veil.brain.event_memory import EventMemory
 from veil.brain.memory_native import NativeMemoryTools
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class FakeEmbedder:

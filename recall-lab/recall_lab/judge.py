@@ -25,7 +25,7 @@ Answer with JSON only: {"ids": ["A"]} or {"ids": []}.
 
 
 def _prompts_module():
-    import prompts
+    from veil import prompts
     return prompts
 
 

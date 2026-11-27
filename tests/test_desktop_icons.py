@@ -15,7 +15,7 @@ from veil.windows.desktop_icons import (
     generate_icon_id,
     validate_layout_plan,
 )
-from veil_agent import Store
+from veil.core.veil_agent import Store
 
 
 class DesktopIconsCoreTests(unittest.TestCase):

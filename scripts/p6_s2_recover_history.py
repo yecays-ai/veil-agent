@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from veil.brain.storage import brain_events  # noqa: E402
 from veil.brain.storage import brain_writer  # noqa: E402
 from veil.brain.storage.brain_lock import write_lock  # noqa: E402
-from veil_agent import Store  # noqa: E402
+from veil.core.veil_agent import Store  # noqa: E402
 
 
 def _now_iso() -> str:

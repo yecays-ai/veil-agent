@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import replace
 from decimal import Decimal
 
-import prompts
+from veil import prompts
 from veil.brain.recall.recall_relevance import all_vectors, cosine
 
 COST_CATEGORY = 'recall_judge'
@@ -202,7 +202,7 @@ class RecallJudge:
         from dotenv import dotenv_values
         from pathlib import Path
         from veil.brain.recall.recall_relevance import QueryEmbedder
-        from runtime_env import env_file
+        from veil.core.runtime_env import env_file
         # P2-B: same instance-scoped key as Memory.embedder(); never the repository .env in a test instance.
         key = dotenv_values(env_file(self.memory.cfg), interpolate=False,
                             encoding='utf-8-sig').get('EMBED_API_KEY')

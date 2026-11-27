@@ -483,7 +483,7 @@ class MaintenanceTests(unittest.TestCase):
         self.manager.record_workbench_approval(task['task_id'], 'denied', 'a' * 64)
         self.manager.record_workbench(task['task_id'], cost='0.01', steps=4, report='repeated read',
                                       state='出错', reason='repeated_call')
-        script = ('import json,sys; from types import SimpleNamespace; from maintenance import MaintenanceStore; '
+        script = ('import json,sys; from types import SimpleNamespace; from veil.system.maintenance import MaintenanceStore; '
                   't=MaintenanceStore(SimpleNamespace(root=sys.argv[1]),"test").load(sys.argv[2]); '
                   'print(json.dumps({"reason":t["development"]["reason"],'
                   '"denied":t["authorization"]["workbench"]["denied"]}))')
@@ -647,7 +647,7 @@ output_cny_per_million = "8"
         (self.repo / 'persona').mkdir(exist_ok=True)
         (self.repo / 'persona' / 'peter.md').write_text('Fictional persona', encoding='utf-8')
         (self.repo / '.env').write_text('FAKE_KEY=fake\n', encoding='utf-8')
-        from veil_agent import Budget, Chat, Store, load_character
+        from veil.core.veil_agent import Budget, Chat, Store, load_character
         try:
             cfg = load_character(self.repo, 'peter')
         except Exception as exc:
@@ -665,7 +665,7 @@ output_cny_per_million = "8"
         chat = Chat(cfg, store, Budget(store), Mock(), approval=lambda p: asked.append(p) or 'y',
                     output=lambda *_: None)
         chat.maintenance = self.manager
-        with patch('veil_agent.ROOT', self.repo):
+        with patch('veil.core.veil_agent.ROOT', self.repo):
             outcome = chat._run_workbench('create and run test_feature.py', 'fake-request', False,
                                           task_id=task['task_id'])
             first_approvals = len(asked)

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent_types import NOT_ASKED, NOT_ASKED_TEXT
+from veil.core.agent_types import NOT_ASKED, NOT_ASKED_TEXT
 from veil.windows.desktop_access import DesktopBusy, desktop_access, program_input_made, register_input_tracker
 from veil.windows.desktop_icons import (
     DesktopIconsError,

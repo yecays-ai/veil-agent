@@ -20,7 +20,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import prompts
+from veil import prompts
 from veil.brain.storage import brain_events
 from veil.brain.storage.brain_authority import ProjectionConflict, ProjectionLocked
 

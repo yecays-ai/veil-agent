@@ -592,7 +592,7 @@ def run_a1a_a1b_real(ctx, chat_client):
 def run_c1_real_context(ctx, chat_client):
     """Assemble realistic production-shaped HEAD using veil_agent.self_facts + learned_context +
     real capabilities + history slice, then measure deepseek-flash prefix cache retention."""
-    from veil_agent import self_facts
+    from veil.core.veil_agent import self_facts
     cap = ctx.options.get('capabilities') or {}
     cap_desc_v1 = (
         'You can use these tool groups: memory, profile, filesystem, notes, browser (collapsed), '

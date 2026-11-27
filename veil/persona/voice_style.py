@@ -10,8 +10,8 @@ import re
 import uuid
 from pathlib import Path
 
-import prompts
-from agent_types import UserError
+from veil import prompts
+from veil.core.agent_types import UserError
 
 MAX_CHARS = 8000   # the file is sent on every request; a longer one is refused on save and cut on read
 SWITCH = 'voice-style.json'

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
-from agent_types import UserError, now
+from veil.core.agent_types import UserError, now
 from veil.tools.tool_access import tools_with
 
 

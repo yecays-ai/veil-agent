@@ -7,8 +7,8 @@ from collections import deque
 from dataclasses import replace
 from datetime import date, timedelta
 
-import prompts
-from agent_types import now
+from veil import prompts
+from veil.core.agent_types import now
 
 TIME_WORDS = re.compile(r'明天|后天|下周|周[一二三四五六日天]|星期[一二三四五六日天]|[零一二三四五六七八九十两]{1,3}点(?:半|一刻|整|钟|[0-5]?\d分)?|\d{1,2}[号日点時时]|\d{1,2}[:：]\d{2}|上午|下午|晚上|tomorrow|next week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\s*(?:am|pm)', re.I)
 ACCEPT = re.compile(r'(?<![不没未别甭])(?:可以|约定|没问题|同意)(?![不没])'
@@ -126,7 +126,7 @@ class CalendarAgreements:
             chat.store.append(f'{chat.cfg.id}/calendar-agreements.jsonl',
                               {'at':now(),'undo_id':undo_id,'before':before,'after':row})
             chat.pending_calendar_context=notice
-            from veil_agent import LifeNotice
+            from veil.core.veil_agent import LifeNotice
             line=LifeNotice(notice,row['id'])
             line.calendar_undo_id=undo_id
             line.calendar_can_remind=bool(row.get('time') and not row.get('remind') and row.get('state')=='active')

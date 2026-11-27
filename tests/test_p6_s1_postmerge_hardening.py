@@ -25,7 +25,7 @@ from veil.brain.storage import veil_brain
 from veil.brain.storage.brain_read import BrainRead
 from veil.brain.memory_agent import Memory
 from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class CountingEmbedder:
@@ -189,7 +189,7 @@ class ApiPassThroughTests(MemoryFixture):
         self.assertEqual(chain['recall']['judge']['candidates'], 8)
 
     def test_live_context_passes_retrieval_and_degraded_to_the_api(self):
-        from web_agent import Hub
+        from veil.server.web_agent import Hub
         role = self.store.root / 'peter'
         role.mkdir(parents=True, exist_ok=True)
         context_row = {'time': '2026-11-26T10:00:00+08:00', 'kind': 'chat',

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock
 
 from veil.brain.memory_agent import Memory, MemoryToolError, ordinary_hits, vault_path
-from veil_agent import Budget, Character, Chat, Store, UserError
+from veil.core.veil_agent import Budget, Character, Chat, Store, UserError
 
 
 class Backend:

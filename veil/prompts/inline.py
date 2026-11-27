@@ -10,10 +10,10 @@ import hashlib
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from veil.paths import PROJECT_ROOT as ROOT
 
 PROMPT_MODULES = (
-    'veil_agent.py',
+    'veil/core/veil_agent.py',
     'veil/autonomy/autonomy.py',
     'veil/persona/background.py',
     'veil/life/calendar_agreements.py',
@@ -111,12 +111,15 @@ def _imports_prompts(path):
         return False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(alias.name == 'prompts' or alias.name.startswith('prompts.')
+            if any(alias.name in ('prompts', 'veil.prompts')
+                   or alias.name.startswith(('prompts.', 'veil.prompts.'))
                    for alias in node.names):
                 return True
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ''
-            if module == 'prompts' or module.startswith('prompts.'):
+            if module in ('prompts', 'veil.prompts') or module.startswith(('prompts.', 'veil.prompts.')):
+                return True
+            if module == 'veil' and any(alias.name == 'prompts' for alias in node.names):
                 return True
     return False
 

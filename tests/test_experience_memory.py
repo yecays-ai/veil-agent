@@ -12,11 +12,11 @@ from unittest import mock
 from decimal import Decimal
 from pathlib import Path
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 import test_native_memory
 from veil.chat.chat_search import search_chat
 from veil.brain.experience_memory import COST_CATEGORY, ExperienceMemory, load_settings
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 DAY1 = '2026-11-12'
 PROVIDER = {'model': 'fake', 'max_input_tokens': 60000, 'input_cny_per_million': 2,

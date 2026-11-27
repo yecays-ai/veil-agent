@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from veil.brain.storage import brain_writer
 from veil.brain.storage import veil_brain
 from veil.brain.memory_agent import Memory
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 def tool(name):

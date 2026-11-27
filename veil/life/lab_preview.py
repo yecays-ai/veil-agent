@@ -11,7 +11,7 @@ import stat
 import threading
 from pathlib import Path
 
-import prompts
+from veil import prompts
 from urllib.parse import unquote, urlsplit
 
 

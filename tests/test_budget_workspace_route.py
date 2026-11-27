@@ -6,8 +6,8 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock
 
-from veil_agent import Budget, Store
-from web_agent import make_handler
+from veil.core.veil_agent import Budget, Store
+from veil.server.web_agent import make_handler
 
 
 class BudgetWorkspaceRouteTest(TestCase):

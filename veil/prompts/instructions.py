@@ -7,8 +7,8 @@ editable copies of the same text is how versions get confused.
 """
 from datetime import datetime
 
-import prompts
-from prompts import registry
+from veil import prompts
+from veil.prompts import registry
 
 KIND_LABELS = {'text': '文本', 'marker': '每轮生成'}
 TOOL_ID_PREFIX = 'tool.'

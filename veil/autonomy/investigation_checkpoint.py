@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 import uuid
 
-from agent_types import UserError, now
+from veil.core.agent_types import UserError, now
 from veil.autonomy.long_tasks import LongTaskStore, READ_ONLY_TOOLS
-import prompts
+from veil import prompts
 
 
 MAX_EVIDENCE = 16
@@ -137,7 +137,7 @@ class InvestigationCheckpoint:
             if not task or task['status'] == 'completed':
                 task = {'id': uuid.uuid4().hex, 'goal': goal[:2000], 'request_id': request_id,
                         'status': 'active', 'reason': '', 'evidence': [], 'updated_at': now()}
-            from veil_agent import safe_tool_activity_detail
+            from veil.core.veil_agent import safe_tool_activity_detail
             from veil.windows.windows_interaction import WINDOWS_INTERACTION_TOOL_NAMES
             if side_effect is None:
                 side_effect = canonical not in READ_ONLY_TOOLS | {'browser', 'web_search'}

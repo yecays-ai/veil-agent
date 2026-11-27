@@ -126,7 +126,7 @@ def main():
     args = parser.parse_args()
     from veil.brain.memory_agent import Memory
     from veil.brain.memory_native import NativeMemoryTools, ToolSet
-    from veil_agent import Budget, Chat, Store, load_character, make_model
+    from veil.core.veil_agent import Budget, Chat, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')
     price, spent = cfg.provider, [Decimal(0)]

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from veil.life.life_state import gap_text, state_text, time_separator, return_window
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
 
@@ -420,7 +420,7 @@ class ChatPlacementTests(unittest.TestCase):
 
     def test_peter_changing_lans_record_tells_her_in_a_notice_not_in_his_history(self):
         # Ticket 385: one grey line for Lan; ticking her daily to-do sends nothing.
-        from veil_agent import LifeNotice
+        from veil.core.veil_agent import LifeNotice
         chat = self.chat('2026-11-12T08:55:00+08:00')
         shown = []
         chat.output = shown.append

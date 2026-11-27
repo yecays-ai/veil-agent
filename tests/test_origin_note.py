@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from veil.autonomy.autonomy import origin_note
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 NOW = '2026-11-12T09:00:00+08:00'
 OK = '成功'

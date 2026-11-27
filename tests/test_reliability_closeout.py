@@ -14,8 +14,8 @@ from unittest.mock import Mock, patch
 
 from veil.system import backup_restore
 from veil.autonomy.autonomy import AutonomyController
-from veil_agent import AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, load_character, run_chat
-from web_agent import Hub, serve_chat, start_server
+from veil.core.veil_agent import AUTONOMY_WAKE, ActivityState, Budget, Chat, Store, load_character, run_chat
+from veil.server.web_agent import Hub, serve_chat, start_server
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -71,7 +71,7 @@ class ScheduledAutonomyCloseoutTests(unittest.TestCase):
 
             past = datetime.now().astimezone() - timedelta(minutes=3)
             controller.started_at = past
-            with patch("veil_agent.now", return_value=past.isoformat()):
+            with patch("veil.core.veil_agent.now", return_value=past.isoformat()):
                 self.assertTrue(hub.set_activity(True))
 
             self.assertTrue(activity.enabled())

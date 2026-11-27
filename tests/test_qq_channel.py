@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from veil.integrations.away_bridge import AwayBridge
 from veil.integrations.qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
-from web_agent import Hub
+from veil.server.web_agent import Hub
 
 
 SETTINGS = {'enabled': True, 'poll_seconds': 20, 'idle_seconds': 120, 'daily_max_sent': 3}

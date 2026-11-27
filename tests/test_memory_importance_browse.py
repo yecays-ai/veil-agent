@@ -9,7 +9,7 @@ from unittest.mock import Mock
 from veil.brain.memory_agent import Memory
 from veil.brain.memory_native import HOLD, MEMORY_CATALOG, PINNED_LIMIT, SEARCH, NativeMemoryTools, ToolSet
 from test_memory import Backend
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class PinningBackend(Backend):

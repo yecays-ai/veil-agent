@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from veil.windows.desktop_icons import DesktopIcon, DisplayMetrics, FakeDesktopIconsBackend
 from veil.autonomy.long_tasks import READ_ONLY_TOOLS
 from veil.tools.tools_agent import tool_policy
-from veil_agent import Store
-from web_agent import _get_desktop_icons_manager
+from veil.core.veil_agent import Store
+from veil.server.web_agent import _get_desktop_icons_manager
 from veil.windows.windows_interaction import (
     DesktopInputMonitor,
     WindowsInteractionBackend,

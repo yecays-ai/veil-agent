@@ -12,7 +12,7 @@ from unittest import mock
 from veil.system import backup_restore
 from veil.system import data_repair
 from veil.system import ledger_recovery as ledger
-from veil_agent import Budget, BudgetExceeded, Store, UserError
+from veil.core.veil_agent import Budget, BudgetExceeded, Store, UserError
 
 DAY = '2026-11-01T10:00:00+08:00'
 

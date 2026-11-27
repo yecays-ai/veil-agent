@@ -17,8 +17,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import prompts
-from agent_types import UserError
+from veil import prompts
+from veil.core.agent_types import UserError
 
 SECTIONS = ('facts', 'growth')
 # Ticket 422: the stable relationship base. Each item is one thing Peter currently understands about the

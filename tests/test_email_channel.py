@@ -8,8 +8,8 @@ from unittest.mock import patch
 from veil.integrations import email_channel
 from veil.integrations.away_bridge import AwayBridge
 from veil.integrations.email_channel import EMAIL_PREFIX, EmailChannel, reply_text
-from veil_agent import send_message_schema
-from web_agent import Hub
+from veil.core.veil_agent import send_message_schema
+from veil.server.web_agent import Hub
 
 
 SETTINGS = {'enabled': True, 'poll_seconds': 60, 'daily_max_sent': 2, 'smtp_host': 'smtp.example',

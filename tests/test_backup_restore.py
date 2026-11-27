@@ -394,7 +394,7 @@ class DesktopAndRecoveryTests(BackupFixture, unittest.TestCase):
         marker = json.loads((self.target / backup_restore.RECOVERY_MARKER_NAME).read_text(encoding="utf-8"))
         first_safety = Path(marker["original_safety_copy"])
         self.assertEqual((first_safety / "data" / "fixture" / "chat.jsonl").read_bytes(), b"real current chat\n")
-        from veil_agent import Store, UserError
+        from veil.core.veil_agent import Store, UserError
         with self.assertRaises(UserError) as caught:
             Store(self.target / "data")
         text = str(caught.exception)

@@ -187,7 +187,7 @@ def main():
                         'reasoning use the whole limit like the 11-16 failures (the retry without thinking is not capped)')
     args = parser.parse_args()
     from veil.brain.experience_memory import ExperienceMemory, load_settings
-    from veil_agent import Budget, Store, load_character, make_model
+    from veil.core.veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')
     models = getattr(cfg, 'models', None)

@@ -26,7 +26,7 @@ from veil.brain.storage import veil_brain
 from veil.brain.storage.brain_read import BrainRead
 from veil.brain.memory_agent import Memory
 from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS, JudgeFailed, RecallJudge, card_text, split_card
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 CRLF_RAW = ('---\r\nid: old\r\ntitle: 老记忆\r\nimportance: 8\r\ntags:\r\n- 那年\r\n---\r\n'
             '开头一句关于蓝色玩笑的内容。' + '中间是一段很长很长的对话。' * 5 + '结尾是那只蓝色风筝。\r\n'

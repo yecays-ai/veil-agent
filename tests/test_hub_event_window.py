@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import web_agent
-from veil_agent import ActivityState, Store
-from web_agent import Hub
+from veil.server import web_agent
+from veil.core.veil_agent import ActivityState, Store
+from veil.server.web_agent import Hub
 
 
 class HubEventWindowTests(unittest.TestCase):

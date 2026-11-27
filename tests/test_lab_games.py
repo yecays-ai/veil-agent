@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
 from veil.life.lab_games import LabGames
-from web_agent import start_server
+from veil.server.web_agent import start_server
 
 
 class LabGameTests(unittest.TestCase):

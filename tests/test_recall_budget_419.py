@@ -6,7 +6,7 @@ behaviour: several independent memories injected together, the recent conversati
 under pressure, and the final request never carrying half a sentence.
 """
 import json
-import prompts
+from veil import prompts
 import random
 import re
 import tempfile
@@ -26,7 +26,7 @@ from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
 from veil.brain.recall.recall_rotation import asks_about_past, is_followup
 from test_recall_judge import FakeEmbedder, FakeJudgeModel
 from test_recall_rotation import FictionalOmbre
-from veil_agent import Budget, Character, Store, estimate_message_tokens
+from veil.core.veil_agent import Budget, Character, Store, estimate_message_tokens
 
 
 LONG_PARAGRAPHS = [
@@ -298,7 +298,7 @@ max_steps = 2
                                 'created': f'2026-10-{10 + i:02d}T10:00:00'} for i in range(5)}
 
     def build(self, limit, cooldown=0):
-        from veil_agent import Budget, Chat, load_character
+        from veil.core.veil_agent import Budget, Chat, load_character
         cfg = load_character(self.root, 'peter')
         cfg.provider['max_input_tokens'] = limit
         cfg.memory['recall'] = {'cooldown_turns': cooldown, 'association_enabled': False}
@@ -539,7 +539,7 @@ class FinalStateTests(MemoryLevelBudgetTests):
     def test_short_real_memory_fits_when_empty_notices_do_not(self):
         memory = self.memory({'short': {'content': 'Tiny fact.', 'title': 'Short'}})
         memory.context('Tiny', include_opening=True, defer=True)
-        import prompts
+        from veil import prompts
         actual = [{'role': 'system', 'content':
                    prompts.text('memory.recall.head') + '\n'
                    + memory._pending_recall['blocks'][0]['text']}]

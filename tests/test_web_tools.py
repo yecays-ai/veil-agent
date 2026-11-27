@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from veil.integrations import web_tools
 
 from veil.tools.tools_agent import FilesystemTools
-from veil_agent import Store
+from veil.core.veil_agent import Store
 from veil.integrations.web_tools import WebTools, public_http_url
 
 

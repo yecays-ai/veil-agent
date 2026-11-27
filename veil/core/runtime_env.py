@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from veil.paths import PROJECT_ROOT as ROOT
 
 
 def config_root(cfg=None):

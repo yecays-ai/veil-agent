@@ -104,7 +104,7 @@ class Cap(Exception):
 
 
 def run(args, out):
-    from veil_agent import Budget, Chat, Store, load_character, make_model
+    from veil.core.veil_agent import Budget, Chat, Store, load_character, make_model
     cfg = load_character(Path(args.root), args.character)
     if args.persona:
         cfg = replace(cfg, persona=Path(args.persona).read_text(encoding='utf-8-sig').strip())

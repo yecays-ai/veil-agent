@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.brain.memory_agent import Memory
 from veil.brain.memory_native import MEMORY_CHARS, NativeMemoryTools, ToolSet, dates_in
 from test_memory import Backend
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class MovingBackend(Backend):

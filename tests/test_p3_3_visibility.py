@@ -10,7 +10,7 @@ from veil.brain.storage import brain_writer
 from veil.brain.storage import veil_brain
 from veil.brain.storage.brain_migrate import unhide_legacy_rows
 from veil.brain.storage.brain_read import BrainRead
-from veil_agent import Store
+from veil.core.veil_agent import Store
 
 
 class UnhideMigrationTests(unittest.TestCase):
@@ -123,7 +123,7 @@ class UnhideMigrationTests(unittest.TestCase):
     def test_memory_startup_runs_unhide_migration(self):
         from unittest.mock import Mock
         from veil.brain.memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('startup hidden', is_hidden=1, dont_surface=1,
                                  bucket='archive', type='archived')
         provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
@@ -148,7 +148,7 @@ class UnhideMigrationTests(unittest.TestCase):
     def test_pending_delete_stays_unreadable_after_hidden_removal(self):
         from unittest.mock import Mock
         from veil.brain.memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('pending runtime')
         connection = sqlite3.connect(str(self.db))
         try:
@@ -180,7 +180,7 @@ class UnhideMigrationTests(unittest.TestCase):
         from unittest.mock import Mock
         from veil.brain.memory_agent import Memory
         from veil.brain.memory_native import NativeMemoryTools
-        from veil_agent import Budget, Character
+        from veil.core.veil_agent import Budget, Character
         rejected_id = self._create('keep after rejection')
         approved_id = self._create('remove after approval')
         connection = sqlite3.connect(str(self.db))
@@ -228,7 +228,7 @@ class UnhideMigrationTests(unittest.TestCase):
         from unittest.mock import Mock
         from veil.brain.memory_agent import Memory
         from veil.brain.memory_native import NativeMemoryTools
-        from veil_agent import Budget, Character
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('pending approval')
         connection = sqlite3.connect(str(self.db))
         try:

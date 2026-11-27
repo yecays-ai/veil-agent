@@ -17,9 +17,9 @@ import threading
 import time
 import uuid
 
-import prompts
+from veil import prompts
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.brain.recall.brain_retrieval import load_settings as retrieval_settings, search_text as brain_retrieval_search
 from veil.brain.recall.recall_judge import JudgeFailed
 
@@ -1060,7 +1060,7 @@ class Memory:
         if getattr(self, '_embedder', None) is None:
             from dotenv import dotenv_values
             from veil.brain.recall.recall_relevance import QueryEmbedder
-            from runtime_env import env_file
+            from veil.core.runtime_env import env_file
             # P2-B: read this instance's config root, never the production .env beside the code.
             key = dotenv_values(env_file(getattr(self, 'cfg', None)), interpolate=False,
                                 encoding='utf-8-sig').get('EMBED_API_KEY')

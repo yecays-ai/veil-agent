@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 from veil.brain.memory_agent import Memory, vault_path
 from test_recall_rotation import FictionalOmbre
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 ROWS = {

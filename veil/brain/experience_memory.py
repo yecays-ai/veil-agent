@@ -22,11 +22,11 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import prompts
+from veil import prompts
 
-import prompts
+from veil import prompts
 
-from agent_types import RequestFailed, UserError
+from veil.core.agent_types import RequestFailed, UserError
 from veil.brain.short_term_notes import _parse_json_object
 from veil.brain.memory_agent import SEARCH_SPARE_HITS, ordinary_hits
 from veil.brain.memory_sidecar import Sidecar

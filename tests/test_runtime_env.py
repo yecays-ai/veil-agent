@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import runtime_env
+from veil.core import runtime_env
 from veil.brain.memory_agent import Memory
 from veil.brain.recall.recall_judge import RecallJudge
 

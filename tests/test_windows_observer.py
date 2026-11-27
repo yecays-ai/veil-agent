@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 from veil.windows.desktop_access import desktop_access
 from veil.tools.tools_agent import tool_policy
-from veil_agent import Budget, Chat, Store, load_character, model_tool_result
+from veil.core.veil_agent import Budget, Chat, Store, load_character, model_tool_result
 from veil.windows.windows_observer import (
     SENSITIVE_LABEL,
     ObservationError,

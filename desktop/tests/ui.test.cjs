@@ -56,7 +56,7 @@ test('chat shell exposes appearance CSS, custom background, global and per-page 
 
 test('daily memory view reads Ombre catalog and exact records without the legacy /memory command', async () => {
   const [html, main, web, native] = await Promise.all([
-    read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8'),
+    read('chat.html'), read('main.cjs'), fs.readFile(path.join(__dirname, '..', '..', 'veil', 'server', 'web_agent.py'), 'utf8'),
     fs.readFile(path.join(__dirname, '..', '..', 'veil', 'brain', 'memory_native.py'), 'utf8')
   ]);
   assert.match(html, /data-memory-group="all"/);
@@ -250,7 +250,7 @@ test('settings page has a workbench switch with folder picker, and the chat log 
 
 test('every memory page action the renderer posts is allowed by the main process and served by Python', async () => {
   const [js, main, web] = await Promise.all([read('chat.js'), read('main.cjs'),
-    fs.readFile(path.join(__dirname, '..', '..', 'web_agent.py'), 'utf8')]);
+    fs.readFile(path.join(__dirname, '..', '..', 'veil', 'server', 'web_agent.py'), 'utf8')]);
   const allowed = [...main.match(/const MEMORY_POSTS = \[([^\]]*)\]/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
   const served = [...web.match(/MEMORY_CHANGE_PATHS = \(([^)]*)\)/)[1].matchAll(/'([^']+)'/g)].map(m => m[1]);
   const posted = [...new Set([...js.matchAll(/api\('(\/api\/memory\/[a-z-]+)',\s*\{/g)].map(m => m[1]))];

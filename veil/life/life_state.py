@@ -7,7 +7,7 @@ so the cached prefix is untouched); the autonomous wake uses the same task/life 
 import json
 from datetime import datetime
 
-import prompts
+from veil import prompts
 
 # Ticket 352 + 350 audit: gaps under an hour are one conversation (the chat log splits into
 # sessions at 60 minutes), so no time note is added for them.

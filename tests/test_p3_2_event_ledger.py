@@ -12,7 +12,7 @@ from veil.brain.storage import brain_export
 from veil.brain.storage.brain_migrate import migrate_role
 from veil.brain.storage.brain_store import BrainStore
 from veil.brain.storage.brain_authority_init import initialize
-from veil_agent import Store
+from veil.core.veil_agent import Store
 
 
 class EventLedgerTests(unittest.TestCase):
@@ -88,7 +88,7 @@ class EventLedgerTests(unittest.TestCase):
 class StartupMigrationTests(unittest.TestCase):
     def test_memory_startup_migrates_legacy_event_files(self):
         from veil.brain.memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.core.veil_agent import Budget, Character
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         store = Store(temp.name + '/data')
@@ -362,7 +362,7 @@ class BackupSafetyTests(unittest.TestCase):
         import json
         from veil.brain.storage.brain_events import read_rows
         from veil.brain.storage.brain_migrate import migrate_role
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         store = Store(temp.name + '/data')

@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from veil.persona.background import (LIMITS, NOTE, append_context_log, background_context, chunk_paragraph,
                         select_background, split_background)
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 LIBRARY = '''Queens is home. Small apartment, broken radiator, rent that's always a little overdue.
 Keywords: Queens, 皇后区, apartment

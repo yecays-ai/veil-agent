@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 
 KEEP_DAYS = 7
 TTL_HOURS = 24

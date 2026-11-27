@@ -4,8 +4,8 @@ import os
 import uuid
 from pathlib import Path
 
-import prompts
-from agent_types import UserError
+from veil import prompts
+from veil.core.agent_types import UserError
 
 # Import-time copy for tests only; context() reads the live text so an edit applies to the next request.
 FRAME = prompts.text('identity.user_frame')

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from veil.autonomy.investigation_checkpoint import InvestigationCheckpoint
-from veil_agent import Store
+from veil.core.veil_agent import Store
 
 
 class InvestigationCheckpointTests(unittest.TestCase):

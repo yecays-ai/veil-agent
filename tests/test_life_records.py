@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 from pathlib import Path
 from veil.life.life_records import LifeRecords, effective, fold_completed
-from agent_types import now
+from veil.core.agent_types import now
 
 
 class LifeRecordsTest(unittest.TestCase):

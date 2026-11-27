@@ -11,7 +11,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 
 MAX_TEXT_CHARACTERS = 160
 MAX_ACTIVE = 40

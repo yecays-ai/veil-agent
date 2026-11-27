@@ -103,7 +103,7 @@ def redact(value):
         text = value if isinstance(value, str) else str(value)
     text = _redact_text(text)
     try:
-        from veil_agent import safe_tool_activity_detail
+        from veil.core.veil_agent import safe_tool_activity_detail
     except Exception:
         safe_tool_activity_detail = None
     if safe_tool_activity_detail is not None:

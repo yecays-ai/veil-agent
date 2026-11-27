@@ -15,7 +15,7 @@ from veil.tools import tools_agent
 from veil.tools import tool_failures
 from veil.tools.tools_agent import (ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, checked_path,
                          permitted_tools, tool_policy)
-from veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
+from veil.core.veil_agent import (Budget, Chat, RequestFailed, Store, load_character,
                         UserError, join_reply_continuation, model_tool_result, request_byte_size,
                         run_chat, stable_hash)
 
@@ -111,7 +111,7 @@ class ToolPolicyTests(unittest.TestCase):
         except (OSError, NotImplementedError):
             self.skipTest('directory symlinks are unavailable for this account')
 
-        from veil_agent import UserError
+        from veil.core.veil_agent import UserError
         with self.assertRaisesRegex(UserError, '角色数据目录被重定向'):
             FilesystemTools(self.root, SimpleNamespace(id='test', tools=None), Store(data))
 
@@ -1063,7 +1063,7 @@ max_result_bytes = 200
         tools.capability_event = None
         model = Mock()
         chat = Chat(self.cfg, self.store, self.budget, model, tools=tools)
-        from veil_agent import BudgetExceeded
+        from veil.core.veil_agent import BudgetExceeded
         with self.assertRaises(BudgetExceeded):
             chat.send('create a journal')
         model.assert_not_called()
@@ -1695,7 +1695,7 @@ class FilesystemServerTests(unittest.TestCase):
 
     def test_tool_failure_source_strings_are_english(self):
         root = Path(__file__).resolve().parents[1]
-        paths = ('veil/autonomy/long_tasks.py', 'veil/brain/memory_native.py', 'veil/tools/tools_agent.py', 'veil_agent.py', 'veil/brain/memory_agent.py')
+        paths = ('veil/autonomy/long_tasks.py', 'veil/brain/memory_native.py', 'veil/tools/tools_agent.py', 'veil/core/veil_agent.py', 'veil/brain/memory_agent.py')
         failure_states = {'被拒绝', '出错', False}
         found = 0
 

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.windows.windows_process import hidden_subprocess_kwargs
 
 DEFAULT_GITHUB_REPO = 'yecays-ai/veil-agent'

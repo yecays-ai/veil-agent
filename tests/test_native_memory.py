@@ -12,7 +12,7 @@ from veil.brain.memory_native import HOLD, NativeMemoryTools, ToolSet
 from veil.autonomy.long_tasks import LongTaskStore
 from test_memory import Backend
 from veil.tools.tools_agent import permitted_tools
-from veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
+from veil.core.veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
 
 
 class MergingBackend(Backend):
@@ -954,7 +954,7 @@ class DegradedNoticeTests(unittest.TestCase):
 
 class PendingDeletionChatTests(unittest.TestCase):
     def test_next_chat_message_asks_lan_and_tells_peter_the_outcome(self):
-        from veil_agent import pending_deletion_context
+        from veil.core.veil_agent import pending_deletion_context
         store = Store(Path(tempfile.mkdtemp()))
         native = SimpleNamespace(process_pending_deletions=Mock(return_value=[
             'The deletion request for memory a1 was approved and executed.']))

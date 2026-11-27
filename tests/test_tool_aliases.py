@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from veil.tools.tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
 from veil.tools.tools_agent import ALLOW, tool_policy
-from veil_agent import Budget, Chat, Character, Store, model_tool_result, raw_tool_call_text_format
+from veil.core.veil_agent import Budget, Chat, Character, Store, model_tool_result, raw_tool_call_text_format
 
 
 class ToolAliasTests(unittest.TestCase):

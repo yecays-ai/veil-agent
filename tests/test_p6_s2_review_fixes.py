@@ -43,7 +43,7 @@ from veil.brain.event_memory import EventMemory, facts
 from veil.brain.experience_memory import ExperienceMemory
 from veil.brain.memory_agent import Memory
 from veil.brain.memory_native import NativeMemoryTools
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 from test_p6_s2_write_and_recovery import _init_db, _seed_event, _seed_memory
 
 

@@ -17,11 +17,11 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.brain.memory_agent import Memory, vault_path
 from veil.brain.recall.recall_judge import DEFAULTS, JudgeFailed, card_text, load_settings, parse_choice
 from test_recall_rotation import FictionalOmbre
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 QUERY = 'my succulent died again'
 VECTORS = {

@@ -32,7 +32,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
 from veil.windows.windows_process import hidden_subprocess_kwargs
-import prompts
+from veil import prompts
 
 TOOL_NAME = 'workbench'
 MILLION = Decimal(1_000_000)

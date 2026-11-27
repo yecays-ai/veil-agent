@@ -19,7 +19,7 @@ from veil.brain.memory_agent import Memory, vault_path
 from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
 from test_recall_judge import FakeEmbedder, FakeJudgeModel
 from test_recall_rotation import FictionalOmbre
-from veil_agent import Budget, Chat, Store, load_character, estimate_request_tokens
+from veil.core.veil_agent import Budget, Chat, Store, load_character, estimate_request_tokens
 
 CONFIRMED = 'We agreed that a hard day gets a quiet evening together, not a plan.'
 GUESS = 'Peter thinks she prefers tea in the morning, but she never said so.'
@@ -645,7 +645,7 @@ class DataSafetyTests(unittest.TestCase):
                                        'max_bytes': 4000})
 
     def test_a_malformed_relationship_block_is_refused_not_emptied(self):
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         self.profile.save_relationship([{'id': 'r1', 'text': 'She comes home after seven.',
                                          'status': 'confirmed'}])
         path = self.store.root / 'fake' / 'learned-context.json'
@@ -661,7 +661,7 @@ class DataSafetyTests(unittest.TestCase):
                          json.loads(path.read_text(encoding='utf-8'))['relationship']['items'])
 
     def test_an_empty_expected_updated_at_does_not_bypass_the_concurrency_check(self):
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         self.profile.save_relationship([{'id': 'r1', 'text': 'She comes home after seven.',
                                          'status': 'confirmed'}])
         with self.assertRaises(UserError):

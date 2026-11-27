@@ -93,7 +93,7 @@ def main():
     args = parser.parse_args()
     from veil.brain.memory_agent import Memory, vault_path
     from veil.brain.memory_sidecar import Sidecar
-    from veil_agent import Budget, Store, load_character, make_model
+    from veil.core.veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     real = load_character(root, 'peter')
     price, spent = real.provider, [Decimal(0)]

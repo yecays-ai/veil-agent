@@ -10,8 +10,8 @@ import sys
 import time
 import uuid
 
-import prompts
-from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now, not_asked
+from veil import prompts
+from veil.core.agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now, not_asked
 
 
 MAX_RUNTIME_SECONDS = 15 * 60

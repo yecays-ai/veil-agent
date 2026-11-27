@@ -6,10 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Budget, Chat, Store, load_character
-from agent_types import RequestFailed
-from web_agent import Hub, ChatAction
-from veil_agent import ActivityState
+from veil.core.veil_agent import Budget, Chat, Store, load_character
+from veil.core.agent_types import RequestFailed
+from veil.server.web_agent import Hub, ChatAction
+from veil.core.veil_agent import ActivityState
 
 TOML = '''name = "Test"
 provider = "fake"
@@ -516,7 +516,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
             hub.set_typing(False)
 
         worker = threading.Thread(target=keep_typing_then_send)
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2), patch('veil.server.web_agent.TYPING_ACTIVE_SECONDS', 0.3):
             worker.start()
             batch = hub._input_fn()
         worker.join()
@@ -527,7 +527,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
         from unittest.mock import patch
         hub = self.hub()
         hub.inbox.put(('hi', None, None, 'id-1', False))
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2):
             started = time.monotonic()
             batch = hub._input_fn()
         self.assertEqual(str(batch), 'hi')
@@ -540,7 +540,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
         hub.set_typing(True)
         hub.typed_at = time.monotonic() - 10
         hub.inbox.put(('hi', None, None, 'id-1', False))
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2), patch('veil.server.web_agent.TYPING_ACTIVE_SECONDS', 0.3):
             started = time.monotonic()
             batch = hub._input_fn()
         self.assertEqual(str(batch), 'hi')

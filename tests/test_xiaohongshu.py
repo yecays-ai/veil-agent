@@ -463,7 +463,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual(env['COOKIES_PATH'], str(self.folder / 'cookies.json'))
 
     def test_private_cookie_folder_cannot_be_exposed_as_file_workspace(self):
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         cfg = SimpleNamespace(id='peter', web=self.cfg.web,
                               tools={'folder': 'data/peter'}, screen_pop=None,
                               windows_interaction=None, desktop_file_read=None,
@@ -489,9 +489,9 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual(self.sidecar.request.call_count, 1)
 
     def test_autonomous_wake_reads_then_saves_local_draft_without_publishing(self):
-        from veil_agent import ActivityState, Budget, Character, Chat, Store
+        from veil.core.veil_agent import ActivityState, Budget, Character, Chat, Store
         from veil.autonomy.autonomy import AutonomyController
-        from web_agent import Hub
+        from veil.server.web_agent import Hub
         store = Store(self.root / 'data')
         cfg = Character('peter', 'Test', 'Fictional persona', 20, 100,
                         {'model': 'fake', 'max_input_tokens': 30000,

@@ -121,7 +121,7 @@ def main():
     parser.add_argument('--fake', action='store_true')
     args = parser.parse_args()
     from veil.brain.experience_memory import ExperienceMemory, load_settings
-    from veil_agent import Budget, Store, load_character, make_model
+    from veil.core.veil_agent import Budget, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')
     price, spent = cfg.provider, [Decimal(0)]

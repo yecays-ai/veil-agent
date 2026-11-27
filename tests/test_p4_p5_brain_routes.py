@@ -11,7 +11,7 @@ import sqlite3
 from veil.brain import brain_health
 from veil.system import diagnostics
 from veil.system import request_snapshots
-import web_agent
+from veil.server import web_agent
 
 
 def _build_fixture_db(db_path: Path):

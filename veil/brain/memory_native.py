@@ -12,9 +12,9 @@ import hashlib
 import re
 import uuid
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.brain.storage.brain_writer import WriteConflict
-from capability_state import capability_lock, save_capabilities
+from veil.core.capability_state import capability_lock, save_capabilities
 from veil.brain.memory_agent import ordinary_hits, MemoryToolError, SEARCH_SPARE_HITS, vault_path as role_vault_path
 from veil.brain.memory_sidecar import Sidecar
 

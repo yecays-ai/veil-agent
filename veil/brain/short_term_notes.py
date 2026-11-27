@@ -6,9 +6,9 @@ import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
-import prompts
+from veil import prompts
 
-from agent_types import RequestFailed, UserError
+from veil.core.agent_types import RequestFailed, UserError
 
 INTERVAL = timedelta(minutes=30)
 INACTIVE_FOR = timedelta(minutes=60)

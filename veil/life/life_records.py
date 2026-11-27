@@ -6,7 +6,7 @@ import secrets
 from datetime import date as calendar_date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from veil_agent import now
+from veil.core.veil_agent import now
 
 LIFE_TOOL = SimpleNamespace(name='life_record', description=(
     'The calendar you share with Lan: events (kind event, optional time HH:MM; remind with remind_before '

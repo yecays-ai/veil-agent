@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from veil.tools import tools_agent
 from veil.tools import tool_failures
 from veil.tools.tool_failures import UNKNOWN, finalize, internal_failure, refusal
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 from veil.tools.tools_agent import FilesystemTools
 from veil.windows.windows_observer import WindowsObservationTools
 
@@ -95,7 +95,7 @@ class InternalFailureTests(unittest.TestCase):
     def test_an_authored_user_error_keeps_its_own_words(self):
         # UserError / RequestFailed / BudgetExceeded are meant to be read; they must
         # not be relabelled as an internal fault or write a traceback row.
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         with tempfile.TemporaryDirectory() as temp:
             store = Store(Path(temp) / 'data')
             fake = SimpleNamespace(store=store, cfg=SimpleNamespace(id='test'))
@@ -165,7 +165,7 @@ class FailureSourceContractTests(unittest.TestCase):
     silently drop back to the one meaningless sentence lan complained about.
     """
 
-    MODULES = ('veil_agent.py', 'veil/tools/tools_agent.py', 'veil/windows/windows_observer.py',
+    MODULES = ('veil/core/veil_agent.py', 'veil/tools/tools_agent.py', 'veil/windows/windows_observer.py',
                'veil/windows/windows_interaction.py', 'veil/brain/memory_agent.py', 'veil/autonomy/long_tasks.py')
     BARE = {
         '参数无效。', '参数无效', 'Error', 'Error.', 'Failed.', 'Failed',

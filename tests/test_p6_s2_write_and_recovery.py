@@ -113,7 +113,7 @@ class TestCommitEventBundle(unittest.TestCase):
 
     def test_single_versions_row_after_bundle_commit(self):
         """commit_event_bundle should produce exactly one versions row (no double write)."""
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         store = Store(self.root)
         cfg = type('Cfg', (), {
             'id': self.role,
@@ -160,7 +160,7 @@ class TestCommitEventBundle(unittest.TestCase):
 
     def test_mid_transaction_crash_rollback(self):
         """Simulate a crash mid-transaction: nothing should be committed."""
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         store = Store(self.root)
         cfg = type('Cfg', (), {
             'id': self.role,
@@ -245,7 +245,7 @@ class TestCaptureEvidence(unittest.TestCase):
     def test_chat_user_messages_not_crowded_out(self):
         """Even with 20 tool rows, all 3 user chat rows must be in evidence."""
         from veil.brain.event_memory import EventMemory
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         em = EventMemory.__new__(EventMemory)
         em.store = Store(self.store_root)
         em.cfg = type('Cfg', (), {'id': self.role})()

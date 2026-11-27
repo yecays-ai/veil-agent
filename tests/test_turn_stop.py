@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Budget, Chat, RequestFailed, Store, load_character, send_message_schema
+from veil.core.veil_agent import Budget, Chat, RequestFailed, Store, load_character, send_message_schema
 
 TOML = '''name = "Test"
 provider = "fake"
@@ -174,8 +174,8 @@ class TurnStopTests(unittest.TestCase):
         self.assertIsNot(seen['_provider'], self.cfg.provider)
 
     def test_hub_exit_request_also_stops_a_waiting_turn(self):
-        from veil_agent import ActivityState
-        from web_agent import Hub
+        from veil.core.veil_agent import ActivityState
+        from veil.server.web_agent import Hub
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
                   media_root=self.store.root / 'test' / 'media')
         hub.chat = Chat(self.cfg, self.store, self.budget, Mock(), output=[].append)
@@ -184,8 +184,8 @@ class TurnStopTests(unittest.TestCase):
         self.assertTrue(hub.chat.user_stop.is_set())
 
     def test_hub_stop_only_while_replying(self):
-        from veil_agent import ActivityState
-        from web_agent import Hub
+        from veil.core.veil_agent import ActivityState
+        from veil.server.web_agent import Hub
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'resident-state.json'),
                   media_root=self.store.root / 'test' / 'media')
         self.assertFalse(hub.stop_turn())

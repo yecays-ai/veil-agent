@@ -126,8 +126,8 @@ def main():
     parser.add_argument('--out', default='.local-tmp/354-compare')
     parser.add_argument('--fake', action='store_true')
     args = parser.parse_args()
-    import veil_agent
-    from veil_agent import Budget, Chat, Store, load_character, make_model
+    from veil.core import veil_agent
+    from veil.core.veil_agent import Budget, Chat, Store, load_character, make_model
     try:
         from veil.brain.experience_memory import ExperienceMemory, load_settings
     except ImportError:

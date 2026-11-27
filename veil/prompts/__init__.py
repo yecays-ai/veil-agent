@@ -11,7 +11,7 @@ from . import registry
 from .store import PromptStore
 from .tools import ToolText
 
-ROOT = Path(__file__).resolve().parents[1]
+from veil.paths import PROJECT_ROOT as ROOT
 DEFAULTS = Path(__file__).with_name('defaults')
 OVERRIDES = ROOT / 'persona' / 'instructions'
 

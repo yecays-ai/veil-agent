@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from veil.tools.tools_agent import ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, _rename_noreplace, permitted_tools
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 
 class LabTests(unittest.TestCase):

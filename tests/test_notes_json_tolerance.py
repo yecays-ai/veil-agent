@@ -1,6 +1,6 @@
 import unittest
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 from veil.brain.short_term_notes import ShortTermNotes, _parse_json_object
 
 

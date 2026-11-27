@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from veil.brain.memory_agent import Memory, vault_path  # noqa: E402
-from veil_agent import Budget, Character, Store  # noqa: E402
+from veil.core.veil_agent import Budget, Character, Store  # noqa: E402
 
 
 class ProbeBackend:

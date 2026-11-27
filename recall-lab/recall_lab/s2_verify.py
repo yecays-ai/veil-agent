@@ -109,7 +109,7 @@ class _FourZoneLearnedContext(LearnedContext):
         sizes = self._zone_bytes(data)
         for zone, cap in self.zone_caps.items():
             if sizes.get(zone, 0) > cap:
-                from agent_types import UserError
+                from veil.core.agent_types import UserError
                 raise UserError(f'{zone} 超出独立上限 {sizes[zone]} / {cap} 字节。')
 
     def invoke(self, name, args):

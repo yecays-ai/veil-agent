@@ -4,8 +4,8 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from agent_types import now
-from veil_agent import Store
+from veil.core.agent_types import now
+from veil.core.veil_agent import Store
 from veil.autonomy.work_checkpoint import WorkCheckpoint
 
 

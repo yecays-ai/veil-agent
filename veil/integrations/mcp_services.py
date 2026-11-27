@@ -928,7 +928,7 @@ class MCPServices:
                     self.errors.pop(service_id, None)
             return result
         if permission == 'ask':
-            from agent_types import NOT_ASKED
+            from veil.core.agent_types import NOT_ASKED
             answer = approval(f'Peter 想调用 MCP 服务 {service_id} 的 {tool_name}。同意吗？y/N ')
             if answer == NOT_ASKED or str(answer).strip().casefold() != 'y':
                 return 'Lan 没有批准这次 MCP 调用。', '被拒绝', name

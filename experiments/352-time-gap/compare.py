@@ -36,8 +36,8 @@ def main():
     parser.add_argument('--cap', type=Decimal, default=Decimal('0.9'))
     parser.add_argument('--out', default='.local-tmp/352-compare')
     args = parser.parse_args()
-    import veil_agent
-    from veil_agent import Budget, Chat, Store, load_character, make_model
+    from veil.core import veil_agent
+    from veil.core.veil_agent import Budget, Chat, Store, load_character, make_model
     root = Path(args.root)
     cfg = load_character(root, 'peter')
     _, call = make_model(root, cfg)

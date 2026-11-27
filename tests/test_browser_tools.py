@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from veil.integrations import browser_tools
 from veil.integrations.browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
                            MAX_BYTES, MAX_MCP_REQUEST_BYTES)
-from veil_agent import model_tool_result
+from veil.core.veil_agent import model_tool_result
 
 
 CFG = SimpleNamespace(web={'enabled': True, 'browser_interaction': True})
@@ -350,7 +350,7 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
         from dataclasses import replace
         from tests.test_tools import ToolLoopTests
         from veil.tools.tools_agent import FilesystemTools, permitted_tools
-        from veil_agent import Chat
+        from veil.core.veil_agent import Chat
         from veil.integrations.browser_tools import TOOL
         for autonomous in (False, True):
             with self.subTest(autonomous=autonomous):

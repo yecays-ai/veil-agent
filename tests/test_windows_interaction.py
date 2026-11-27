@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 from veil.windows.desktop_access import desktop_access
 from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 from veil.windows.windows_interaction import (
     HumanTookOver,
     InteractionPaused,

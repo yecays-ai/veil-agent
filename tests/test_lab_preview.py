@@ -22,7 +22,7 @@ from veil.life.lab_preview import (
     _safe_lab_file,
 )
 from veil.tools.tools_agent import LAB_ONLY, permitted_tools, tool_policy
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 from veil.windows.windows_observer import observation_image_message
 
 

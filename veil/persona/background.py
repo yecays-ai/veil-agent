@@ -11,7 +11,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-import prompts
+from veil import prompts
 
 LIMITS = {'items': 3, 'characters': 1500, 'chunk': 700, 'chunks_per_paragraph': 2,
           'keywords': 30, 'keyword_characters': 40}

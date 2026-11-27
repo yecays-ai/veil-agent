@@ -10,8 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil.autonomy.autonomy import MAX_RUNTIME_SECONDS, AutonomyController
-from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
-from web_agent import Hub
+from veil.core.veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
+from veil.server.web_agent import Hub
 
 
 class AutonomyTests(unittest.TestCase):
@@ -87,7 +87,7 @@ daily_budget_cny = "2"
         self.assertIn('on your own 1 time(s)', text)
 
     def test_wake_rules_come_from_the_instruction_registry(self):
-        import prompts
+        from veil import prompts
         text = self.controller._context()
         rules = prompts.text('autonomy.wake.rules')
         protocol = prompts.text('autonomy.wake.protocol')
@@ -563,7 +563,7 @@ daily_budget_cny = "2"
         self.assertEqual(state, '成功')
 
     def test_next_wake_cancellation_and_late_claim_are_at_most_once(self):
-        from agent_types import AUTONOMY_WAKE
+        from veil.core.agent_types import AUTONOMY_WAKE
         self.activity.set(True)
         self.controller.interval = timedelta(hours=3)
         alarm = {'alarm_id': 'fixture-alarm',
@@ -943,7 +943,7 @@ daily_budget_cny = "2"
 
     def test_large_receipt_cannot_erase_confirmed_write_when_recovering(self):
         from test_tools import ToolLoopTests
-        from veil_agent import RequestFailed
+        from veil.core.veil_agent import RequestFailed
         helper = ToolLoopTests()
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 4, 'max_output_tokens': 50})
         calls = [helper.tool_call('read_text_file', '{"path":"lab/source.md"}', 'read'),

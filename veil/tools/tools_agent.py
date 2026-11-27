@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
-from agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
-from capability_state import capability_transaction, save_capabilities
+from veil.core.agent_types import NOT_ASKED, NOT_ASKED_TEXT, UserError
+from veil.core.capability_state import capability_transaction, save_capabilities
 from veil.chat.attachment_utils import MAX_ATTACHMENT_BYTES, inspect_attachment
 from veil.integrations.web_tools import WEB_TOOL_NAMES
 from veil.integrations.github_readonly import GITHUB_TOOL_NAMES, GitHubReadTools
@@ -602,7 +602,7 @@ class FilesystemTools:
             updates = row.get('capability_updates', [])
             if not isinstance(updates, list):
                 return None
-            from capability_state import local_stamp
+            from veil.core.capability_state import local_stamp
             lines = [f'{local_stamp(item["at"])}: {item["text"]}' for item in updates
                      if isinstance(item, dict) and isinstance(item.get('at'), str)
                      and isinstance(item.get('text'), str)]

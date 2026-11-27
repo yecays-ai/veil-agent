@@ -127,7 +127,7 @@ class AuthorityTests(unittest.TestCase):
 
     def test_hold_works_without_a_configured_budget(self):
         from veil.brain.memory_agent import Memory
-        from veil_agent import Character, Store
+        from veil.core.veil_agent import Character, Store
         import tempfile
         from unittest.mock import Mock
         temp = tempfile.TemporaryDirectory()

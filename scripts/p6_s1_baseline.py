@@ -38,7 +38,7 @@ from veil.brain.storage import veil_brain  # noqa: E402
 from veil.brain.storage.brain_read import BrainRead  # noqa: E402
 from veil.brain.memory_agent import Memory  # noqa: E402
 from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS, card_text, split_card  # noqa: E402
-from veil_agent import Budget, Character, Store  # noqa: E402
+from veil.core.veil_agent import Budget, Character, Store  # noqa: E402
 
 CRLF = ('---\r\nid: {id}\r\ntitle: {title}\r\nimportance: {importance}\r\n---\r\n'
         '{opening} ' + ('middle of the fictional memory. ' * 8) + '{ending}\r\n'

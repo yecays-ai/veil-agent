@@ -19,7 +19,7 @@ existing store: no second memory engine, no new database.
 """
 import re
 
-import prompts
+from veil import prompts
 
 DEFAULTS = {'enabled': True, 'max_chars': 480, 'max_items': 8}
 # How many dropped items a diagnostic keeps naming; the rest are only counted.

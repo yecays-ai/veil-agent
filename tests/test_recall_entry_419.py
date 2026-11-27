@@ -140,8 +140,8 @@ from unittest.mock import Mock
 from veil.integrations.away_bridge import AwayBridge, Incoming
 from veil.brain.memory_native import NativeMemoryTools
 from test_recall_budget_419 import ChatAssemblyBudgetTests
-from veil_agent import ActivityState, Chat, Store, load_character, run_chat
-from web_agent import Hub
+from veil.core.veil_agent import ActivityState, Chat, Store, load_character, run_chat
+from veil.server.web_agent import Hub
 
 
 class ToolReadThroughChatTests(ChatAssemblyBudgetTests):
@@ -310,7 +310,7 @@ class RealChatRestartSequenceTests(ChatAssemblyBudgetTests):
         cfg.memory['recall'] = {'cooldown_turns': 3, 'association_enabled': False}
         cfg.memory.update({'model': 'fake-embedding', 'input_cny_per_million': '0',
                            'mode': 'native', 'base_url': 'https://example.invalid/v1'})
-        from veil_agent import Budget
+        from veil.core.veil_agent import Budget
         from veil.brain.memory_agent import Memory, vault_path
         from test_recall_rotation import FictionalOmbre
         store = Store(self.root / 'data')

@@ -2,7 +2,7 @@
 import json
 from datetime import datetime
 
-from agent_types import UserError
+from veil.core.agent_types import UserError
 
 
 MAX_ITEMS = 5  # Last glance and its at most four screen-message tool actions.

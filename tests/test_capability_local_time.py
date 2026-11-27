@@ -2,7 +2,7 @@ import os
 import time
 import unittest
 
-from capability_state import local_stamp
+from veil.core.capability_state import local_stamp
 
 
 class CapabilityLocalTimeTests(unittest.TestCase):

@@ -20,12 +20,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from agent_types import BudgetExceeded, UserError
+from veil.core.agent_types import BudgetExceeded, UserError
 from veil.brain.event_memory import EventMemory, entities
 from veil.brain.experience_memory import ExperienceMemory, load_settings
 from veil.brain.memory_agent import Memory
 from veil.brain.memory_native import NativeMemoryTools, ToolSet
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 from test_memory import Backend
 
 

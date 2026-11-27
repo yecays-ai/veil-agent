@@ -11,7 +11,7 @@ from unittest.mock import Mock
 from veil.brain.memory_agent import Memory, vault_path
 from veil.brain.recall.recall_relevance import context_text, cosine, decode_vector, load_vectors
 from test_memory import Backend
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class FakeEmbedder:

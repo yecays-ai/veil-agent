@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 
 from veil.tools import executor_opencode as ex
 from veil.integrations import browser_tools
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,
             'input_cny_per_million': '2', 'output_cny_per_million': '8'}
@@ -456,7 +456,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(protected['permission']['edit']['/data/journal.jsonl'], 'deny')
 
     def test_old_workbench_json_with_removed_host_keys_still_loads(self):
-        from veil_agent import workbench_local_settings
+        from veil.core.veil_agent import workbench_local_settings
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'data' / 'peter' / 'workbench.json'
             path.parent.mkdir(parents=True)
@@ -1048,7 +1048,7 @@ max_steps = 4
             self.assertFalse(kwargs['autonomy'])
             self.assertEqual(Path(kwargs['workdir']).resolve(), (self.root / 'data' / 'test' / 'workspace').resolve())  # ticket 247: one file root
             return outcome
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
         self.assertEqual(execution.state, '成功')
         self.assertIn('Made x.', execution.result)
@@ -1075,7 +1075,7 @@ max_steps = 4
             manager.store.load.return_value = {'stage': 'stopped'}
             self.assertTrue(kwargs['stopped']())
             return ex.ExecutorResult('stopped', '出错', Decimal(0), 1, 'user_stopped')
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             result = chat._run_workbench('do it', 'req', False, task_id='fixture')
         self.assertEqual(result.reason, 'user_stopped')
         self.assertEqual(manager.record_workbench.call_args.kwargs['reason'], 'user_stopped')
@@ -1089,7 +1089,7 @@ max_steps = 4
             seen.update(kwargs)
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             chat._execute_tool_call(call, 'req', 'step:0', True, chat.tool_schemas())
         self.assertTrue(seen['autonomy'])
         self.assertEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('0.05'))
@@ -1104,7 +1104,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
         chat.approval = lambda prompt: asked.append(prompt) or answer
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', autonomy, chat.tool_schemas())
         return execution, seen, asked
 
@@ -1173,7 +1173,7 @@ max_steps = 4
             seen.update(kwargs)
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('done', '成功')
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', autonomy, chat.tool_schemas())
         return execution, seen
 
@@ -1205,7 +1205,7 @@ max_steps = 4
         chat.approval = lambda _p: 'y'
         call = SimpleNamespace(id='c1', function=SimpleNamespace(
             name='workbench', arguments=json.dumps({'task': 'fix it', 'project': self.root.name})))
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
         run_mock.assert_not_called()
         self.assertEqual(execution.state, '被拒绝')
@@ -1236,7 +1236,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         self.assertTrue(Path(seen['workdir']).samefile(project))
@@ -1259,7 +1259,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         self.assertTrue(Path(seen['workdir']).samefile(project))
@@ -1275,7 +1275,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('[approval: operation="bash:pip", waiting=true, decision=user_denied]', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req-1', 'step:0', False, chat.tool_schemas())
 
         rows = chat.store.read('test/memory/_agent/workbench_permissions.jsonl')
@@ -1290,7 +1290,7 @@ max_steps = 4
         call = SimpleNamespace(id='c1', function=SimpleNamespace(
             name='workbench', arguments=json.dumps({'task': 'run tests', 'project': 'calculator-test'})))
 
-        with patch('veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         run_mock.assert_not_called()
@@ -1704,7 +1704,7 @@ class RealOpenCodeTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
         name = 'veil-workbench-' + secrets.token_hex(8)
-        script = ('import sys; from pathlib import Path; import executor_opencode as e; '
+        script = ('import sys; from pathlib import Path; from veil.tools import executor_opencode as e; '
                   'p={"model":"fake","base_url":sys.argv[3],"max_input_tokens":8000, '
                   '"input_cny_per_million":"2","output_cny_per_million":"8"}; '
                   'e.run("run",command="opencode",workdir=Path(sys.argv[1]),home=Path(sys.argv[2]),'
@@ -1789,7 +1789,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(len([p for p in (base / 'snaps').iterdir()]), 2)
 
     def test_project_roots_must_be_a_list(self):
-        from veil_agent import _executor_roots
+        from veil.core.veil_agent import _executor_roots
         self.assertEqual(_executor_roots(['/a', ' /b ']), ['/a', '/b'])
         for bad in ('/a/b', [1], [''], None):
             with self.assertRaises(ValueError):

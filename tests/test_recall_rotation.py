@@ -16,7 +16,7 @@ from veil.brain.memory_agent import SEARCH_SPARE_HITS, Memory, vault_path
 from veil.brain.memory_sidecar import Sidecar
 from veil.brain.recall.recall_rotation import (Cooldown, asks_about_past, directory_line, excerpt, experience_chain,
                              front_matter, rotate, settings)
-from veil_agent import Budget, Character, Store, memory_ref_fields
+from veil.core.veil_agent import Budget, Character, Store, memory_ref_fields
 
 
 class FictionalOmbre:

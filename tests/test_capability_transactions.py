@@ -11,8 +11,8 @@ from unittest.mock import patch
 from veil.autonomy.autonomy import AutonomyController
 from veil.brain.memory_native import NativeMemoryTools
 from veil.tools.tools_agent import FilesystemTools
-from veil_agent import ActivityState, Store, UserError
-from web_agent import Hub
+from veil.core.veil_agent import ActivityState, Store, UserError
+from veil.server.web_agent import Hub
 
 
 class CapabilityTransactionTests(unittest.TestCase):

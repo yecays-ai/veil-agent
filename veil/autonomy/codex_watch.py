@@ -9,8 +9,8 @@ from pathlib import Path
 import threading
 import time
 
-from agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, not_asked, now
-import prompts
+from veil.core.agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, not_asked, now
+from veil import prompts
 
 
 POLL_SECONDS = 10

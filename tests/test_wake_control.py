@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 
 from veil.autonomy.autonomy import AutonomyController
 from veil.tools.tools_agent import tool_policy
-from veil_agent import ActivityState, Budget, Chat, Store, load_character
-from web_agent import Hub
+from veil.core.veil_agent import ActivityState, Budget, Chat, Store, load_character
+from veil.server.web_agent import Hub
 
 
 CONFIG = '''name = "Test"

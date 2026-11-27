@@ -3,7 +3,7 @@ import json
 import time
 from typing import NamedTuple
 
-import prompts
+from veil import prompts
 from veil.tools.tool_access import tools_with
 
 
@@ -64,7 +64,7 @@ def run(task, model, cfg, budget, tools, invoke, request_id, stopped=lambda: Fal
                 max_tokens=min(step_cfg.max_output_tokens, MAX_OUTPUT_TOKENS),
                 request_timeout=min(45, remaining))
         except Exception as exc:
-            from veil_agent import RequestNotSent
+            from veil.core.veil_agent import RequestNotSent
             if isinstance(exc, RequestNotSent):
                 budget.release_not_sent(reservation)
             return DelegateResult(

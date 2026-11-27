@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import uuid
 
-from agent_types import UserError, now
+from veil.core.agent_types import UserError, now
 
 MAX_CONFIRMED = 6
 MAX_UNCONFIRMED = 4

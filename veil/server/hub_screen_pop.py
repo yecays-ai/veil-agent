@@ -6,7 +6,7 @@ import re
 import secrets
 import time
 
-from veil_agent import UserError, now
+from veil.core.veil_agent import UserError, now
 
 
 class ScreenPopMixin:

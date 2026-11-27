@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil.persona.profile_notes import ProfileNotes
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 
 CONFIG = '''name = "Test"

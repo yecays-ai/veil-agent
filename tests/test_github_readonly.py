@@ -14,10 +14,10 @@ from urllib.error import HTTPError
 
 from veil.integrations.github_readonly import GitHubReadTools, MCP_URL, TOKEN_ENV, official_code_search, public_get
 from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
-from veil_agent import ActivityState, Budget, Character, Chat, Store, load_character
+from veil.core.veil_agent import ActivityState, Budget, Character, Chat, Store, load_character
 from veil.autonomy.autonomy import AutonomyController
 from veil.tools.desktop_files import DesktopFileTools
-from web_agent import Hub
+from veil.server.web_agent import Hub
 
 SHA = 'a' * 40
 TREE = 'b' * 40

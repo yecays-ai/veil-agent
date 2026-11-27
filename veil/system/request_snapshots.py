@@ -71,7 +71,7 @@ def title_of(label):
     if label in TITLES:
         return TITLES[label]
     try:
-        import prompts
+        from veil import prompts
         return prompts.entry(label).title
     except Exception:
         return label or '未标注'

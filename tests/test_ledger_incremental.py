@@ -6,7 +6,7 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from veil_agent import Budget, Store, UserError
+from veil.core.veil_agent import Budget, Store, UserError
 
 STAMP = '2026-11-03T09:00:00+08:00'
 

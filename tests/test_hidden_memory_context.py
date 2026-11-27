@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from veil.brain.memory_agent import Memory
 from veil.brain.memory_native import NativeMemoryTools
 from test_memory import Backend
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 
 class LegacyHiddenContextTests(unittest.TestCase):

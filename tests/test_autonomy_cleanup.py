@@ -8,12 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from agent_types import NOT_ASKED_TEXT, not_asked
+from veil.core.agent_types import NOT_ASKED_TEXT, not_asked
 from veil.autonomy.autonomy import AutonomyController
 from veil.tools.desktop_files import DesktopFileTools
 from veil.tools.tools_agent import ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools
-from veil_agent import ActivityState, Budget, Chat, Store, load_character, parse_quiet_hours, self_facts
-from web_agent import Hub
+from veil.core.veil_agent import ActivityState, Budget, Chat, Store, load_character, parse_quiet_hours, self_facts
+from veil.server.web_agent import Hub
 
 
 CONFIG = '''name = "Test"
