@@ -1,55 +1,62 @@
 # HANDOFF
 
-> 更新：2026-11-27 +08:00 · 基线 `main = 504c0a7`（PR #460、PR #461 均已合并）· 当前 PR #462 / 分支 `ticket/461-p5-s6-gates`（已合流最新 `main` 并完成联合回归；待独立审核/CI/Lan 体验；未合并、未部署）
+> 更新：2026-11-28 +08:00 · 基线 `main = ead71b6`（S5 PR #461 与工单 461 / PR #462 均已合并）· 当前分支 `ticket/462-p6-s6-1-memory-reinforcement` / worktree `worktrees/462-p6-s6-1` / PR #463（待独立审核、CI 与 Lan 体验；未合并、未部署）
 
 ## 当前停点
 
-- **工单 461 / P5 遗留 + S6 开工门禁**：开发、隔离验证与与 S5 的联合回归完成；未合并、未部署，未触碰正式 `data/peter`。
-  - P5：`veil/brain/brain_health.py` 的 H-3（悬空引用 vs 无关联记忆/事件，带类别与判断依据）、H-7（删除 1024 维硬编码，按库内维度 + `meta.embedding_model` + 配置模型身份对账）、`period`（日期段增长/重复/碎片/断链/索引）、`historical_state`（只读快照，缺失即声明）；`veil/server/web_agent.py` 传入配置模型身份；`veil/brain/brain_p4_api.py` 成长报告期间摘要（与 S5 的同文件改动已自动合流）；`desktop/workspace-brain.js` 期间卡片、范围标签、证据依据（与 S5 的联想开关同文件改动已自动合流）。
-  - S6：`veil/brain/learned_context.py` 聊天证据增量索引/400 条 LRU/旧证据按需查询/失效重建；淘汰后的 ID 与更正回扫日志，扫不完则不可用而不是当空；`_EvidenceBudget` 统一墙钟预算；`event_ledger`/`quotes`/`sources` 分页与截断降级；反证去重，超过 120 条只分批核验触及该认知或证据的反证，无关积累不停止其他晋升；写入幂等按工具调用身份而不是参数哈希；`veil/brain/relationship_semantic.py` 接受单层 code fence 的严格 JSON。
-  - 文档与实验：`docs/tickets/461-p5-s6-gates.md`、`docs/reports/461-test-evidence-20261127.md`、`docs/reports/461-chat-index-benchmark-20261127.json`、`docs/reports/461-cross-language-live-20261127.md`、`veil-lab/runs/461-sem-synthetic-20261127T210905/reports/latest.md`。
-  - 测试：新增 4 个 Python 测试文件（7+11+7+4 项）与 1 个桌面测试；合流 S5 后 126 项联合定向回归、58/58 桌面测试通过；完整套件 2469 项失败集合与 `origin/main` 基线一致（18 失败 + 3 错误：Maintenance/OpenCode/APPDATA desktop-data），无本单新增回归；详见 `docs/reports/461-test-evidence-20261127.md`。
-  - 真实模型实验：DeepSeek `deepseek-flash` 2 次调用，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）；无共同锚点翻译候选 `contradicted` 不注入，无关正例 `supported` 并注入。这是手工实验记录；CI 与单元测试不调用 `api.deepseek.com`，由 `tests/test_p6_s6_cross_language_veto.py` 的假模型覆盖。
-  - 未测：主聊天模型自行提取候选的完整真实聊天链路；S6 功能本身（权重演化、衰减、巩固、自主联想）未开工。
-- **工单 460 / PR #461（P6-S5）**：已合并为 `504c0a7`。保留 `stopwords_enabled=False`、`candidate_k=8`、情境判官、`association_enabled=True`、`association_contextual_enabled=False` 默认；记忆监控页双开关持久化；VEIL Lab `gemini-4-hydrogen` 三路盲评（3 组 9 回复，¥1.10）记录在 `docs/reports/p6-s5-retrieval-judge-association-20261127.md`。**未部署、无 Lan 验收记录。**
-- **工单 459 / PR #460（P6-S3）**：已合并为 `f979ca2`；未部署、无 Lan 验收记录，按 `docs/ACCEPTANCE.md` B-7 体验。
+- **工单 462 / P6-S6-1 记忆动态评价、强化与保护性衰减**：开发、单元/回归与 VEIL Lab 真实链路验证完成；未合并、未部署，未触碰正式 `data/peter`。
+  - 送达记账：`veil/brain/memory_weights.py`（新）+ `veil/brain/storage/brain_writer.py` 三张派生表；`Memory.confirm_delivery(request_id, session_key, regenerated)` 只在 S5 确认送达后调用；`veil_agent.send()` 只多传会话键/重生成标记。
+  - 保护性衰减：`effective_score()` 仅对 `importance<=6` 且未置顶的活跃度投影按半衰期衰减；`importance>=7`/`pinned` 永不衰减；不改重要度、不删除、不隐藏。
+  - 长期重要度：`memory_importance_proposals` 带原因、证据、`policy_version`；自动只提升 +1 且上限 7；降权/8+/锁定/置顶进 `pending`；应用写 `versions`、可撤回；S6-3 统一入口 `MemoryWeights.propose()`。
+  - 检索：`brain_retrieval.py` 增加可选的活跃度排序项，默认关闭；无送达记录时严格无操作。判官/联想/召回预算逻辑未改。
+  - 界面：`desktop/workspace-brain.js` 记忆监控权重面板（5 开关 + 4 参数，持久化到 `data/<role>/memory-weights.json`）、记忆详情活跃度/待确认重评/重评历史/撤回、库过滤与排序；`brain_p4_api.py` / `web_agent.py` 新增对应 API。
+  - 测试：`tests/test_p6_s6_memory_weights.py`（26 项）通过；桌面 62/62；完整套件 2527 项、18 失败 + 3 错误，失败集合与 `ead71b6` 基线（2501 项、18+3）完全一致；新增测试全通过。
+  - VEIL Lab：run `s6-1-activation-20261128T004338`（快照 `peter-20261127T170245/r3`，mock，¥0，代码 sha `44ddcdff...`），`run verify` 通过；送达/幂等/回滚/重启/衰减/5→6 自动重评均已观察；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`。
+  - 文档：`docs/tickets/462-p6-s6-1-memory-reinforcement.md`、本文件、`STATUS.md`、`docs/ACCEPTANCE.md` B-11。
+- **工单 461 / PR #462（P5 健康巡检 + S6 开工门禁）**：已合并 `ead71b6`（2026-11-27 15:38 UTC）；**未部署、无 Lan 验收记录**，验收见 ACCEPTANCE B-9/B-10。
+- **工单 460 / PR #461（P6-S5）**：已合并 `504c0a7`；未部署、无 Lan 验收记录（B-8）。
+- **工单 459 / PR #460（P6-S3）**：已合并 `f979ca2`；未部署、无 Lan 验收记录（B-7）。
 
-## S6 门禁状态
+## S6 门禁与 S6-1 状态
 
-| 门禁 | 状态 | 证据 |
+| 事项 | 状态 | 证据 |
 | --- | --- | --- |
-| 聊天历史增量索引/有界缓存/旧证据按需查询 | 已关闭 | `tests/test_p6_s6_chat_evidence_budget.py`；5 万条基准 0.256s 首建 / 0.435ms 重复 / 0.824ms 追加 |
-| 实时证据统一墙钟预算、分页与安全降级 | 已关闭 | 同上（真实 SQLite 排他锁、旧 200 行窗口外证据、截断→unavailable） |
-| 追加重试持久化幂等 | 已关闭 | `tests/test_p6_s6_idempotent_writes.py`（丢响应/重启/4 线程并发/状态守卫） |
-| 反证长期积累有界、不丢相关否决 | 已关闭 | 超限只分批核验相关反证；无关积累不阻断其他晋升；任一否决批次即停止 |
-| 任意跨语言同义否决与无关正例 | 已关闭（能力边界内） | 单测 + DeepSeek 合成实验 `docs/reports/461-cross-language-live-20261127.md` |
-| 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期，不在 461 范围） | `docs/tickets/460-p6-s5-retrieval-judge-association.md`；`association_contextual_enabled=False` 默认关闭 |
+| S6 五项工程门禁（工单 461） | 已关闭 | `docs/tickets/461-p5-s6-gates.md`；对应测试与实验记录 |
+| S6-1 送达激活与保护性衰减（工单 462） | **开发侧完成，待审核/CI/体验** | 26 项单测；桌面 62/62；Lab run `s6-1-activation-20261128T004338` |
+| S6-1 版本化重要度重评（工单 462） | **开发侧完成，待审核/CI/体验** | 同上；`tests/test_p6_s6_memory_weights.py` 提案/锁定/撤回用例 |
+| S6-2 自主闲暇联想 | 未开工 | 等 C-2；本单已划清共享文件边界 |
+| S6-3 认知巩固 | 未开工 | 本单已交付 `MemoryWeights.propose()` 统一接口 |
+| S5 延期：隐式工作 `trap` 穿透 + 同轮判官联合门控 | **未关闭** | `docs/tickets/460-p6-s5-retrieval-judge-association.md`；S6-1 不依赖它，S6-2 开工前仍需处理 |
 
 ## 下一个窗口第一步
 
-1. 核对本单 PR #462 的 CI 与独立审核；重点看 `learned_context.py` 的证据预算/幂等回执、健康页期间卡片，以及合流 S5 后的健康页与记忆监控页是否互相覆盖。
-2. 合流结果已在 `504c0a7` 上重跑定向与完整套件；若后续 `main` 再变，重跑：
-   - `python -m unittest tests.test_p5_health_period_orphans tests.test_p6_s6_chat_evidence_budget tests.test_p6_s6_idempotent_writes tests.test_p6_s6_cross_language_veto`
-   - `python -m unittest tests.test_relationship_422 tests.test_p6_s3_relationship_governance tests.test_pr460_sovereignty tests.test_relationship_semantic_worker tests.test_p6_s5_retrieval_judge_association`
+1. 核对 PR #463 的 CI 与独立审核；重点看 `memory_weights.py` 的事务/幂等/锁定守卫、`confirm_delivery()` 接线、`library()` 投影和记忆监控页是否与 S6-2 改动冲突。
+2. `main` 若再变，重跑：
+   - `python -m unittest tests.test_p6_s6_memory_weights`
+   - `python -m unittest tests.test_p6_s5_retrieval_judge_association tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget tests.test_p6_s6_idempotent_writes tests.test_p3_1_brain_only`
    - `node --test desktop/tests/*.test.cjs`
-3. 按 Lan 体验结果更新 `docs/ACCEPTANCE.md` B-8/B-9/B-10；不要自行合并或部署。
-4. S6 功能另开单：先处理 S5 延期的隐式工作 `trap` 联合门控，再以工单 461 关闭的五项门禁为前置；不复用本单分支继续施工。
+   - 完整套件对比 `origin/main` 失败集合，不得新增失败。
+3. 按 Lan 体验结果更新 ACCEPTANCE B-11；**不要自行合并或部署**。
+4. S6-2 若并行：只改 `natural_association.py` / 自主唤醒 / 相关提示词；合流时保留本单的送达记账、权重面板与记忆详情区域；共享函数（`confirm_delivery()`、`library()`）改动先在本 PR 评论说明。S6-3 用 `MemoryWeights.propose()`，不要绕过锁定/版本策略。
 
 ## 本单已知边界
 
-- 聊天索引首次建立仍顺序读完现有 `chat.jsonl`（5 万条/6.68MB 约 0.256s，一次性）；不跨进程持久化。
-- 同长度原地改写若只落在 5 个 64B 采样窗口之外且 mtime/size 都不变，理论上仍可能命中旧缓存；正常追加、删除、截断、替换与两端改写均失效。与现有 `Store.incremental_state` 的检测边界一致。
-- 反证超过 120 条时，不触及该认知及其证据的反证不再停止全部晋升；相关反证按 120 条分批核验，中间批次通过不晋升，相关否决不丢。
-- 健康期间状态只依据库内时间字段与既有每日快照；无快照不还原历史。
-- 跨语言语义核验受模型行为影响，不承诺任意译写 100% 识别；失败保留 `uncertain`。
-- `evidence_budget_ms` 目前是 `profile` 可选配置（100–10000，默认 1200），未加入桌面设置页。
+- 活跃度排序默认关闭（#455 `AB-R5b` 证据不足）；无送达记录时开关严格无操作，但排序净收益尚未证明。
+- 重评只在送达后/手动/API 触发，没有夜间定时批处理；多日灰度与巩固由 S6-3 负责。
+- 自动调整只到 7；8+、降权、锁定/置顶都需 Lan 确认，不会自动降权重要共同经历。
+- 衰减是展示/可选排序的派生分，不写回 `importance`，不删除/隐藏/归档。
+- 投递事件默认保留 20000 条（可调），淘汰只删最旧事件，聚合计数不回退。
+- 实验关系条目 `s61-lab-rel` 与合成记忆 `s61laba/b/c` 只在 veil-lab run 内；未提交、未外发。
+- 未验证：真实主聊天模型下与判官的联合行为、S6-2 合流后的页面布局、多日真实日常的重评节奏、Windows 真机 UI 手工体验。
 
 ## 环境与工具注意
 
-- 正式目录 `.git` 为写保护，不在正式目录开分支、提交或改文件。
-- 本机 `git` 走 HTTPS 拉取时可能因 schannel 凭据不可用而失败；可用 `gh api` 推送分支，不改全局 git 配置。
-- 本机 Node 24 用于桌面测试；Python 使用 `veil-agent/.venv`（本 worktree 无独立 venv）。
-- 既有失败（Maintenance CRLF、OpenCode 未安装、APPDATA desktop-data）在 `origin/main` 基线同样复现，不是本单引入。
+- 正式目录 `.git` 写保护，不在正式目录开分支、提交或改文件。
+- 本机 `git` 走 HTTPS 拉取可能因 schannel 凭据失败；可用 `gh api` 推送分支，不改全局 git 配置。
+- 本机 Node 24 用于桌面测试；Python 使用 `veil-agent/.venv`。
+- VEIL Lab：run `s6-1-activation-20261128T004338` 的代码是从本 worktree 复制到 run 内 `code/` 并改 `run.json.code_root`（不是快照钉住代码）；`run verify` 因快照代码 `2a264a7` 早于 S3，额外加了一条合成 Lan 关系条目（`s61-lab-rel`）才通过；该 run 的所有写入都在 lab 内。
+- 临时基线 worktree `worktrees/462-baseline`（detached `ead71b6`）用于失败集合对比，可删除；删除前确认无未提交修改。
+- 既有失败（Maintenance CRLF、OpenCode 未安装、APPDATA desktop-data）在基线同样复现，不是本单引入。
 
 ## 红线（不变）
 

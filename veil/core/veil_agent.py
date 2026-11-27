@@ -4011,7 +4011,11 @@ class Chat:
                 if delivered:
                     confirm = getattr(self.memory, 'confirm_delivery', None)
                     if callable(confirm):
-                        confirm(req_id)
+                        # P6-S6-1: the confirmed turn carries the conversation key and whether this
+                        # reply replaced a previous one, so activation counts a regenerated reply as
+                        # a real exposure without a second reinforcement.
+                        confirm(req_id, session_key=self._conversation_key(),
+                                regenerated=bool(getattr(self, 'regeneration_parent_message_id', None)))
                 elif (getattr(self.memory, 'last_recall_marks', None)
                       or getattr(self.memory, 'last_association_marks', None)
                       or getattr(self.memory, '_has_association_rollback', False)):

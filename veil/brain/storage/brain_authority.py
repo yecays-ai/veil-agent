@@ -234,9 +234,26 @@ class BrainAuthority:
                                                        row['body']) for row in rows)
 
     def retrieval_settings(self):
-        """The operator's [memory.retrieval] weights, not a second hard-coded default (P6-S1 G-A09)."""
+        """The operator's [memory.retrieval] weights, not a second hard-coded default (P6-S1 G-A09).
+
+        P6-S6-1: merge the UI-persisted activation switches so Peter's own breath_search uses the
+        same optional ordering signal as automatic recall (still off by default).
+        """
         from veil.brain.recall import brain_retrieval
-        return brain_retrieval.load_settings((getattr(self.cfg, 'memory', {}) or {}).get('retrieval'))
+        settings = brain_retrieval.load_settings(
+            (getattr(self.cfg, 'memory', {}) or {}).get('retrieval'))
+        try:
+            from veil.brain.memory_weights import load_persisted, settings_from
+            persisted = settings_from(load_persisted(self.store, self.cfg.id))
+            settings.update({
+                'activation_ranking_enabled': bool(persisted['ranking_enabled']),
+                'activation_weight': float(persisted['ranking_weight']),
+                'activation_half_life_days': int(persisted['decay_half_life_days']),
+                'activation_decay_enabled': bool(persisted['decay_enabled']),
+            })
+        except Exception:
+            pass
+        return settings
 
     def embedding_model(self):
         return str(((getattr(self.cfg, 'memory', {}) or {}).get('model')) or '').strip()
