@@ -9,7 +9,7 @@
   - S6：`veil/brain/learned_context.py` 聊天证据增量索引/400 条 LRU/旧证据按需查询/失效重建；`_EvidenceBudget` 统一墙钟预算；`event_ledger`/`quotes`/`sources` 分页与截断降级；反证去重 + 120 条上限 + `counterevidence_overflow`；持久化写入幂等回执 + 状态守卫；`veil/brain/relationship_semantic.py` 接受单层 code fence 的严格 JSON。
   - 文档与实验：`docs/tickets/461-p5-s6-gates.md`、`docs/reports/461-test-evidence-20261127.md`、`docs/reports/461-chat-index-benchmark-20261127.json`、`docs/reports/461-cross-language-live-20261127.md`、`veil-lab/runs/461-sem-synthetic-20261127T210905/reports/latest.md`。
   - 测试：新增 4 个 Python 测试文件（7+11+7+4 项）与 1 个桌面测试；合流 S5 后 126 项联合定向回归、58/58 桌面测试通过；完整套件 2469 项失败集合与 `origin/main` 基线一致（18 失败 + 3 错误：Maintenance/OpenCode/APPDATA desktop-data），无本单新增回归；详见 `docs/reports/461-test-evidence-20261127.md`。
-  - 真实模型实验：DeepSeek `deepseek-flash` 2 次调用，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）；无共同锚点翻译候选 `contradicted` 不注入，无关正例 `supported` 并注入。
+  - 真实模型实验：DeepSeek `deepseek-flash` 2 次调用，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）；无共同锚点翻译候选 `contradicted` 不注入，无关正例 `supported` 并注入。这是手工实验记录；CI 与单元测试不调用 `api.deepseek.com`，由 `tests/test_p6_s6_cross_language_veto.py` 的假模型覆盖。
   - 未测：主聊天模型自行提取候选的完整真实聊天链路；S6 功能本身（权重演化、衰减、巩固、自主联想）未开工。
 - **工单 460 / PR #461（P6-S5）**：已合并为 `504c0a7`。保留 `stopwords_enabled=False`、`candidate_k=8`、情境判官、`association_enabled=True`、`association_contextual_enabled=False` 默认；记忆监控页双开关持久化；VEIL Lab `gemini-4-hydrogen` 三路盲评（3 组 9 回复，¥1.10）记录在 `docs/reports/p6-s5-retrieval-judge-association-20261127.md`。**未部署、无 Lan 验收记录。**
 - **工单 459 / PR #460（P6-S3）**：已合并为 `f979ca2`；未部署、无 Lan 验收记录，按 `docs/ACCEPTANCE.md` B-7 体验。

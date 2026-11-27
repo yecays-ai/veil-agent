@@ -68,7 +68,7 @@
 
 ### 实验与实测
 
-- `docs/reports/461-cross-language-live-20261127.md`：VEIL Lab 合成 run `461-sem-synthetic-20261127T210905`，DeepSeek 真实调用 2 次，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）。翻译候选 contradicted 不注入；无关正例 supported 并注入。
+- `docs/reports/461-cross-language-live-20261127.md`：VEIL Lab 合成 run `461-sem-synthetic-20261127T210905`，DeepSeek 真实调用 2 次，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）。翻译候选 contradicted 不注入；无关正例 supported 并注入。这是手工实验记录；CI 与单元测试不调用该付费接口，对应假模型测试是 `tests/test_p6_s6_cross_language_veto.py`。
 - `docs/reports/461-chat-index-benchmark-20261127.json`：5 万条 / 6.68MB 合成聊天，首建 0.256s、重复调用 0.435ms、追加一条 0.824ms；旧证据按需查询 1–11ms；LRU 上限 400。
 - 合流后：126 项联合定向回归通过，桌面 58/58 通过，完整 Python 套件 2469 项中 18 失败 + 3 错误，失败集合与 `origin/main` 基线完全相同；详见 `docs/reports/461-test-evidence-20261127.md`。
 

@@ -1716,6 +1716,45 @@
     return;
   }
 
+  function describeHealthPeriod(period) {
+    // An unfinished period has no counts. Zeros and "no snapshots" would look like a checked empty range.
+    const lines = [];
+    const samples = [];
+    if (!period || !period.requested) return { lines, samples };
+    if (period.status === 'incomplete' || period.status === 'unavailable') {
+      lines.push({ text: '指定期间检查未完成，计数未统计。' });
+      lines.push({ muted: true, text: '历史快照：本轮未完成，不判断有没有快照。' });
+      return { lines, samples };
+    }
+    const growth = period.growth || {};
+    lines.push({
+      text: `期间新增：记忆 ${growth.memories_created ?? 0} 条 · 事件 ${growth.events_created ?? 0} 个 · 阶段 ${growth.event_stages ?? 0} 个 · 版本 ${growth.versions ?? 0} 条 · 认知版本变更 ${growth.learned_context_changes ?? 0} 条`,
+    });
+    lines.push({
+      text: `期间重复：${period.duplicates?.count ?? 0} 组 · 碎片：${period.fragments?.count ?? 0} 条 · 悬空引用：${period.dangling?.count ?? 0} 处 · 索引异常：${period.index_anomalies?.count ?? 0} 条`,
+    });
+    const coverage = period.coverage || {};
+    if (coverage.note) lines.push({ muted: true, text: `证据边界：${coverage.note}` });
+    const hist = period.historical_state || {};
+    if (hist.available && hist.delta_known === false) {
+      lines.push({ text: `历史快照：${hist.observations || 0} 次完整记录，变化未知。` });
+      if (hist.limit) lines.push({ muted: true, text: hist.limit });
+    } else if (hist.available) {
+      const delta = hist.delta || {};
+      lines.push({
+        text: `历史快照：${hist.observations || 0} 次 · 活跃记忆变化 ${delta.active_memories ?? '—'} · 事件变化 ${delta.events_total ?? '—'}`,
+      });
+      lines.push({ muted: true, text: hist.limit || '快照只记录每日总量。' });
+      if (hist.coverage === 'partial') lines.push({ muted: true, text: `快照覆盖不完整：${hist.reason || ''}` });
+    } else {
+      lines.push({ muted: true, text: '该时间段没有巡检历史快照；只报告有库内时间字段支持的期间变化，不推断当时整体健康状态。' });
+    }
+    for (const [key, label] of [['duplicates', '重复'], ['fragments', '碎片'], ['dangling', '悬空引用'], ['index_anomalies', '索引异常']]) {
+      for (const ev of (period[key]?.evidences || []).slice(0, 4)) samples.push(`${label}｜${ev.label || ''}：${ev.note || ''}`);
+    }
+    return { lines, samples };
+  }
+
   // =========================================================================
   // 6. Strictly Read-Only P5 Health Center (brain-health)
   // =========================================================================
@@ -1788,30 +1827,12 @@
         const pHead = el('div', 'veil-card-head');
         pHead.append(el('h3', '', '指定期间变化与异常（与全库当前分开）'),
           pill(`${report.from_date || '最早'} 至 ${report.to_date || '最新'}`, 'warn'));
-        const growth = period.growth || {};
+        const described = describeHealthPeriod(period);
         const pBody = el('div', 'health-kv');
-        pBody.append(
-          el('div', '', `期间新增：记忆 ${growth.memories_created ?? 0} 条 · 事件 ${growth.events_created ?? 0} 个 · 阶段 ${growth.event_stages ?? 0} 个 · 版本 ${growth.versions ?? 0} 条 · 认知版本变更 ${growth.learned_context_changes ?? 0} 条`),
-          el('div', '', `期间重复：${period.duplicates?.count ?? 0} 组 · 碎片：${period.fragments?.count ?? 0} 条 · 悬空引用：${period.dangling?.count ?? 0} 处 · 索引异常：${period.index_anomalies?.count ?? 0} 条`),
-        );
-        const coverage = period.coverage || {};
-        if (coverage.note) pBody.append(el('div', 'muted', `证据边界：${coverage.note}`));
-        const hist = period.historical_state || {};
-        if (hist.available) {
-          const delta = hist.delta || {};
-          pBody.append(el('div', '', `历史快照：${hist.observations || 0} 次 · 活跃记忆变化 ${delta.active_memories ?? '—'} · 事件变化 ${delta.events_total ?? '—'}`));
-          pBody.append(el('div', 'muted', hist.limit || '快照只记录每日总量。'));
-          if (hist.coverage === 'partial') pBody.append(el('div', 'muted', `快照覆盖不完整：${hist.reason || ''}`));
-        } else {
-          pBody.append(el('div', 'muted', '该时间段没有巡检历史快照；只报告有库内时间字段支持的期间变化，不推断当时整体健康状态。'));
-        }
-        const samples = [];
-        for (const [key, label] of [['duplicates', '重复'], ['fragments', '碎片'], ['dangling', '悬空引用'], ['index_anomalies', '索引异常']]) {
-          for (const ev of (period[key]?.evidences || []).slice(0, 4)) samples.push(`${label}｜${ev.label || ''}：${ev.note || ''}`);
-        }
-        if (samples.length) {
+        for (const line of described.lines) pBody.append(el('div', line.muted ? 'muted' : '', line.text));
+        if (described.samples.length) {
           const ul = el('ul', 'model-list');
-          for (const line of samples) ul.append(el('li', '', line));
+          for (const line of described.samples) ul.append(el('li', '', line));
           pBody.append(ul);
         }
         periodCard.append(pHead, pBody);

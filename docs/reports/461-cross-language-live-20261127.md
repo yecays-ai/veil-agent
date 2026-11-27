@@ -3,7 +3,7 @@
 - 日期：2026-11-27 21:09 +08:00
 - 环境：VEIL Lab 独立合成 run `461-sem-synthetic-20261127T210905`（`veil-lab/runs/`），只使用虚构原话与临时 `data/peter`；正式 `veil-agent/data/peter` 只读。
 - 代码：worktree `worktrees/461-p5-s6-gates`（基线 `f979ca2` + 本单改动）
-- 模型：DeepSeek 内置 `deepseek-flash`（`api.deepseek.com`），语义核验日额度 ¥0.5、超时 30 秒；本次真实调用 2 次。
+- 模型：DeepSeek 内置 `deepseek-flash`（`api.deepseek.com`），语义核验日额度 ¥0.5、超时 30 秒；本次真实调用 2 次。这是一次手工实验记录，不是 CI：单元测试与 GitHub Actions 不调用 `api.deepseek.com`，跨语言否决由 `tests/test_p6_s6_cross_language_veto.py` 的假模型覆盖。
 - 成本：本 run 本地账本 **¥0.00236848**；本单全部语义探针（含两轮非目标路由的失败探针）累计 **¥0.0509**，低于工单 ¥2 上限，未作供应商账单承诺。
 
 ## 合成材料

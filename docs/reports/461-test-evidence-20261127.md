@@ -61,7 +61,7 @@ python -m unittest discover -s tests
 
 见 `docs/reports/461-cross-language-live-20261127.md` 与 `veil-lab/runs/461-sem-synthetic-20261127T210905/reports/latest.md`：
 
-- DeepSeek `deepseek-flash`，2 次真实调用，本 run ¥0.00236848；本单累计语义探针 ¥0.0509（上限 ¥2）。
+- DeepSeek `deepseek-flash`，2 次真实调用，本 run ¥0.00236848；本单累计语义探针 ¥0.0509（上限 ¥2）。该记录只属于这次手工实验；CI 与 `tests/test_p6_s6_cross_language_veto.py` 使用假模型，不调用 `api.deepseek.com`。
 - 无共同文字锚点的翻译式否决：`contradicted`，不注入。
 - 同一否决在场的无关主题正例：`supported`，晋升并注入。
 - Lan 显式恢复旧认知：确定性单测覆盖，不依赖模型。

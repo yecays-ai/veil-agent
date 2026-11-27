@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from veil.brain import learned_context as lc_mod
+from veil.brain import relationship_base
 from veil.brain.learned_context import LearnedContext, _EvidenceBudget
 
 
@@ -70,6 +71,43 @@ class ChatEvidenceIndexTests(unittest.TestCase):
         self.assertEqual({}, self.lc._chat_user_index())
         self.assertEqual('missing', self.lc._chat_lookup('u1')[1])
 
+    def test_duplicate_correction_is_not_counterevidence(self):
+        self.write_rows([
+            self.user_row('c1', '不对，周末可以发消息'),
+            self.user_row('c1', '不对，周末可以发消息'),
+        ])
+        corrections = self.lc._chat_corrections()
+        self.assertEqual([], corrections)
+
+    def test_evicted_yes_keeps_the_preceding_question(self):
+        rows = [
+            {'id': 'q1', 'role': 'assistant', 'content': '你喜欢喝茶吗？', 'time': '2026-11-20T09:00:00+08:00'},
+            self.user_row('yes', '是的'),
+        ]
+        rows.extend(self.user_row('u%d' % i, '填充消息 %d' % i) for i in range(8))
+        self.write_rows(rows)
+        with patch.object(lc_mod, 'CHAT_CACHE_LIMIT', 2):
+            index = self.lc._chat_user_index()
+            self.assertNotIn('yes', index)
+            info, status = self.lc._chat_lookup('yes')
+        self.assertEqual('ok', status)
+        self.assertEqual('你喜欢喝茶', info['confirmation_target'])
+        self.assertEqual({'id': 'chat:q1', 'text': '你喜欢喝茶吗？'}, info['question'])
+
+    def test_repeated_question_id_is_not_a_confirmation(self):
+        self.write_rows([
+            {'id': 'q1', 'role': 'assistant', 'content': '你喜欢喝茶吗？'},
+            self.user_row('yes', '是的'),
+            {'id': 'q1', 'role': 'assistant', 'content': '你喜欢喝茶吗？'},
+            self.user_row('tail', '后面还有一条'),
+        ])
+        with patch.object(lc_mod, 'CHAT_CACHE_LIMIT', 1):
+            self.lc._chat_user_index()
+            info, status = self.lc._chat_lookup('yes')
+        self.assertEqual('ok', status)
+        self.assertNotIn('confirmation_target', info)
+        self.assertNotIn('question', info)
+
     def test_duplicate_and_recalled_rows_are_never_evidence(self):
         self.write_rows([
             self.user_row('u1', '重复消息'),
@@ -80,6 +118,9 @@ class ChatEvidenceIndexTests(unittest.TestCase):
         self.assertNotIn('u1', index)
         self.assertNotIn('u2', index)
         self.assertEqual('missing', self.lc._chat_lookup('u1')[1])
+        info, status = self.lc._chat_lookup('u2')
+        self.assertEqual('missing', status)
+        self.assertIsNone(info)
 
 
 class EvidencePageAndBudgetTests(unittest.TestCase):
@@ -133,6 +174,83 @@ class EvidencePageAndBudgetTests(unittest.TestCase):
         self.assertTrue(ev['source_unavailable'])
         self.assertNotIn('event:e1', ev['missing_refs'])
 
+    def test_same_ledger_seq_does_not_skip_the_lower_rowid(self):
+        # The matching row is inserted first, so it has the lower rowid. A page of one row
+        # returns the higher rowid first; the next page must still see the tie.
+        self.add_ledger(5, 'u-old', self.claim)
+        self.add_ledger(5, 'noise', '无关内容')
+        self.db.commit()
+        with patch.object(lc_mod, 'EVIDENCE_PAGE_ROWS', 1):
+            ev = self.lc._evaluate_sources(['event:e1'], self.claim)
+        self.assertEqual(1, ev['valid_origin_count'])
+        self.assertEqual(['chat:u-old'], [row['id'] for row in ev['raw_origins']])
+
+    def test_one_budget_covers_the_whole_pass_and_degrades_safely(self):
+        conn = sqlite3.connect(str(self.lc.root / 'brain.db'))
+        conn.execute("INSERT INTO event_ledger(ledger_seq, kind, event_id, payload_json) "
+                     "VALUES(1, 'stage-evidence', 'e1', ?)",
+                     (json.dumps({'kind': 'chat', 'role': 'user', 'message_id': 'u-old',
+                                  'text': self.claim}),))
+        conn.commit()
+        conn.close()
+        for i in range(3):
+            self.lc.submit_candidate('relationship', '周末不发长消息 %d' % i, status='confirmed',
+                                     sources=('event:e1',))
+        opens = []
+        real_open = self.lc._open_brain_ro
+
+        def exhaust_shared(budget=None):
+            opens.append(1)
+            result = real_open(budget)
+            if budget is not None:
+                budget.deadline = time.monotonic()
+            return result
+
+        data = self.lc._load()
+        with patch.object(self.lc, '_open_brain_ro', side_effect=exhaust_shared):
+            items = self.lc._apply_live_evidence_check(data)
+        self.assertEqual(1, len(opens))
+        self.assertEqual('unavailable', items[1]['semantic_state'])
+        self.assertEqual('unavailable', items[2]['semantic_state'])
+        self.assertTrue(items[1].get('budget_exhausted'))
+        self.assertTrue(items[2].get('budget_exhausted'))
+
+    def test_promoted_note_leaves_the_relationship_prompt_when_the_budget_runs_out(self):
+        conn = sqlite3.connect(str(self.lc.root / 'brain.db'))
+        conn.execute("INSERT INTO event_ledger(ledger_seq, kind, event_id, payload_json) "
+                     "VALUES(1, 'stage-evidence', 'e1', ?)",
+                     (json.dumps({'kind': 'chat', 'role': 'user', 'message_id': 'u-old',
+                                  'text': self.claim}),))
+        conn.commit()
+        conn.close()
+        self.lc.submit_candidate('relationship', self.claim, status='confirmed', sources=('event:e1',))
+        self.assertIn(self.claim, relationship_base.build(self.lc)['text'])
+        real_open = self.lc._open_brain_ro
+
+        def exhaust_shared(budget=None):
+            result = real_open(budget)
+            if budget is not None:
+                budget.deadline = time.monotonic()
+            return result
+
+        with patch.object(self.lc, '_open_brain_ro', side_effect=exhaust_shared):
+            rendered = relationship_base.build(self.lc)['text']
+        self.assertNotIn(self.claim, rendered)
+
+    def test_budget_skip_keeps_a_saved_semantic_veto(self):
+        data = self.lc._load()
+        data['relationship']['items'] = [
+            {'id': 'r1', 'text': '英文译文', 'status': 'uncertain', 'source': 'peter',
+             'sources': ['chat:u-old'], 'verification': {'was_contradicted': True}},
+            {'id': 'r2', 'text': '锁定译文', 'status': 'uncertain', 'source': 'peter', 'locked': True,
+             'sources': ['chat:u-old'], 'verification': {'was_contradicted': True}},
+        ]
+        budget = _EvidenceBudget(50)
+        budget.deadline = time.monotonic() - 1
+        items = self.lc._apply_live_evidence_check(data, budget)
+        self.assertTrue(items[0]['prompt_vetoed'])
+        self.assertNotIn('prompt_vetoed', items[1])
+
     @unittest.skipUnless(os.name == 'nt', 'real SQLite exclusive-lock behaviour is verified on Windows')
     def test_real_sqlite_exclusive_lock_is_bounded_and_never_promotes(self):
         conn = sqlite3.connect(str(self.lc.root / 'brain.db'), isolation_level=None)
@@ -156,36 +274,6 @@ class EvidencePageAndBudgetTests(unittest.TestCase):
         self.assertTrue(all(item.get('effective_status') != 'confirmed' for item in items))
         self.assertTrue(any(item.get('budget_exhausted') or item.get('semantic_state') in
                             ('unavailable', 'stale') for item in items))
-
-    def test_one_budget_covers_the_whole_pass_and_degrades_safely(self):
-        # Three model-promoted items would each wait on SQLite; one shared budget must cap the pass.
-        conn = sqlite3.connect(str(self.lc.root / 'brain.db'))
-        conn.execute("INSERT INTO event_ledger(ledger_seq, kind, event_id, payload_json) "
-                     "VALUES(1, 'stage-evidence', 'e1', ?)",
-                     (json.dumps({'kind': 'chat', 'role': 'user', 'message_id': 'u-old',
-                                  'text': self.claim}),))
-        conn.commit()
-        conn.close()
-        for i in range(3):
-            self.lc.submit_candidate('relationship', '周末不发长消息 %d' % i, status='confirmed',
-                                     sources=('event:e1',))
-        self.lc.evidence_budget_ms = 80
-        real_open = self.lc._open_brain_ro
-
-        def slow_open(budget=None):
-            time.sleep(0.12)
-            return real_open(budget)
-
-        with patch.object(self.lc, '_open_brain_ro', side_effect=slow_open):
-            started = time.monotonic()
-            prompt = self.lc.build_prompt()
-            elapsed = time.monotonic() - started
-            items = self.lc.relationship_items()
-        self.assertLess(elapsed, 1.0)
-        states = [item.get('semantic_state') for item in items]
-        self.assertTrue(any(state in ('unavailable', 'stale') or item.get('budget_exhausted')
-                            for state, item in zip(states, items)))
-        self.assertNotIn('周末不发长消息', prompt.get('stable') or '')
 
 
 class CounterEvidenceBoundsTests(unittest.TestCase):

@@ -125,10 +125,22 @@ def _safe_title(title, memory_id):
 
 
 def _read_jsonl(path, limit=2000):
+    rows, _truncated = _read_jsonl_scan(path, limit=limit)
+    return rows
+
+
+def _read_jsonl_scan(path, limit=None, predicate=None):
+    """Read a jsonl file in order.
+
+    ``limit`` keeps only the newest rows and reports truncation. ``predicate`` scans the whole
+    file and keeps every match, so an old date range is not dropped just because newer rows
+    filled a tail window.
+    """
     p = Path(path)
     if not p.is_file():
-        return []
+        return [], False
     rows = []
+    truncated = False
     try:
         with p.open(encoding='utf-8', errors='replace') as fh:
             for line in fh:
@@ -137,13 +149,17 @@ def _read_jsonl(path, limit=2000):
                     continue
                 try:
                     obj = json.loads(line)
-                    if isinstance(obj, dict):
-                        rows.append(obj)
                 except ValueError:
                     continue
+                if isinstance(obj, dict):
+                    rows.append(obj)
     except OSError:
-        return []
-    return rows[-limit:] if limit and len(rows) > limit else rows
+        return [], True
+    if predicate is not None:
+        return [row for row in rows if predicate(row)], False
+    if limit and len(rows) > limit:
+        return rows[-limit:], True
+    return rows, truncated
 
 
 def _role_dir(data_root, role_id):
@@ -253,6 +269,8 @@ def _save_report(root, role_id, report):
 
 
 def _cosine(a, b):
+    if len(a) != len(b):
+        return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
@@ -354,7 +372,19 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             ).fetchall() if 'memories' in tables else []
 
             _guard(deadline)
-            sidecar_rows = conn.execute('SELECT memory_id, locked, links_json, merged_into FROM sidecar_state').fetchall() if 'sidecar_state' in tables else []
+            sidecar_columns = set()
+            if 'sidecar_state' in tables:
+                sidecar_columns = {row[1] for row in conn.execute('PRAGMA table_info(sidecar_state)')}
+            if 'sidecar_state' not in tables:
+                sidecar_rows = []
+            elif 'sources_json' in sidecar_columns:
+                sidecar_rows = conn.execute(
+                    'SELECT memory_id, locked, links_json, sources_json, merged_into FROM sidecar_state'
+                ).fetchall()
+            else:
+                sidecar_rows = conn.execute(
+                    'SELECT memory_id, locked, links_json, merged_into FROM sidecar_state'
+                ).fetchall()
             sidecar_map = {r['memory_id']: r for r in sidecar_rows}
 
             # Counts are exact; only bounded detail rows are loaded for the per-check samples.
@@ -455,8 +485,13 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             sha_groups = {}
             norm_groups = {}
             frag_evidences = []
-            evt_mem_ids = {row[0] for row in conn.execute(
-                'SELECT memory_id FROM events WHERE memory_id IS NOT NULL')} if 'events' in tables else set()
+            evt_mem_ids = set()
+            if 'events' in tables:
+                evt_mem_ids.update(row[0] for row in conn.execute(
+                    "SELECT memory_id FROM events WHERE memory_id IS NOT NULL AND memory_id != ''"))
+            if 'event_sources' in tables:
+                evt_mem_ids.update(row[0] for row in conn.execute(
+                    "SELECT memory_id FROM event_sources WHERE memory_id IS NOT NULL AND memory_id != ''"))
             for r in active_mems:
                 body = r['body'] or ''
                 sha = r['body_sha256'] or hashlib.sha256(body.encode('utf-8')).hexdigest()
@@ -529,6 +564,8 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                     id_a, va = sample_vecs[i]
                     for j in range(i + 1, len(sample_vecs)):
                         id_b, vb = sample_vecs[j]
+                        if len(va) != len(vb):
+                            continue
                         sim = _cosine(va, vb)
                         if sim >= 0.90:
                             pair = tuple(sorted((id_a, id_b)))
@@ -582,6 +619,11 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                                 'note': 'sidecar 关联目标不存在或已删除（悬空引用，仅报告）',
                                 'basis': 'sidecar_state.links_json vs memories.id',
                             })
+                sources = _json_load(r['sources_json'], []) if 'sources_json' in r.keys() else []
+                if isinstance(sources, list) and any(isinstance(item, str) and item.strip() for item in sources):
+                    sidecar_linked_ids.add(mid)
+                elif isinstance(sources, dict) and sources:
+                    sidecar_linked_ids.add(mid)
                 merged_into = r['merged_into']
                 if merged_into:
                     sidecar_linked_ids.add(mid)
@@ -595,79 +637,100 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                             'basis': 'sidecar_state.merged_into vs memories.id',
                         })
             relation_linked_ids = set()
+            relations_complete = True
             if 'relations' in tables:
-                relation_rows = conn.execute(
-                    'SELECT memory_id, target_id FROM relations LIMIT 5000').fetchall()
-                for rel in relation_rows:
-                    src, target = rel['memory_id'], rel['target_id']
-                    if isinstance(src, str) and src in live_ids:
-                        relation_linked_ids.add(src)
-                    if isinstance(target, str):
-                        if target in live_ids:
-                            relation_linked_ids.add(target)
-                        elif src in live_ids:
-                            dangling_evidences.append({
-                                'category': 'dangling', 'memId': src,
-                                'label': f"{src} → {target}",
-                                'note': 'relations 目标不存在或已删除（悬空引用，仅报告）',
-                                'basis': 'relations.target_id vs memories.id',
-                            })
+                cursor = None
+                while True:
+                    if _deadline_reached(deadline):
+                        relations_complete = False
+                        break
+                    if cursor is None:
+                        relation_rows = conn.execute(
+                            'SELECT memory_id, ord, target_id FROM relations '
+                            'ORDER BY memory_id, ord LIMIT 1000').fetchall()
+                    else:
+                        relation_rows = conn.execute(
+                            'SELECT memory_id, ord, target_id FROM relations '
+                            'WHERE memory_id > ? OR (memory_id = ? AND ord > ?) '
+                            'ORDER BY memory_id, ord LIMIT 1000',
+                            (cursor[0], cursor[0], cursor[1])).fetchall()
+                    if not relation_rows:
+                        break
+                    for rel in relation_rows:
+                        src, target = rel['memory_id'], rel['target_id']
+                        if isinstance(src, str) and src in live_ids:
+                            relation_linked_ids.add(src)
+                        if isinstance(target, str):
+                            if target in live_ids:
+                                relation_linked_ids.add(target)
+                            elif src in live_ids:
+                                dangling_evidences.append({
+                                    'category': 'dangling', 'memId': src,
+                                    'label': f"{src} → {target}",
+                                    'note': 'relations 目标不存在或已删除（悬空引用，仅报告）',
+                                    'basis': 'relations.target_id vs memories.id',
+                                })
+                    if len(relation_rows) < 1000:
+                        break
+                    last = relation_rows[-1]
+                    cursor = (last['memory_id'], last['ord'])
             _guard(deadline)
-            # Exact-side queries with NOT EXISTS keep the count independent of the event sample.
+            linked_memory_ids = set(sidecar_linked_ids) | set(relation_linked_ids)
+            if 'events' in tables:
+                linked_memory_ids.update(
+                    row[0] for row in conn.execute(
+                        "SELECT memory_id FROM events WHERE memory_id IS NOT NULL AND memory_id != ''"))
+            if 'event_sources' in tables:
+                linked_memory_ids.update(
+                    row[0] for row in conn.execute(
+                        "SELECT memory_id FROM event_sources WHERE memory_id IS NOT NULL AND memory_id != ''"))
+            if 'sources' in tables:
+                linked_memory_ids.update(
+                    row[0] for row in conn.execute(
+                        "SELECT memory_id FROM sources WHERE memory_id IS NOT NULL AND memory_id != ''"))
+            if 'quotes' in tables:
+                linked_memory_ids.update(
+                    row[0] for row in conn.execute(
+                        "SELECT memory_id FROM quotes WHERE memory_id IS NOT NULL AND memory_id != ''"))
             unlinked_memes = []
             unlinked_mem_total = 0
             unlinked_mem_truncated = False
-            if 'events' in tables or 'sources' in tables or 'quotes' in tables:
-                clauses = []
-                if 'events' in tables:
-                    clauses.append('NOT EXISTS (SELECT 1 FROM events e WHERE e.memory_id=m.id)')
-                else:
-                    clauses.append('1=1')
-                if 'sources' in tables:
-                    clauses.append('NOT EXISTS (SELECT 1 FROM sources s WHERE s.memory_id=m.id)')
-                else:
-                    clauses.append('1=1')
-                if 'quotes' in tables:
-                    clauses.append('NOT EXISTS (SELECT 1 FROM quotes q WHERE q.memory_id=m.id)')
-                else:
-                    clauses.append('1=1')
-                sql = ('SELECT m.id, m.title, m.name, m.created, m.pinned FROM memories m '
-                       'WHERE m.is_tombstone=0 AND m.is_deleted=0 AND m.bucket!=\'archive\' AND '
-                       + ' AND '.join(clauses) + ' ORDER BY m.created DESC LIMIT 501')
-                candidates = conn.execute(sql).fetchall()
-                for row in candidates:
+            if relations_complete and ('events' in tables or 'sources' in tables or 'quotes' in tables
+                                       or 'event_sources' in tables):
+                candidates = [row for row in active_mems if row['id'] not in linked_memory_ids]
+                candidates.sort(key=lambda row: row['created'] or '', reverse=True)
+                unlinked_mem_total = len(candidates)
+                unlinked_mem_truncated = unlinked_mem_total > 500
+                for row in candidates[:ORPHAN_SAMPLE_LIMIT]:
                     mid = row['id']
-                    if mid in sidecar_linked_ids or mid in relation_linked_ids:
-                        continue
-                    if len(unlinked_memes) < ORPHAN_SAMPLE_LIMIT:
-                        unlinked_memes.append({
-                            'category': 'unlinked', 'memId': mid,
-                            'label': _safe_title(row['title'] or row['name'], mid),
-                            'note': (f"创建于 {row['created'] or '未知时间'}；无事件、无来源、无引述、"
-                                     f"无 sidecar 关联或关系链接（仅提示，不代表无价值）"),
-                            'basis': 'memories × events/sources/quotes/sidecar_state/relations 反连接',
-                        })
-                    unlinked_mem_total += 1
-                unlinked_mem_truncated = len(candidates) > 500
+                    unlinked_memes.append({
+                        'category': 'unlinked', 'memId': mid,
+                        'label': _safe_title(row['title'] or row['name'], mid),
+                        'note': (f"创建于 {row['created'] or '未知时间'}；无事件、无来源、无引述、"
+                                 f"无 sidecar 关联或关系链接（仅提示，不代表无价值）"),
+                        'basis': 'memories × events/event_sources/sources/quotes/sidecar_state/relations 反连接',
+                    })
+            elif not relations_complete:
+                unlinked_mem_truncated = True
 
             unlinked_events = []
             unlinked_event_total = 0
             unlinked_event_truncated = False
             if 'events' in tables:
-                event_clauses = ["(e.memory_id IS NULL OR e.memory_id='')"]
+                event_candidates = conn.execute(
+                    "SELECT event_id, title, first_at, memory_id FROM events "
+                    "WHERE memory_id IS NULL OR memory_id=''"
+                ).fetchall()
+                sourced = set()
                 if 'event_sources' in tables:
-                    event_clauses.append(
-                        'NOT EXISTS (SELECT 1 FROM event_sources es WHERE es.event_id=e.event_id)')
+                    sourced.update(row[0] for row in conn.execute('SELECT event_id FROM event_sources'))
                 if 'event_stages' in tables:
-                    event_clauses.append(
-                        'NOT EXISTS (SELECT 1 FROM event_stages st WHERE st.event_id=e.event_id)')
+                    sourced.update(row[0] for row in conn.execute('SELECT event_id FROM event_stages'))
                 if 'event_ledger' in tables:
-                    event_clauses.append(
-                        "NOT EXISTS (SELECT 1 FROM event_ledger el WHERE el.event_id=e.event_id "
-                        "AND el.kind='stage-evidence')")
-                event_sql = ('SELECT e.event_id, e.title, e.first_at FROM events e WHERE '
-                             + ' AND '.join(event_clauses) + ' ORDER BY e.first_at DESC LIMIT 501')
-                event_candidates = conn.execute(event_sql).fetchall()
+                    sourced.update(row[0] for row in conn.execute(
+                        "SELECT event_id FROM event_ledger WHERE kind='stage-evidence'"))
+                event_candidates = [row for row in event_candidates if row['event_id'] not in sourced]
+                event_candidates.sort(key=lambda row: row['first_at'] or '', reverse=True)
                 unlinked_event_total = len(event_candidates)
                 unlinked_event_truncated = unlinked_event_total > 500
                 for row in event_candidates[:ORPHAN_SAMPLE_LIMIT]:
@@ -687,8 +750,10 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 link_notes.append(f"{unlinked_mem_total} 条活跃记忆无任何关联")
             if unlinked_event_total:
                 link_notes.append(f"{unlinked_event_total} 个事件无任何关联")
-            if unlinked_mem_truncated or unlinked_event_truncated:
-                link_notes.append('计数达到单次取样上限 500，报告值可能低于实际')
+            if not relations_complete:
+                link_notes.append('关系表未在时限内读完；无关联记忆本次不判定，避免把未扫描的关联报成孤立')
+            elif unlinked_mem_truncated or unlinked_event_truncated:
+                link_notes.append('无关联明细只列出前 15 条；计数是全量')
             checks.append({
                 'id': 'H-3',
                 'title': '孤立记录、悬空引用与无关联检查',
@@ -918,9 +983,9 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             # inside [from_date, to_date] without pretending to reconstruct an unrecorded past state.
             if range_requested:
                 _guard(deadline)
-                period_mems = [r for r in mem_rows
-                               if not r['is_tombstone'] and not r['is_deleted']
-                               and _in_range(r['created'], dt_from, dt_to)]
+                created_in_range = [r for r in mem_rows if _in_range(r['created'], dt_from, dt_to)]
+                period_mems = [r for r in created_in_range
+                               if not r['is_tombstone'] and not r['is_deleted']]
                 period_ids = {r['id'] for r in period_mems}
                 period_events = [ev for ev in event_rows
                                  if _in_range((ev['created_at'] or ev['first_at']) if 'created_at' in ev.keys()
@@ -987,7 +1052,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 period.update({
                     'status': 'available',
                     'growth': {
-                        'memories_created': len(period_mems),
+                        'memories_created': len(created_in_range),
                         'events_created': len(period_events),
                         'event_stages': len(period_stages),
                         'versions': len(period_versions),
@@ -1021,7 +1086,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 check_period = {c['id']: c for c in checks}
                 if 'H-1' in check_period:
                     check_period['H-1']['period'] = {
-                        'memories_created': len(period_mems),
+                        'memories_created': len(created_in_range),
                         'events_created': len(period_events),
                         'event_stages': len(period_stages),
                         'versions': len(period_versions),
@@ -1114,15 +1179,20 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         if range_requested:
             # Historical evidence is read from the existing daily snapshots. When it is absent the
             # report says so explicitly instead of presenting today's numbers as that period's state.
-            snapshot_rows = [row for row in _read_jsonl(
-                health_reports_dir(root, role_id) / 'health-snapshots.jsonl', 400)
-                             if _in_range(row.get('scanned_at') or row.get('day'), dt_from, dt_to)]
-            learned_versions_path = rdir / 'learned-context.versions.jsonl'
-            learned_rows = [row for row in _read_jsonl(learned_versions_path, 5000)
-                            if _in_range(row.get('time'), dt_from, dt_to)]
+            snapshot_rows, snap_failed = _read_jsonl_scan(
+                health_reports_dir(root, role_id) / 'health-snapshots.jsonl',
+                predicate=lambda row: _in_range(row.get('scanned_at') or row.get('day'), dt_from, dt_to))
+            learned_rows, learned_failed = _read_jsonl_scan(
+                rdir / 'learned-context.versions.jsonl',
+                predicate=lambda row: _in_range(row.get('time'), dt_from, dt_to))
             period['growth']['learned_context_changes'] = len(learned_rows)
-            if snapshot_rows:
-                first_snap, last_snap = snapshot_rows[0], snapshot_rows[-1]
+            if snap_failed or learned_failed:
+                period.setdefault('coverage', {})['history_read_failed'] = True
+                period['coverage']['note'] = '历史快照或认知版本文件读不完整，期间覆盖不能当成完整。'
+            complete_snaps = [row for row in snapshot_rows if not row.get('incomplete')]
+            dropped_incomplete = len(snapshot_rows) - len(complete_snaps)
+            if len(complete_snaps) >= 2:
+                first_snap, last_snap = complete_snaps[0], complete_snaps[-1]
                 delta = {}
                 for key in ('active_memories', 'events_total', 'warn_count', 'error_count'):
                     try:
@@ -1131,7 +1201,9 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                         delta[key] = None
                 period['historical_state'] = {
                     'available': True,
-                    'observations': len(snapshot_rows),
+                    'delta_known': True,
+                    'observations': len(complete_snaps),
+                    'incomplete_snapshots_ignored': dropped_incomplete,
                     'first': {'at': first_snap.get('scanned_at') or first_snap.get('day'),
                               'active_memories': first_snap.get('active_memories'),
                               'events_total': first_snap.get('events_total')},
@@ -1139,7 +1211,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                              'active_memories': last_snap.get('active_memories'),
                              'events_total': last_snap.get('events_total')},
                     'delta': delta,
-                    'basis': 'health-snapshots.jsonl（每日只读快照）',
+                    'basis': 'health-snapshots.jsonl（每日只读快照，不含未完成扫描）',
                     'limit': '快照只记录当日总量与告警数，不能还原期间内部健康状态；'
                              '期间内部状态只能依据库内时间字段判断。',
                 }
@@ -1147,11 +1219,32 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 if dt_from is not None and (first_at is None or first_at.date() > dt_from.date()):
                     period['historical_state']['coverage'] = 'partial'
                     period['historical_state']['reason'] = 'range_starts_before_first_snapshot'
+            elif len(complete_snaps) == 1:
+                only = complete_snaps[0]
+                period['historical_state'] = {
+                    'available': True,
+                    'delta_known': False,
+                    'observations': 1,
+                    'incomplete_snapshots_ignored': dropped_incomplete,
+                    'first': {'at': only.get('scanned_at') or only.get('day'),
+                              'active_memories': only.get('active_memories'),
+                              'events_total': only.get('events_total')},
+                    'last': {'at': only.get('scanned_at') or only.get('day'),
+                             'active_memories': only.get('active_memories'),
+                             'events_total': only.get('events_total')},
+                    'delta': {'active_memories': None, 'events_total': None,
+                              'warn_count': None, 'error_count': None},
+                    'reason': 'single_complete_snapshot',
+                    'basis': 'health-snapshots.jsonl',
+                    'limit': '只有一条完整快照，没有第二个观测值，变化未知，不能写成 0。',
+                }
             else:
                 period['historical_state'] = {
                     'available': False,
-                    'reason': 'no_snapshot_in_range',
-                    'note': '该时间段没有巡检历史快照；仅能依据 memories.created / events / versions '
+                    'delta_known': False,
+                    'reason': ('history_unreadable' if snap_failed else
+                               'only_incomplete_snapshots' if snapshot_rows else 'no_snapshot_in_range'),
+                    'note': '该时间段没有可用的完整巡检快照；仅能依据 memories.created / events / versions '
                             '等带时间字段的库内记录判断“期间变化”，不能虚构当时整体健康状态。',
                 }
             if timed_out:
@@ -1250,21 +1343,29 @@ def export_report(report, fmt='markdown'):
     lines.append('')
     if period.get('requested'):
         lines.append('## 指定期间变化与异常（与全库当前状态分开）')
-        growth = period.get('growth') or {}
-        lines.append(f"- 期间新增记忆：{growth.get('memories_created', 0)} 条；"
-                     f"事件：{growth.get('events_created', 0)} 个；阶段：{growth.get('event_stages', 0)} 个；"
-                     f"版本：{growth.get('versions', 0)} 条；认知版本变更：{growth.get('learned_context_changes', 0)} 条")
-        for key, label in (('duplicates', '重复'), ('fragments', '碎片'),
-                           ('dangling', '断链/悬空引用'), ('index_anomalies', '索引异常')):
-            section = period.get(key) or {}
-            lines.append(f"- 期间{label}：{section.get('count', 0)} 项")
-            for ev in (section.get('evidences') or [])[:5]:
-                lines.append(f"  - {ev.get('label')}: {ev.get('note')}")
-        coverage = period.get('coverage') or {}
-        if coverage.get('note'):
-            lines.append(f"- 期间证据边界：{coverage['note']}")
+        if period.get('status') in ('incomplete', 'unavailable'):
+            lines.append('- 指定期间检查未完成，计数未统计，不能把缺失当成 0。')
+        else:
+            growth = period.get('growth') or {}
+            lines.append(f"- 期间新增记忆：{growth.get('memories_created', 0)} 条；"
+                         f"事件：{growth.get('events_created', 0)} 个；阶段：{growth.get('event_stages', 0)} 个；"
+                         f"版本：{growth.get('versions', 0)} 条；认知版本变更：{growth.get('learned_context_changes', 0)} 条")
+            for key, label in (('duplicates', '重复'), ('fragments', '碎片'),
+                               ('dangling', '断链/悬空引用'), ('index_anomalies', '索引异常')):
+                section = period.get(key) or {}
+                lines.append(f"- 期间{label}：{section.get('count', 0)} 项")
+                for ev in (section.get('evidences') or [])[:5]:
+                    lines.append(f"  - {ev.get('label')}: {ev.get('note')}")
+            coverage = period.get('coverage') or {}
+            if coverage.get('note'):
+                lines.append(f"- 期间证据边界：{coverage['note']}")
         hist = period.get('historical_state') or {}
-        if hist.get('available'):
+        if period.get('status') in ('incomplete', 'unavailable'):
+            lines.append('- 历史快照：本轮未完成，不判断有没有快照。')
+        elif hist.get('available') and hist.get('delta_known') is False:
+            lines.append(f"- 历史快照：{hist.get('observations', 0)} 次完整记录，变化未知"
+                         f"（{hist.get('reason') or '快照不足'}）。{hist.get('limit') or ''}")
+        elif hist.get('available'):
             delta = hist.get('delta') or {}
             lines.append(f"- 历史快照：{hist.get('observations', 0)} 次；"
                          f"活跃记忆变化 {delta.get('active_memories')}，事件变化 {delta.get('events_total')}；"

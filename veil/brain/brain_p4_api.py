@@ -1304,17 +1304,25 @@ def generate_growth_report(hub, from_date='', to_date='', include_content=True, 
                 lines.append('- 缺失检查提示：该次巡检因超时未完成全部检查项，未执行项不等同通过。')
             period = latest.get('period') or {}
             if period.get('requested'):
-                growth = period.get('growth') or {}
-                lines.append(
-                    f"- 指定期间（{latest.get('from_date') or '最早'} 至 {latest.get('to_date') or '最新'}）："
-                    f"新增记忆 {growth.get('memories_created', 0)} 条 / 事件 {growth.get('events_created', 0)} 个 / "
-                    f"重复 {period.get('duplicates', {}).get('count', 0)} 组 / 碎片 {period.get('fragments', {}).get('count', 0)} 条 / "
-                    f"悬空引用 {period.get('dangling', {}).get('count', 0)} 处 / 索引异常 {period.get('index_anomalies', {}).get('count', 0)} 条")
+                if period.get('status') in ('incomplete', 'unavailable'):
+                    lines.append('- 指定期间检查未完成，计数未统计，不能把缺失当成 0。')
+                else:
+                    growth = period.get('growth') or {}
+                    lines.append(
+                        f"- 指定期间（{latest.get('from_date') or '最早'} 至 {latest.get('to_date') or '最新'}）："
+                        f"新增记忆 {growth.get('memories_created', 0)} 条 / 事件 {growth.get('events_created', 0)} 个 / "
+                        f"重复 {period.get('duplicates', {}).get('count', 0)} 组 / 碎片 {period.get('fragments', {}).get('count', 0)} 条 / "
+                        f"悬空引用 {period.get('dangling', {}).get('count', 0)} 处 / 索引异常 {period.get('index_anomalies', {}).get('count', 0)} 条")
                 hist = period.get('historical_state') or {}
-                lines.append(
-                    '- 期间历史证据：' + ('有巡检快照可对照'
-                                        if hist.get('available') else
-                                        '缺少该时间段的历史快照；只报告有库内时间字段支持的期间变化'))
+                if period.get('status') in ('incomplete', 'unavailable'):
+                    lines.append('- 期间历史证据：本轮未完成，不判断有没有快照。')
+                elif hist.get('available') and hist.get('delta_known') is False:
+                    lines.append('- 期间历史证据：完整快照不足两条，变化未知，不写成 0。')
+                else:
+                    lines.append(
+                        '- 期间历史证据：' + ('有巡检快照可对照'
+                                            if hist.get('available') else
+                                            '缺少该时间段的历史快照；只报告有库内时间字段支持的期间变化'))
         else:
             lines.append('- 暂无健康巡检报告（尚未执行过只读巡检）。')
 

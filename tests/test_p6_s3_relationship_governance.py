@@ -117,13 +117,34 @@ class BudgetAndMigrationTests(unittest.TestCase):
             '[providers.default]\nbase_url = "https://example.invalid/v1"\napi_key_env = "TEST_KEY"\n'
             'model = "test-model"\nmax_input_tokens = 8192\n'
             'input_cny_per_million = "2"\ncached_input_cny_per_million = "1"\noutput_cny_per_million = "8"\n'
-            '[profile]\nfile = "learned-context.json"\nlearned = true\nmax_bytes = 3000\n',
+            '[profile]\nfile = "learned-context.json"\nlearned = true\nmax_bytes = 3000\n'
+            'evidence_budget_ms = 2500\n',
             encoding='utf-8',
         )
         cfg = load_character(self.root, 'peter')
         self.assertEqual(cfg.profile['section_budgets'], SECTION_BUDGETS)
         self.assertEqual(cfg.profile['max_bytes'], 6200)
         self.assertEqual(cfg.profile['legacy_max_bytes'], 3000)
+        self.assertEqual(cfg.profile['evidence_budget_ms'], 2500)
+
+    def test_load_character_rejects_an_invalid_evidence_budget(self):
+        char_dir = self.root / 'characters' / 'peter'
+        char_dir.mkdir(parents=True)
+        (self.root / 'persona').mkdir(parents=True, exist_ok=True)
+        (self.root / 'persona' / 'peter.md').write_text('Peter persona.', encoding='utf-8')
+        toml = char_dir / 'character.toml'
+        toml.write_text(
+            'name = "Peter"\n'
+            'persona = "persona/peter.md"\n'
+            'provider = "default"\n'
+            '[providers.default]\nbase_url = "https://example.invalid/v1"\napi_key_env = "TEST_KEY"\n'
+            'model = "test-model"\nmax_input_tokens = 8192\n'
+            'input_cny_per_million = "2"\ncached_input_cny_per_million = "1"\noutput_cny_per_million = "8"\n'
+            '[profile]\nfile = "learned-context.json"\nlearned = true\nevidence_budget_ms = 50\n',
+            encoding='utf-8',
+        )
+        with self.assertRaises(UserError):
+            load_character(self.root, 'peter')
 
 
 class StrictEvidenceChainTests(unittest.TestCase):

@@ -129,6 +129,21 @@ class HealthPeriodOrphanTests(unittest.TestCase):
         self.assertIn('模型身份不一致', notes)
         self.assertNotIn('≠ 1024', json.dumps(report, ensure_ascii=False))
 
+    def test_different_vector_lengths_are_not_near_duplicates(self):
+        import array
+        self.assertEqual(0.0, brain_health._cosine([1.0, 0.0], [1.0]))
+        self.add_memory('dim_a', '2026-11-20T10:00:00+08:00', '向量甲的正文足够区分，不会被当成碎片。')
+        self.add_memory('dim_b', '2026-11-20T11:00:00+08:00', '向量乙的正文也不相同，同样不是碎片。')
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("INSERT INTO vectors(memory_id, dim, content_hash, vector) VALUES('dim_a', 2, NULL, ?)",
+                     (array.array('f', [1.0, 0.0]).tobytes(),))
+        conn.execute("INSERT INTO vectors(memory_id, dim, content_hash, vector) VALUES('dim_b', 1, NULL, ?)",
+                     (array.array('f', [1.0]).tobytes(),))
+        conn.commit()
+        conn.close()
+        notes = ' '.join(ev.get('note', '') for ev in self.check(self.run_scan(), 'H-2')['evidences'])
+        self.assertNotIn('余弦', notes)
+
     def test_vector_bytes_mismatch_is_reported_against_its_own_dimension(self):
         self.add_memory('m1', '2026-11-20T10:00:00+08:00', '字节数不符。')
         conn = sqlite3.connect(str(self.db))
@@ -212,6 +227,123 @@ class HealthPeriodOrphanTests(unittest.TestCase):
         self.assertEqual('not_requested', report['period']['status'])
         self.assertEqual('current', self.check(report, 'H-1')['scope'])
         self.assertEqual('全库当前', report['scope']['label'])
+
+    def test_event_sources_and_sidecar_sources_are_links(self):
+        self.add_memory('m_evt', '2026-11-20T10:00:00+08:00', '只通过事件来源关联的记忆。')
+        self.add_memory('m_side', '2026-11-20T11:00:00+08:00', '只通过 sidecar 来源关联的记忆。')
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("INSERT INTO events VALUES('ev_src', '来源事件', '2026-11-20', '2026-11-20', NULL, '{}')")
+        conn.execute("INSERT INTO event_sources VALUES('ev_src', 0, 'm_evt')")
+        conn.execute("INSERT INTO sidecar_state VALUES('m_side', 0, '[]', ?, NULL)",
+                     (json.dumps(['chat:u1']),))
+        conn.commit()
+        conn.close()
+        check = self.check(self.run_scan(), 'H-3')
+        linked = {ev.get('memId') for ev in check['evidences'] if ev.get('category') == 'unlinked'}
+        self.assertNotIn('m_evt', linked)
+        self.assertNotIn('m_side', linked)
+        self.assertEqual(0, check['counts']['unlinked_memories'])
+        self.assertEqual(0, check['counts']['unlinked_events'])
+
+    def test_deleted_memory_still_counts_as_created_in_the_period(self):
+        self.add_memory('gone', '2026-11-12T10:00:00+08:00', '期间创建，后来删除。')
+        self.add_memory('live', '2026-11-13T10:00:00+08:00', '期间创建，仍然在库。')
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("UPDATE memories SET is_deleted=1 WHERE id='gone'")
+        conn.commit()
+        conn.close()
+        period = self.run_scan(from_date='2026-11-10', to_date='2026-11-20')['period']
+        self.assertEqual(2, period['growth']['memories_created'])
+
+    def test_single_snapshot_delta_is_unknown_and_incomplete_snapshots_are_ignored(self):
+        self.add_memory('m1', '2026-11-10T10:00:00+08:00', '记忆正文。')
+        reports = self.role / 'health-reports'
+        reports.mkdir()
+        rows = [
+            {'day': '2026-11-10', 'scanned_at': '2026-11-10T02:00:00+0800',
+             'active_memories': 0, 'events_total': 0, 'incomplete': True},
+            {'day': '2026-11-20', 'scanned_at': '2026-11-20T02:00:00+0800',
+             'active_memories': 4, 'events_total': 2},
+        ]
+        (reports / 'health-snapshots.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        report = self.run_scan(from_date='2026-11-10', to_date='2026-11-20')
+        hist = report['period']['historical_state']
+        self.assertTrue(hist['available'])
+        self.assertFalse(hist['delta_known'])
+        self.assertEqual(1, hist['observations'])
+        self.assertEqual('single_complete_snapshot', hist['reason'])
+        self.assertIsNone(hist['delta']['active_memories'])
+        self.assertEqual(1, hist['incomplete_snapshots_ignored'])
+        text = brain_health.export_report(report)
+        self.assertIn('变化未知', text)
+        self.assertNotIn('活跃记忆变化 0', text)
+
+    def test_snapshot_older_than_the_recent_tail_is_still_in_range(self):
+        self.add_memory('m1', '2026-01-02T10:00:00+08:00', '很早的记忆。')
+        reports = self.role / 'health-reports'
+        reports.mkdir()
+        rows = [{
+            'day': '2026-01-02', 'scanned_at': '2026-01-02T02:00:00+0800',
+            'active_memories': 1, 'events_total': 0,
+        }]
+        rows.extend({
+            'day': '2026-06-01', 'scanned_at': '2026-06-01T02:00:00+0800',
+            'active_memories': 9, 'events_total': 9,
+        } for _ in range(400))
+        (reports / 'health-snapshots.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        learned = [{
+            'time': '2026-01-02T03:00:00+08:00', 'tool': 'save_facts',
+        }]
+        learned.extend({'time': '2026-06-02T03:00:00+08:00', 'tool': 'save_facts'} for _ in range(20))
+        (self.role / 'learned-context.versions.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in learned), encoding='utf-8')
+        period = self.run_scan(from_date='2026-01-01', to_date='2026-01-31')['period']
+        hist = period['historical_state']
+        self.assertTrue(hist['available'])
+        self.assertFalse(hist['delta_known'])
+        self.assertEqual(1, hist['observations'])
+        self.assertEqual('single_complete_snapshot', hist['reason'])
+        self.assertEqual(1, period['growth']['learned_context_changes'])
+
+    def test_two_complete_snapshots_ignore_an_incomplete_zero(self):
+        self.add_memory('m1', '2026-11-10T10:00:00+08:00', '记忆正文。')
+        reports = self.role / 'health-reports'
+        reports.mkdir()
+        rows = [
+            {'day': '2026-11-10', 'scanned_at': '2026-11-10T02:00:00+0800',
+             'active_memories': 1, 'events_total': 0},
+            {'day': '2026-11-15', 'scanned_at': '2026-11-15T02:00:00+0800',
+             'active_memories': 0, 'events_total': 0, 'incomplete': True},
+            {'day': '2026-11-20', 'scanned_at': '2026-11-20T02:00:00+0800',
+             'active_memories': 4, 'events_total': 2},
+        ]
+        (reports / 'health-snapshots.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        hist = self.run_scan(from_date='2026-11-10', to_date='2026-11-20')['period']['historical_state']
+        self.assertTrue(hist['delta_known'])
+        self.assertEqual(3, hist['delta']['active_memories'])
+        self.assertEqual(1, hist['incomplete_snapshots_ignored'])
+
+    def test_incomplete_period_export_does_not_print_zeros(self):
+        text = brain_health.export_report({
+            'summary': {'status_label': '未完成', 'good_count': 0, 'warn_count': 1},
+            'from_date': '2026-11-01', 'to_date': '2026-11-02',
+            'scope': {'label': '全库当前 + 指定期间'},
+            'period': {
+                'requested': True, 'status': 'incomplete',
+                'growth': {'memories_created': 0, 'events_created': 0, 'event_stages': 0,
+                           'versions': 0, 'learned_context_changes': 0},
+                'duplicates': {'count': 0}, 'fragments': {'count': 0},
+                'dangling': {'count': 0}, 'index_anomalies': {'count': 0},
+                'historical_state': {'available': False, 'reason': 'no_snapshot_in_range'},
+            },
+        })
+        self.assertIn('未完成', text)
+        self.assertIn('不判断有没有快照', text)
+        self.assertNotIn('期间新增记忆：0', text)
+        self.assertNotIn('历史快照：缺失', text)
 
 
 if __name__ == '__main__':
