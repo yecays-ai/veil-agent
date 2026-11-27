@@ -521,9 +521,15 @@
       assocSub.style.marginTop = '10px';
       const assocHead = el('div', 'veil-card-head');
       const modeTone = assoc.effective_mode === 'disabled' ? '' : 'good';
+      const leisureTone = assoc.leisure_effective ? 'good' : (assoc.leisure_enabled ? 'warn' : '');
+      const assocHeadBadges = el('div', 'inline-pills');
+      assocHeadBadges.append(
+        pill(`聊天生效：${assoc.status_text || assoc.effective_mode}`, modeTone),
+        pill(`自主闲暇：${assoc.leisure_status_text || (assoc.leisure_effective ? '已启用' : '已关闭')}`, leisureTone),
+      );
       assocHead.append(
         el('strong', '', '自然联想控制'),
-        pill(`当前生效：${assoc.status_text || assoc.effective_mode}`, modeTone),
+        assocHeadBadges,
       );
       const assocGrid = el('div', 'six-layer-grid');
       assocGrid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
@@ -563,6 +569,22 @@
         assocGrid.append(item);
       }
       assocSub.append(assocHead, assocGrid);
+      const ldiag = assoc.leisure_diagnostics;
+      if (ldiag && typeof ldiag === 'object') {
+        const diagLine = el('div', 'muted');
+        diagLine.style.marginTop = '6px';
+        diagLine.style.fontSize = '12px';
+        if (ldiag.recent_wakes > 0) {
+          const simText = typeof ldiag.last_similarity === 'number' ? ` · 相似度 ${ldiag.last_similarity.toFixed(2)}` : '';
+          const auditText = ldiag.last_audit_clean === false
+            ? ' · 输出审计：检测到旁白或无工具扮演'
+            : (ldiag.last_audit_clean === true ? ' · 输出审计：正常' : '');
+          diagLine.textContent = `自主闲暇诊断（近 ${ldiag.recent_wakes} 次唤醒）：闲暇 ${ldiag.leisure_wakes} 次 / 联想命中 ${ldiag.hits} 次 / 任务态拦截 ${ldiag.task_blocked} 次 · 最近：${ldiag.last_wake_mode || '未知'}（${ldiag.last_reason || '无'}）${simText}${auditText}`;
+        } else {
+          diagLine.textContent = '自主闲暇诊断：尚无开启后的自主唤醒运行记录（默认关闭，开启后下次闲暇唤醒生效）。';
+        }
+        assocSub.append(diagLine);
+      }
       layerCard.append(assocSub);
     }
 
@@ -1937,6 +1959,16 @@
             if (base.reason) cell.append(el('small', 'muted', base.reason));
             if (base.dropped?.length) cell.append(el('small', 'muted',
               base.dropped.map(row => `${row.id}（${row.reason}）`).join('；')));
+          }
+          const leisureAssoc = st.key === 'natural_association'
+            ? (item.leisure_association || item.recall?.leisure_association || null)
+            : null;
+          if (leisureAssoc && typeof leisureAssoc === 'object' && Object.keys(leisureAssoc).length) {
+            const gateMode = leisureAssoc.wake_gate?.mode || leisureAssoc.context_mode || 'unknown';
+            const simPart = typeof leisureAssoc.similarity === 'number'
+              ? ` · 相似度 ${leisureAssoc.similarity.toFixed(2)}` : '';
+            cell.append(el('small', 'muted',
+              `自主门控：${gateMode} · ${leisureAssoc.reason || '未记录'}${simPart}`));
           }
           chainGrid.append(cell);
         }

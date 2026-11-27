@@ -1,6 +1,6 @@
 # P6-S6-1 记忆动态评价、强化与保护性衰减 · 施工与隔离验收报告
 
-> 工单 462 · 分支 `ticket/462-p6-s6-1-memory-reinforcement` · 基线 `main = ead71b6`
+> 工单 462 · 分支 `ticket/462-p6-s6-1-memory-reinforcement` · 基线 `main = 81dba35`（已合流 S6-2 / PR #463）
 > 数据边界：本报告不含真实聊天、真实记忆正文、密钥或本机绝对路径中的用户数据；实验使用本地只读快照的隔离副本与合成记忆。**未合并、未部署、未启停正式 Peter。**
 
 ## 1. 结论摘要
@@ -10,7 +10,7 @@
 - 保护性衰减只对 `importance <= 6` 且未置顶的**活跃度投影**生效；`importance >= 7` 与 `pinned` 永不衰减；衰减不改重要度、不删除、不隐藏。
 - 活跃度排序是**可选信号**，默认关闭。理由：#455 的 `AB-R5b` 只有 `+1/53` 且无冷门重要样本，证据不足；本单只保证信号可靠，等真实多日送达数据积累后再决定。
 - 隔离真实链路（VEIL Lab，mock，¥0）已验证：送达后更新、重复确认幂等、回滚不增加、重启保留、60 天后低保真衰减而高重要度不动、5→6 自动重评并写版本。
-- 完整 Python 套件失败集合与 `origin/main` 基线一致（见 `8）；新增 26 项 Python 测试与 2 项桌面测试，桌面全套 62/62。
+- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 26 项 Python 测试与 2 项桌面测试，合流 S6-2 后桌面全套 63/63。
 
 ## 2. 范围、前置与并行边界
 
@@ -20,6 +20,7 @@
 | --- | --- | --- |
 | S5 送达契约（工单 460 / PR #461） | 已合并 `504c0a7` | 五层状态与 `delivery_listeners` 在 `veil/brain/memory_agent.py` |
 | S6 五项开工门禁（工单 461 / PR #462） | 已合并 `ead71b6` | `docs/tickets/461-p5-s6-gates.md` |
+| S6-2 自主闲暇联想（工单 463 / PR #463） | 已合并 `81dba35`；默认关闭、未部署 | `docs/tickets/463-p6-s6-2-leisure-association.md`；与本单共享的 `veil_agent._finalize_recall_delivery`、`confirm_delivery`、`brain_retrieval`、`brain_p4_api`、`workspace-brain.js` 已合流；合流后 84 项定向通过、Lab 重验通过 |
 | S5 延期项"隐式工作 trap 联合门控" | **仍未关闭**，不在本单范围 | 本单只消费最终注入 ID，不改变联想/判官门控 |
 | #455 实验决策 | 已落盘并合并 | `docs/reports/p6-s4-decision-table-20261126.md` |
 
@@ -78,7 +79,7 @@
       tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store \
       tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget \
       tests.test_p6_s6_idempotent_writes tests.test_p3_1_brain_only     # 98 项通过
-    node --test desktop/tests/*.test.cjs                            # 62/62 通过
+    node --test desktop/tests/*.test.cjs                            # 63/63 通过
 
 覆盖的关键场景：
 
@@ -105,10 +106,10 @@
 
 - Run：`s6-1-activation-20261128T004338`（`veil-lab/runs/s6-1-activation-20261128T004338`）
 - 快照：`peter-20261127T170245 / r3`（2026-11-28 00:42 刷新，正式目录无变化）
-- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；`code_sha256 = 44ddcdffcb71cab718a36ae52cccc4a566459d8e5f2d25254d21c808ca52a869`
+- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；合流 S6-2 前 `code_sha256 = 44ddcdff...`，合流 `main = 81dba35` 后重新复制为 `code_sha256 = 8488cfb249479e2baeb43e3917e2bce86dc37d5068cac02b52f5491441018418`；两次 `run verify` 均通过。
 - 模式：mock（不调用模型、不花钱）；实验变量：`memory.recall_judge.enabled=false`、离线检索 `weight_vector=0.0 / weight_keyword=1.0`（让合成的 `S61LAB` 记忆可被检索；不影响送达/记账逻辑）
 - 合成数据（仅实验副本）：记忆 `s61laba`（imp5，事件+意义+为什么）、`s61labb`（imp8）、`s61labc`（imp5，无事件/意义）；事件 `s61lab-ev-a`；关系条目 `s61lab-rel`（`confirmed`，引用 `event:s61lab-ev-a`）
-- 代码版本漂移说明：快照钉住的代码是 `2a264a7`，早于 S3；本分支的 S3 证据校验不再注入快照里那条无来源的 `uncertain` 关系条目，导致首次 `run verify` 缺少 `relationship_base`。为让核验对照成立，在实验副本里额外加了一条 `source='lan'`、`locked=true` 的合成关系条目（`s61-lab-rel`），之后 `run verify` 通过。这是快照代码与当前分支的差异，不是本单引入的运行回归；详见 `7。
+- 代码版本漂移说明：快照钉住的代码是 `2a264a7`，早于 S3；本分支的 S3 证据校验不再注入快照里那条无来源的 `uncertain` 关系条目，导致首次 `run verify` 缺少 `relationship_base`。为让核验对照成立，在实验副本里额外加了一条 `source='lan'`、`locked=true` 的合成关系条目（`s61-lab-rel`），之后 `run verify` 通过。这是快照代码与当前分支的差异，不是本单引入的运行回归；详见第 7 节。
 
 ### 6.1 实际观察到（脱敏，无正文）
 
@@ -124,6 +125,11 @@
     proposal: applied, 5→6, confidence 0.66, trigger delivery, auto_applied=true, version_seq=287
     重启（新进程 open_session）: 计数/分数/提案/设置全部保留
 
+    合流 S6-2 后重跑（code_sha256=8488cfb2...，verify 通过）:
+    再次送达（冷却 3 轮后）: s61laba/b/c delivery_count 1→2；score a/c 1.244（衰减后 0.244+1）、
+                             b 2.0（imp8 保护，不衰减）；重要度仍 6/8/5；当日无重复提案（冷却生效）
+    新增真实记忆激活: activation 行 13→28，均只记 ID/计数，未读取或输出正文
+
 ### 6.2 真实链路验证命令（可复现）
 
     cd E:\Peter-Agent\VEIL\veil-lab
@@ -138,7 +144,7 @@
 
 - 静态 `importance` 加分 `+0.05` 已是最优；
 - `last_active` 近期加分：近 7 天只有 `+1/53` 命中，离线库缺少 >30 天冷门重要样本，**无法证明保底**；
-- 保护性衰减离线补测：无衰减 `0.5444`、朴素衰减 `0.5278`、仅 `imp<=6` 衰减 `0.5556`；重要旧经历 `3/9 → `2/9`（朴素）/ `4/9`（保护）。
+- 保护性衰减离线补测：无衰减 `0.5444`、朴素衰减 `0.5278`、仅 `imp<=6` 衰减 `0.5556`；重要旧经历 `3/9 → 2/9`（朴素）/ `4/9`（保护）。
 
 本单的处理：
 
@@ -150,13 +156,13 @@
 
 ## 8. 完整回归
 
-- 本分支完整套件：`python -m unittest discover -s tests -v`，**2527 项，18 失败 + 3 错误 + 29 跳过**。
-- `origin/main = ead71b6` 同命令基线：**2501 项，18 失败 + 3 错误 + 29 跳过**。
+- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2539 项，18 失败 + 3 错误 + 29 跳过**。
+- `origin/main = 81dba35` 同命令基线：**2513 项，18 失败 + 3 错误 + 29 跳过**。
 - 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 26 项全部来自本单新增测试且通过。
 
-| 项 | 本分支 | origin/main 基线 |
+| 项 | 本分支（合流后） | origin/main = 81dba35 基线 |
 | --- | --- | --- |
-| 测试数 / 失败 / 错误 / 跳过 | 2527 / 18 / 3 / 29 | 2501 / 18 / 3 / 29 |
+| 测试数 / 失败 / 错误 / 跳过 | 2539 / 18 / 3 / 29 | 2513 / 18 / 3 / 29 |
 | 失败/错误名称集合 | 21 个（maintenance / OpenCode / 备份 / APPDATA 桌面数据类） | 21 个，同名同序 |
 | 记忆/检索/Brain 相关失败 | 0 | 0 |
 | 新增测试 | +26（全部通过） | — |
@@ -177,5 +183,5 @@
 ## 10. 交接
 
 - 分支/worktree：`ticket/462-p6-s6-1-memory-reinforcement` / `worktrees/462-p6-s6-1`
-- PR：#463（待开）；不自行合并、不部署。
-- 状态文档：`STATUS.md` / `HANDOFF.md` / `docs/ACCEPTANCE.md`（B-11）。
+- PR：#464（待审核、CI、体验）；不自行合并、不部署。
+- 状态文档：`STATUS.md` / `HANDOFF.md` / `docs/ACCEPTANCE.md`（B-12）。

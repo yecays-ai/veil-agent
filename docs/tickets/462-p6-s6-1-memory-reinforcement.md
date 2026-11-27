@@ -1,7 +1,7 @@
 # P6-S6-1｜记忆动态评价、强化与保护性衰减
 
 - **工单编号**：462（分支 `ticket/462-p6-s6-1-memory-reinforcement`，worktree `worktrees/462-p6-s6-1`）
-- **基线提交**：`main = ead71b6`（PR #462 / 工单 461 已合并；S5 PR #461 合并为 `504c0a7`）
+- **基线提交**：`main = 81dba35`（已合流 S6-2 / PR #463；此前的 S6 门禁 PR #462 = `ead71b6`，S5 PR #461 = `504c0a7`）
 - **产品格**：A（陪伴核心：长期记忆、关系连续与检索）
 - **做完后 Lan 能多做的一件事**：她不用记着"这条记忆当初标了几分"，Peter 会在真实送达后记录一条记忆最近有多活跃，并根据后来反复发生的事、共同经历、个人意义和关系变化，提出有证据、可回看、可撤回的重要度调整；她常聊的事会自然变得更靠前，久未提起的重要共同经历仍照常想起、且不会被自动降权或遗忘。
 - **她怎么验收**：Brain → 记忆监控里直接改"记忆权重与保护性衰减"的开关和参数，聊天几轮后打开一条记忆，看"活跃度 / 送达次数 / 跨天会话 / 重评历史"，对建议点接受或撤回；全程不需要看代码或跑测试。
@@ -26,6 +26,7 @@
   - `desktop/workspace-brain.js`：Brain 首页的权重面板与记忆详情里的活跃度/重评区域。
 - 与 S6-2 **共享但只做最小衔接**：`veil/core/veil_agent.py`（仅在 `send()` 交付确认时传会话键与重生成标记）、`veil/brain/recall/brain_retrieval.py`（只在既有评分后追加可选信号，默认关闭）、`veil/brain/storage/brain_authority.py`（工具检索复用同一可选设置）、`STATUS.md` / `HANDOFF.md` / `docs/ACCEPTANCE.md`。
 - 并行规则：S6-2 合流时保留本单的送达记账、权重面板与记忆详情区域；本单不修改 S6-2 的 `natural_association.py`、自主唤醒路径或提示词。若 S6-2 也要改 `confirm_delivery()` 或 `library()`，先在本 PR 评论中写明并 rebase，不覆盖已合并内容。
+- **实际合流（2026-11-28 01:30 +08:00）**：S6-2 在本单施工期间以 PR #463 合入 `main = 81dba35`。共享处已合流并保留双方功能：`veil_agent._finalize_recall_delivery()`（保留 S6-2 锁内 finalize/自主快照，追加 S6-1 会话键/重生成参数与签名兼容）、`confirm_delivery()` 的 `wake_mode` 事件、`brain_retrieval` 的 leisure 向量捕获、`workspace-brain.js` 的双面板、`brain_p4_api.py` 的 leisure 控制与 S6-1 权重/建议 API。合流后重跑 S6-1/S6-2/S5 定向、桌面与完整套件；S6-2 默认关闭，不改变本单送达记账。
 
 ### 与 S6-3（认知巩固 / consolidation）的契约
 
@@ -43,7 +44,7 @@
 
 ### 3.1 施工前确认
 
-- S5（工单 460 / PR #461，`504c0a7`）与 S6 开工门禁（工单 461 / PR #462，`ead71b6`）均已合入 `main`；五项门禁关闭见 `docs/tickets/461-p5-s6-gates.md`。
+- S5（工单 460 / PR #461，`504c0a7`）与 S6 开工门禁（工单 461 / PR #462，`ead71b6`）均已合入 `main`；五项门禁关闭见 `docs/tickets/461-p5-s6-gates.md`。S6-2 在本单施工期间合入 `81dba35`（默认关闭），共享文件已合流。
 - S5 延期的"隐式工作 trap 联合门控"仍开放，但它只影响联想是否被允许进入判官；本单的记账只读取 `finish_recall()` 最终注入的 ID，不依赖联想如何被选中，因此可以并行，且不把该延期项算作已关闭。
 - #455 决策：`AB-R5a` 静态 importance 已最优；`AB-R5b` 的 `last_active` 近期加分只有 `+1/53` 且没有冷门重要样本；`AB-R5c` 情感加分否决；保护性衰减离线补测 `imp<=6` 时 Recall@8 `+1.12pp`，但无保护衰减会伤重要旧经历。结论：**活跃度排序默认仍可关闭**，本单先把真实送达信号做成可靠数据源。
 
@@ -126,9 +127,9 @@
 ## 五、验证证据
 
 - 单元/集成：`tests/test_p6_s6_memory_weights.py`（26 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
-- 桌面：`desktop/tests/*.test.cjs` 62/62 通过（含新增 2 项）。
+- 桌面：合流 S6-2 后 `desktop/tests/*.test.cjs` 63/63 通过（本单新增 2 项 + S6-2 新增 1 项）。
 - 回归：完整 Python 套件与 `origin/main` 基线失败集合对比（见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。
-- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`，快照 `peter-20261127T170245 / r3`，代码 `code_sha256=44ddcdffcb71cab718a36ae52cccc4a566459d8e5f2d25254d21c808ca52a869`，mock、¥0；`run verify` 通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→0.2441、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；重要度、可见性、存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
+- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`，快照 `peter-20261127T170245 / r3`，mock、¥0；合流 S6-2 前（代码 `44ddcdff...`）与合流 `main = 81dba35` 后（代码 `8488cfb2...`）两次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→0.2441、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；重要度、可见性、存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
 
 ## 六、验收步骤（Lan 在 Windows 上体验）
 
