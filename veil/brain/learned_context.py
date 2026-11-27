@@ -1277,19 +1277,52 @@ class LearnedContext:
             block = data.get('relationship') or {}
             if expected_updated_at is not None and block.get('updated_at') != expected_updated_at:
                 raise UserError('你打开之后这一块又改过；请先刷新。')
-            before = json.loads(json.dumps(data, ensure_ascii=False))
-            before_bytes = self._section_bytes(data, 'relationship')
-            items = block.setdefault('items', [])
-            source_item = next(
-                (row for row in items if isinstance(row, dict) and row.get('id') == item_id),
-                None,
-            )
+            items = block['items']
+            by_id = {row['id']: row for row in items}
+            source_item = by_id.get(item_id)
             if source_item is None:
                 raise UserError(f'找不到关系条目：{item_id}。')
+            if source_item['status'] != 'outdated':
+                raise UserError('只有历史关系条目可以恢复。')
+
+            # Both link types identify the same lineage. Walk in both directions so older
+            # restores (which only wrote restored_from) cannot leave a parallel current item.
+            links = {row_id: set() for row_id in by_id}
+            for row_id, row in by_id.items():
+                for key in ('superseded_by', 'restored_from'):
+                    linked_id = row.get(key)
+                    if linked_id in by_id:
+                        links[row_id].add(linked_id)
+                        links[linked_id].add(row_id)
+            lineage = {item_id}
+            pending = [item_id]
+            while pending:
+                adjacent = links[pending.pop()] - lineage
+                lineage.update(adjacent)
+                pending.extend(adjacent)
+
+            text = source_item['text']
+            norm = _norm_text(text)
+            to_retire = []
+            for row in items:
+                if row['status'] == 'outdated':
+                    continue
+                if row['id'] in lineage:
+                    to_retire.append(row)
+                elif _norm_text(row['text']) == norm:
+                    raise UserError('该正文已在另一条当前关系认知中；没有重复创建。')
+            if len(to_retire) == 1:
+                current = to_retire[0]
+                if (current.get('restored_from') == item_id and current['text'] == text
+                        and current['status'] == 'confirmed' and current['source'] == 'lan'):
+                    return data
+
+            before = copy.deepcopy(data)
+            before_bytes = self._section_bytes(data, 'relationship')
             now = _now()
             new_item = {
                 'id': uuid.uuid4().hex[:12],
-                'text': source_item['text'],
+                'text': text,
                 'status': 'confirmed',
                 'source': 'lan',
                 'sources': list(source_item.get('sources') or []),
@@ -1297,14 +1330,12 @@ class LearnedContext:
                 'created_at': now,
                 'updated_at': now,
             }
+            for row in to_retire:
+                row.update(status='outdated', superseded_by=new_item['id'], updated_at=now)
             items.append(new_item)
             block['updated_at'] = now
-            # Clear any veto for the restored text since Lan explicitly restored it.
-            norm = _norm_text(source_item['text'])
-            if block.get('vetoed'):
-                block['vetoed'] = [
-                    v for v in block['vetoed'] if not (isinstance(v, dict) and v.get('norm_text') == norm)
-                ]
+            # Clear the exact relationship veto since Lan explicitly restored this text.
+            _lift_exact_veto(block, text)
             self._validate_relationship_items(items)
             self._check_section_budget(data, 'relationship', before_bytes=before_bytes)
             self._commit_with_version('restore_relationship', before, data)

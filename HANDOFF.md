@@ -10,11 +10,14 @@
   - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本支持进程中断恢复，按角色与写入及备份互斥。
   - `veil/brain/relationship_base.py` & `veil/core/veil_agent.py`：`locked` 最高优先、预算不足时省略整条并说明原因；隔离失效认知和跨区冲突、`debug['relationship_base']` 区分存储/有效/选中/实际注入。
   - `veil/tools/learned_tools.py`、`veil/prompts/defaults/`、`veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/peter-page.js`、`desktop/workspace-brain.js`、`desktop/chat.js` 同步接入四区预算、锁定/恢复/核验与诊断展示。
+  - 收口：只允许恢复历史条目，同一版本链只保留一条当前认知；重复恢复不再写正文或版本日志。GET `/api/peter-page` 使用现有 Host、Origin、Token 防护。
+  - 收口前 `d5f8591` 的 GitHub 检查为 14 通过、1 跳过；收口提交查对应的新运行。开发侧联合回归 128 项、桌面 Node 56 项通过，Lan 真机体验未验收。
+  - 旧本机失败对照 `2b03006` / `d5f8591` 均复现：Maintenance 在 CRLF 测试文件的暂存区检查失败（改 LF 后通过）；OpenCode 原用例缺输出文件，GitHub CI 因未安装而跳过；冷备份仅在 APPDATA 有桌面配置时增加 `desktop-data`，空 APPDATA 的两个用例均通过。本轮不改这些模块。
   - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
 
 ## 下一个窗口第一步
 
-1. 对 PR #460 最终提交做独立复审；不要合并或部署。
+1. 复核 PR #460 收口提交与对应 CI；不要合并或部署。S6 接入前读[证据与否决的能力边界](docs/tickets/459-p6-s3-relationship-governance.md#供-s6-使用的能力边界)。
 2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
 3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 

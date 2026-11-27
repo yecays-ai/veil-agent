@@ -3410,6 +3410,8 @@ def make_handler(hub, token):
                 self._send(500, {'error': f'保存指令失败：{exc}'})
 
         def _get_peter_page(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
                 data = hub.peter_page()
                 if isinstance(data, dict) and isinstance(data.get('learned'), dict):
