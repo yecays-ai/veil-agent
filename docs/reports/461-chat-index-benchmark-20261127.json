@@ -1,0 +1,22 @@
+{
+  "ticket": 461,
+  "date": "2026-11-27T21:08:00+08:00",
+  "machine": "Windows local, Python 3.12.10, NTFS",
+  "scenario": "synthetic chat.jsonl, 50,000 user messages, 6,677,835 bytes",
+  "results": {
+    "first_index_seconds": 0.256,
+    "repeated_index_milliseconds": 0.435,
+    "append_one_message_milliseconds": 0.824,
+    "legacy_full_read_parse_seconds": 0.0737,
+    "cached_entries_after_index": 400,
+    "old_evidence_lookup_u0_ms": 1.03,
+    "old_evidence_lookup_u25000_ms": 10.64,
+    "cached_lookup_ms": 0.52
+  },
+  "notes": [
+    "Repeated calls only stat the file and verify five 64-byte fingerprints; they do not re-read the 6.7 MB log.",
+    "Appending one message parses only the new line (unit test spies on _apply_chat_row: 1 call).",
+    "Old evidence is resolved by ID on demand and then cached in a bounded 400-entry LRU.",
+    "The legacy full read+parse column measures only the read/parse work the old implementation repeated every call; it excludes the old full SHA-256."
+  ]
+}

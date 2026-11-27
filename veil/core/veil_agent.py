@@ -1089,6 +1089,11 @@ def load_character(root, character_id):
                     profile['legacy_max_bytes'] = positive_int(raw_profile['max_bytes'])
                 profile['section_budgets'] = section_budgets
                 profile['max_bytes'] = sum(section_budgets.values())
+                raw_budget = raw_profile.get('evidence_budget_ms')
+                if raw_budget is not None:
+                    if type(raw_budget) is not int or not 100 <= raw_budget <= 10000:
+                        raise ValueError('profile.evidence_budget_ms must be an integer from 100 to 10000')
+                    profile['evidence_budget_ms'] = raw_budget
                 legacy = profile.get('legacy_file', 'about-lan.md')
                 if (not isinstance(legacy, str) or Path(legacy).name != legacy
                         or not legacy.endswith('.md')):
@@ -4880,7 +4885,9 @@ class Chat:
                 if not isinstance(args, dict):
                     result, state, summary = 'arguments must be an object.', '被拒绝', call.function.name
                 else:
-                    result, state, summary = self.profile.invoke(call.function.name, args)
+                    result, state, summary = self.profile.invoke(
+                        call.function.name, args,
+                        operation_id=f'{request_id}:{tool_call_id}' if tool_call_id else None)
             elif call.function.name == 'autonomy_history':
                 from veil.autonomy.autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
                 args = json.loads(call.function.arguments or '{}')

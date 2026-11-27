@@ -1,10 +1,13 @@
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil.core.veil_agent import Budget, Chat, Store, load_character
+from veil.tools.learned_tools import ONGOING_TOOL
 
 
 CONFIG = '''name = "Test"
@@ -75,3 +78,27 @@ class LearnedContextChatTests(unittest.TestCase):
         self.assertEqual(chat.cfg.persona, 'A new persona')
         chat.send('again')
         self.assertEqual(self.prompts[-1][0][0]['content'], 'A new persona')
+
+    def test_tool_call_identity_distinguishes_a_retry_from_a_new_todo(self):
+        chat = self.chat()
+
+        def run(call_id):
+            call = SimpleNamespace(
+                id=call_id,
+                function=SimpleNamespace(
+                    name='ongoing_update',
+                    arguments=json.dumps({'action': 'add', 'text': 'Buy stamps.'}),
+                ),
+            )
+            return chat._execute_tool_call(call, 'req-1', f'0:{call_id}', False, [ONGOING_TOOL])
+
+        first = run('call-a')
+        retry = run('call-a')
+        second = run('call-b')
+        self.assertEqual('成功', first.state)
+        self.assertEqual(first.result, retry.result)
+        self.assertEqual('成功', second.state)
+        self.assertNotEqual(first.result, second.result)
+        active = [row for row in chat.profile.read()['ongoing']['items'] if row['status'] == 'active']
+        self.assertEqual(2, len(active))
+        self.assertEqual({'Buy stamps.'}, {row['text'] for row in active})

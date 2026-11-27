@@ -86,6 +86,26 @@ class RelationshipSemanticStateTests(unittest.TestCase):
         self.assertFalse(self.profile.finish_relationship_semantic(token, verdict='supported'))
         self.assertEqual(self.profile.relationship_semantic_summary()['reasons'], {'timeout': 1})
 
+    def test_paid_finish_commits_when_the_recheck_times_out(self):
+        self.user(self.raw)
+        self.submit()
+        token = self.pending()[0]['claim_id']
+        self.assertTrue(self.profile.claim_relationship_semantic(token))
+        real_eval = self.profile._evaluate_sources
+
+        def expire_during_recheck(sources, claim_text='', data=None, *, chat_index=None, budget=None):
+            if budget is not None:
+                budget.deadline = 0
+            return real_eval(sources, claim_text, data, chat_index=chat_index, budget=budget)
+
+        with patch.object(self.profile, '_evaluate_sources', side_effect=expire_during_recheck):
+            committed = self.profile.finish_relationship_semantic(token, verdict='supported')
+        self.assertTrue(committed)
+        stored = self.profile.read()['relationship']['items'][0]
+        self.assertEqual('confirmed', stored['status'])
+        self.assertEqual('evidence', stored['source'])
+        self.assertEqual([], self.profile.pending_relationship_semantics())
+
     def test_evidence_change_between_claim_and_finish_requires_a_new_receipt(self):
         self.user(self.raw)
         self.submit()

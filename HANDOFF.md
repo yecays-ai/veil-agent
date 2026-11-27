@@ -1,54 +1,59 @@
 # HANDOFF
 
-> 更新：2026-11-27 +08:00 · 工单 460 / PR #461（P6-S5）· 已合入 `main` `f979ca2`（含 PR #459 与 PR #460 S3）；待最终复核与合并，未部署。
+> 更新：2026-11-27 +08:00 · 基线 `main = 504c0a7`（PR #460、PR #461 均已合并）· 当前 PR #462 / 分支 `ticket/461-p5-s6-gates`（已合流最新 `main` 并完成联合回归；待独立审核/CI/Lan 体验；未合并、未部署）
 
 ## 当前停点
 
-- **本单（工单 460 · PR #461 · P6-S5 检索、判官与情境相关自然联想升级）**：
-  - 检索与判官：保留 Min-Max 混合检索、`stopwords_enabled=False`（可审计停用词表与保护词零重叠）、`candidate_k=8`、4 秒超时 / 300 字卡片保守基线；新增本地零费用情境分类（`context_signal.py`）、情境判官升级与失败/超时/解析失败分口径诊断。
-  - 自然联想与界面持久化开关：保留 `association_enabled=True`、`association_contextual_enabled=False` 默认配置；在现有「VEIL Brain → 记忆监控」界面补齐「自然联想总开关」与「情境相关自然联想」双独立开关及实时生效状态显示，经 `/api/brain/layer-toggle` 持久化至 `recall-association.json`，下一轮生效、重启保留，关闭情境联想后恢复现行联想机制。
-  - VEIL Lab 正式日用模型三路盲评：基于最新只读快照 `peter-20261127T170245/r2` 与正式日用 `gemini-4-hydrogen` 完成 3 组 9 回复完整上下文盲评（¥1.10，`all_checks_ok=true`），Lan 盲评结果为第 1 组 `contextual_s5`/`legacy_breath8` 平局、第 2 组 `contextual_s5` 胜、第 3 组 `contextual_s5` 弱偏好（不作显著优势结论）；实验报告见 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](docs/reports/p6-s5-retrieval-judge-association-20261127.md)。
-  - 跨模块合流：已合入最新 `origin/main`（`f979ca2`，含 PR #459 与 PR #460 S3），保持六层网格结构与 S3 关系底座/诊断/预算完全兼容，联合回归通过；未触碰正式运行目录与正式 `data/peter`。
-- **前序已合入 `main`（`f979ca2`）的工单 459 · PR #460（P6-S3）要点与门禁全部保留如下**：
-  - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
-  - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。
-  - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本支持进程中断恢复，按角色与写入及备份互斥。
-  - `veil/brain/relationship_base.py` & `veil/core/veil_agent.py`：`locked` 最高优先、预算不足时省略整条并说明原因；隔离失效认知和跨区冲突、`debug['relationship_base']` 区分存储/有效/选中/实际注入。
-  - `veil/tools/learned_tools.py`、`veil/prompts/defaults/`、`veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/peter-page.js`、`desktop/workspace-brain.js`、`desktop/chat.js` 同步接入四区预算、锁定/恢复/核验与诊断展示。
-  - 收口：只允许恢复历史条目，同一版本链只保留一条当前认知；重复恢复不再写正文或版本日志。GET `/api/peter-page` 使用现有 Host、Origin、Token 防护。
-  - 收口前 `d5f8591` 的 GitHub 检查为 14 通过、1 跳过；收口提交查对应的新运行。开发侧联合回归 128 项、桌面 Node 56 项通过，Lan 真机体验未验收。
-  - 旧本机失败对照 `2b03006` / `d5f8591` 均复现：Maintenance 在 CRLF 测试文件的暂存区检查失败（改 LF 后通过）；OpenCode 原用例缺输出文件，GitHub CI 因未安装而跳过；冷备份仅在 APPDATA 有桌面配置时增加 `desktop-data`，空 APPDATA 的两个用例均通过。本轮不改这些模块。
-  - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
+- **工单 461 / P5 遗留 + S6 开工门禁**：开发、隔离验证与与 S5 的联合回归完成；未合并、未部署，未触碰正式 `data/peter`。
+  - P5：`veil/brain/brain_health.py` 的 H-3（悬空引用 vs 无关联记忆/事件，带类别与判断依据）、H-7（删除 1024 维硬编码，按库内维度 + `meta.embedding_model` + 配置模型身份对账）、`period`（日期段增长/重复/碎片/断链/索引）、`historical_state`（只读快照，缺失即声明）；`veil/server/web_agent.py` 传入配置模型身份；`veil/brain/brain_p4_api.py` 成长报告期间摘要（与 S5 的同文件改动已自动合流）；`desktop/workspace-brain.js` 期间卡片、范围标签、证据依据（与 S5 的联想开关同文件改动已自动合流）。
+  - S6：`veil/brain/learned_context.py` 聊天证据增量索引/400 条 LRU/旧证据按需查询/失效重建；淘汰后的 ID 与更正回扫日志，扫不完则不可用而不是当空；`_EvidenceBudget` 统一墙钟预算；`event_ledger`/`quotes`/`sources` 分页与截断降级；反证去重，超过 120 条只分批核验触及该认知或证据的反证，无关积累不停止其他晋升；写入幂等按工具调用身份而不是参数哈希；`veil/brain/relationship_semantic.py` 接受单层 code fence 的严格 JSON。
+  - 文档与实验：`docs/tickets/461-p5-s6-gates.md`、`docs/reports/461-test-evidence-20261127.md`、`docs/reports/461-chat-index-benchmark-20261127.json`、`docs/reports/461-cross-language-live-20261127.md`、`veil-lab/runs/461-sem-synthetic-20261127T210905/reports/latest.md`。
+  - 测试：新增 4 个 Python 测试文件（7+11+7+4 项）与 1 个桌面测试；合流 S5 后 126 项联合定向回归、58/58 桌面测试通过；完整套件 2469 项失败集合与 `origin/main` 基线一致（18 失败 + 3 错误：Maintenance/OpenCode/APPDATA desktop-data），无本单新增回归；详见 `docs/reports/461-test-evidence-20261127.md`。
+  - 真实模型实验：DeepSeek `deepseek-flash` 2 次调用，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）；无共同锚点翻译候选 `contradicted` 不注入，无关正例 `supported` 并注入。这是手工实验记录；CI 与单元测试不调用 `api.deepseek.com`，由 `tests/test_p6_s6_cross_language_veto.py` 的假模型覆盖。
+  - 未测：主聊天模型自行提取候选的完整真实聊天链路；S6 功能本身（权重演化、衰减、巩固、自主联想）未开工。
+- **工单 460 / PR #461（P6-S5）**：已合并为 `504c0a7`。保留 `stopwords_enabled=False`、`candidate_k=8`、情境判官、`association_enabled=True`、`association_contextual_enabled=False` 默认；记忆监控页双开关持久化；VEIL Lab `gemini-4-hydrogen` 三路盲评（3 组 9 回复，¥1.10）记录在 `docs/reports/p6-s5-retrieval-judge-association-20261127.md`。**未部署、无 Lan 验收记录。**
+- **工单 459 / PR #460（P6-S3）**：已合并为 `f979ca2`；未部署、无 Lan 验收记录，按 `docs/ACCEPTANCE.md` B-7 体验。
 
-## S6 开工门禁与证据边界
+## S6 门禁状态
 
-1. [聊天历史全量读取](veil/brain/learned_context.py#L455)：日志变化后全量扫描和常驻缓存会增加长历史请求耗时与内存。验收：长历史连续追加不反复全扫、有明确缓存上限；旧引用按需核验，删除或替换后不命中旧缓存。
-2. [数据库读连接](veil/brain/learned_context.py#L481)与[实时核验](veil/brain/learned_context.py#L1195)：多条引用的串行 SQLite 等待会累加。验收：锁库加多引用场景验证整次核验的统一墙钟预算，超限不误晋升、不阻断聊天。
-3. [认知追加](veil/brain/learned_context.py#L1895)与[待办新增](veil/brain/learned_context.py#L2130)：提交后丢响应时，重试可能重复写入。验收：持久化幂等键在丢回包、并发和重启场景下均返回原结果与原 ID，只落一条正文及相应版本。
-4. [反证长期积累](veil/brain/learned_context.py#L806)：以长期历史验证载荷与查询有界，不裁掉相关否决；证据不足时不晋升并标记原因。
-5. [任意跨语言同义否决](veil/brain/learned_context.py#L164)：现有原文锚点不是完整语义保证；验证无共享锚点的译写拒绝、无关正例与明确恢复路径。以上五项均是 S6 开工门禁，本单不重构。
-6. [情境自然联想隐式 `trap` 穿透与同轮判官联合判断](veil/brain/recall/natural_association.py)（PR #461 延期）：离线回放存在 2 条隐式工作 `trap` 穿透，当前保持 `association_contextual_enabled=False` 默认关闭；S6 前置须以同轮判官语义结论联合门控自然联想，通过零穿透门禁后再评估默认启用。
-
-### 既有边界与反例
-
-- [间接证据查询](veil/brain/learned_context.py#L535-L563)：每次解析至多读取 200 条匹配的 stage-evidence（账本序号倒序）、50 条用户引述及 50 条聊天来源（ord 顺序）；不分页。有效证据可能位于窗口外；若其余来源也无法证实，保持或降为 uncertain，不以截断、无命中或来源缺失断言证据不存在，也不放宽原话匹配。此为当前能力边界，未改查询。
-- [迁移回滚反例](tests/test_pr460_storage.py#L161-L215)从缺少 vetoed 的旧格式实际迁移，断言 applied 并无条件调用 rollback；验证无用字段撤销、迁移后编辑/删除/锁定/完成状态及版本历史保留。[原有 CI 日志](https://github.com/yecays-ai/veil-agent/actions/runs/45967164223/job/140398494254)两例通过，本轮未重跑。
+| 门禁 | 状态 | 证据 |
+| --- | --- | --- |
+| 聊天历史增量索引/有界缓存/旧证据按需查询 | 已关闭 | `tests/test_p6_s6_chat_evidence_budget.py`；5 万条基准 0.256s 首建 / 0.435ms 重复 / 0.824ms 追加 |
+| 实时证据统一墙钟预算、分页与安全降级 | 已关闭 | 同上（真实 SQLite 排他锁、旧 200 行窗口外证据、截断→unavailable） |
+| 追加重试持久化幂等 | 已关闭 | `tests/test_p6_s6_idempotent_writes.py`（丢响应/重启/4 线程并发/状态守卫） |
+| 反证长期积累有界、不丢相关否决 | 已关闭 | 超限只分批核验相关反证；无关积累不阻断其他晋升；任一否决批次即停止 |
+| 任意跨语言同义否决与无关正例 | 已关闭（能力边界内） | 单测 + DeepSeek 合成实验 `docs/reports/461-cross-language-live-20261127.md` |
+| 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期，不在 461 范围） | `docs/tickets/460-p6-s5-retrieval-judge-association.md`；`association_contextual_enabled=False` 默认关闭 |
 
 ## 下一个窗口第一步
 
-1. 复核 PR #460 收口提交与对应 CI；不要合并或部署。S6 接入前读[证据与否决的能力边界](docs/tickets/459-p6-s3-relationship-governance.md#供-s6-使用的能力边界)。
-2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
-3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
+1. 核对本单 PR #462 的 CI 与独立审核；重点看 `learned_context.py` 的证据预算/幂等回执、健康页期间卡片，以及合流 S5 后的健康页与记忆监控页是否互相覆盖。
+2. 合流结果已在 `504c0a7` 上重跑定向与完整套件；若后续 `main` 再变，重跑：
+   - `python -m unittest tests.test_p5_health_period_orphans tests.test_p6_s6_chat_evidence_budget tests.test_p6_s6_idempotent_writes tests.test_p6_s6_cross_language_veto`
+   - `python -m unittest tests.test_relationship_422 tests.test_p6_s3_relationship_governance tests.test_pr460_sovereignty tests.test_relationship_semantic_worker tests.test_p6_s5_retrieval_judge_association`
+   - `node --test desktop/tests/*.test.cjs`
+3. 按 Lan 体验结果更新 `docs/ACCEPTANCE.md` B-8/B-9/B-10；不要自行合并或部署。
+4. S6 功能另开单：先处理 S5 延期的隐式工作 `trap` 联合门控，再以工单 461 关闭的五项门禁为前置；不复用本单分支继续施工。
+
+## 本单已知边界
+
+- 聊天索引首次建立仍顺序读完现有 `chat.jsonl`（5 万条/6.68MB 约 0.256s，一次性）；不跨进程持久化。
+- 同长度原地改写若只落在 5 个 64B 采样窗口之外且 mtime/size 都不变，理论上仍可能命中旧缓存；正常追加、删除、截断、替换与两端改写均失效。与现有 `Store.incremental_state` 的检测边界一致。
+- 反证超过 120 条时，不触及该认知及其证据的反证不再停止全部晋升；相关反证按 120 条分批核验，中间批次通过不晋升，相关否决不丢。
+- 健康期间状态只依据库内时间字段与既有每日快照；无快照不还原历史。
+- 跨语言语义核验受模型行为影响，不承诺任意译写 100% 识别；失败保留 `uncertain`。
+- `evidence_budget_ms` 目前是 `profile` 可选配置（100–10000，默认 1200），未加入桌面设置页。
 
 ## 环境与工具注意
 
-- 正式目录 `.git` 为写保护，**不要在正式目录开分支、提交或改文件**；开发一律在独立 worktree / 副本里做。
-- 本机 `git` 走 HTTPS 拉取时可能因 schannel 凭据不可用而失败；本单改用 `gh api` 推送分支，未改任何全局 git 配置。
-- 本机 Node 24 用于桌面构建；Python 3.11/3.12 跑测试。
+- 正式目录 `.git` 为写保护，不在正式目录开分支、提交或改文件。
+- 本机 `git` 走 HTTPS 拉取时可能因 schannel 凭据不可用而失败；可用 `gh api` 推送分支，不改全局 git 配置。
+- 本机 Node 24 用于桌面测试；Python 使用 `veil-agent/.venv`（本 worktree 无独立 venv）。
+- 既有失败（Maintenance CRLF、OpenCode 未安装、APPDATA desktop-data）在 `origin/main` 基线同样复现，不是本单引入。
 
 ## 红线（不变）
 
-- 不启停正式 Peter、不写正式 `data/peter`、不向正式 Peter 发消息。
-- 正式恢复必须先做协同 bundle + dry-run，经 Lan 确认后才 `--apply`。
+- 不启停正式 Peter、不写正式 `data/peter`、不向正式 Peter 发测试消息。
+- 正式恢复必须先协同 bundle + dry-run，经 Lan 确认后才 `--apply`。
 - 换 Embedding 模型必须用 `scripts/embedding_reindex.py`（先 dry-run 再 `--apply`），不依赖后台重试。
-- 不提交人设正文、密钥、真实聊天/记忆、本机绝对路径、日志。
+- 不提交人设正文、密钥、真实聊天/记忆、本机绝对路径、日志；VEIL Lab 快照含真实数据，只留本地。

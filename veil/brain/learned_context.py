@@ -17,8 +17,9 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from hashlib import sha256
@@ -67,6 +68,83 @@ ONGOING_STATUSES = ('active', 'uncertain', 'completed')
 ONGOING_LEGACY = {'archived': 'completed'}
 DEFAULT_MAX_BYTES = sum(SECTION_BUDGETS.values())  # 6200
 VERSION = 1
+
+# S6 gate: the chat-evidence cache is bounded; old evidence is resolved by ID on demand. The
+# append-only log is parsed incrementally instead of being re-read on every memory check.
+CHAT_CACHE_LIMIT = 400
+CHAT_MISS_LIMIT = 256
+CHAT_SCAN_CHUNK = 1 << 20
+# Seen IDs, duplicate IDs and correction rows are bounded. Evicting them never invents evidence:
+# a dropped ID is resolved from the log, and a truncated duplicate set fails that lookup closed.
+CHAT_SEEN_LIMIT = 8192
+CHAT_DUP_LIMIT = 1024
+CHAT_CORRECTION_LIMIT = 400
+# S6 gate: one wall-clock budget covers the whole evidence pass (all relationship items), so N
+# serial SQLite waits cannot accumulate into chat latency. Overflow degrades conservatively.
+EVIDENCE_BUDGET_MS = 1200
+EVIDENCE_QUEUE_BUDGET_MS = 3000
+EVIDENCE_PAGE_ROWS = 200
+EVIDENCE_QUOTE_PAGES = 4
+EVIDENCE_SOURCE_PAGES = 4
+EVIDENCE_STAGE_PAGES = 5
+# A semantic request judges at most this many unique counters. At or below the limit every
+# counter is sent together, including a cross-language veto with no shared tokens. Above it,
+# counters that do not touch this claim or its evidence are irrelevant history: they must not
+# stop a different cognition. Relevant counters are judged in batches of this size. Clearing an
+# earlier batch does not promote; any contradicted batch stops.
+COUNTEREVIDENCE_LIMIT = 120
+# Persisted receipts for one write. Identity is the tool call (or an explicit idempotency_key),
+# never a hash of the arguments: the same text on a new call is a new write. A retry of the same
+# call replays only while its result is still current. call: and explicit: keys that age out are
+# refused instead of being written again.
+IDEMPOTENCY_LIMIT = 200
+EXPLICIT_IDEMPOTENCY_LIMIT = 200
+
+_BUSY_TIMEOUT_SQL = {
+    50: 'PRAGMA busy_timeout=50',
+    100: 'PRAGMA busy_timeout=100',
+    200: 'PRAGMA busy_timeout=200',
+    400: 'PRAGMA busy_timeout=400',
+    800: 'PRAGMA busy_timeout=800',
+    1000: 'PRAGMA busy_timeout=1000',
+}
+
+
+def _busy_timeout_sql(seconds):
+    """A complete PRAGMA statement. No formatted SQL: the millisecond value only selects one."""
+    ms = int(max(50, min(1000, float(seconds) * 1000)))
+    choice = 50
+    for edge in _BUSY_TIMEOUT_SQL:
+        if edge <= ms:
+            choice = edge
+    return _BUSY_TIMEOUT_SQL[choice]
+
+
+def _fingerprint_evidence(rows):
+    """Fingerprint evidence without local `seq`, so receipts saved before seq existed still match."""
+    return [{key: value for key, value in row.items() if key != 'seq'} for row in rows or []]
+
+
+def _resolve_evidence_budget(settings, default_ms=EVIDENCE_BUDGET_MS):
+    raw = settings.get('evidence_budget_ms') if isinstance(settings, dict) else None
+    if type(raw) is int and 100 <= raw <= 10000:
+        return raw
+    return default_ms
+
+
+class _EvidenceBudget:
+    """Monotonic deadline shared by every evidence query in one verification pass."""
+
+    __slots__ = ('deadline',)
+
+    def __init__(self, milliseconds):
+        self.deadline = time.monotonic() + max(0.05, float(milliseconds) / 1000.0)
+
+    def expired(self):
+        return time.monotonic() >= self.deadline
+
+    def remaining(self):
+        return max(0.0, self.deadline - time.monotonic())
 
 _AGREEMENT_RE = re.compile(
     r'^(?:对|好的?|好呀|嗯|行|可以|同意|确认|没错|是的|是啊|'
@@ -190,6 +268,29 @@ def _veto_grounded_in_origins(evidence, counters):
     return False
 
 
+def _counter_touches(text, claim_text, evidence_texts):
+    """Whether a stored counter can bear on this claim. Used only above the batch limit.
+
+    Exact or high-overlap wording and any shared lexical token keep the counter in a batch.
+    A cross-language veto with no shared token is not dropped while the full set still fits
+    in one request; past that limit it cannot be told apart from unrelated history without
+    judging every accumulated counter, which is what used to stop every promotion.
+    """
+    if _matches_governed_claim(claim_text, text) or _matches_governed_claim(text, claim_text):
+        return True
+    tokens = _lexical_tokens(text)
+    if tokens and (tokens & _lexical_tokens(claim_text)):
+        return True
+    for evidence in evidence_texts:
+        if not isinstance(evidence, str) or not evidence:
+            continue
+        if _matches_governed_claim(evidence, text) or _matches_governed_claim(text, evidence):
+            return True
+        if tokens and (tokens & _lexical_tokens(evidence)):
+            return True
+    return False
+
+
 def _veto_text(block, text, now, reason, item_id=None):
     norm = _norm_text(text)
     if not norm:
@@ -280,6 +381,7 @@ class LearnedContext:
         self.path = self.root / settings['file']
         self.legacy_path = self.root / settings.get('legacy_file', 'about-lan.md')
         self.section_budgets = _resolve_section_budgets(settings)
+        self.evidence_budget_ms = _resolve_evidence_budget(settings)
         self.max_bytes = sum(self.section_budgets.values())
         self.legacy_max_bytes = settings.get('max_bytes')
         self.versions = self.root / (Path(self.path).stem + '.versions.jsonl')
@@ -290,7 +392,9 @@ class LearnedContext:
         self._journal = self.path.with_name(self.path.name + '.pending')
         self._logged_error = ''
         self._chat_cache_key = None
-        self._chat_cache = {}
+        self._chat_cache = OrderedDict()
+        self._chat_misses = OrderedDict()
+        self._chat_state = None
 
     @property
     def lock(self):
@@ -316,9 +420,7 @@ class LearnedContext:
                     self._storage_lock_held = False
 
     def invalidate_evidence_cache(self):
-        with self._instance_lock:
-            self._chat_cache_key = None
-            self._chat_cache = {}
+        self._reset_chat_cache()
 
     # ---------- reading ----------
 
@@ -452,107 +554,503 @@ class LearnedContext:
 
     # ---------- evidence ----------
 
-    def _chat_user_index(self):
-        """Index live user speech; record only directly adjacent assistant questions."""
-        path = self.root / 'chat.jsonl'
+    def _chat_path(self):
+        return self.root / 'chat.jsonl'
+
+    def _chat_file_signature(self):
+        """Cheap change detector: identity + size + mtime. Never reads the whole file."""
         try:
-            with path.open('rb') as handle:
-                before = os.fstat(handle.fileno())
-                content = handle.read()
-            after = path.stat()
-            if (before.st_ino, before.st_mtime_ns, before.st_size) != (
-                    after.st_ino, after.st_mtime_ns, after.st_size) or len(content) != after.st_size:
-                return None
-        except FileNotFoundError:
-            self.invalidate_evidence_cache()
-            return {}
+            st = self._chat_path().stat()
         except OSError:
-            self.invalidate_evidence_cache()
             return None
-        # Windows timestamps may not change on same-size rewrites within one clock tick.
-        key = sha256(content).digest()
-        if self._chat_cache_key == key:
-            return self._chat_cache
-        index, seen, duplicates = {}, set(), set()
-        previous = None
-        for line in content.split(b'\n'):
-            preceding, previous = previous, None
-            try:
-                row = json.loads(line.decode('utf-8'))
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
-                continue
-            mid = row.get('message_id') or row.get('id')
-            if not isinstance(mid, str) or not SOURCE_REF.fullmatch(f'chat:{mid}'):
-                continue
-            if mid in seen:
-                duplicates.add(mid)
-                continue
-            seen.add(mid)
-            if row.get('recalled'):
-                continue
-            role = row.get('role')
-            text = row.get('content') if 'content' in row else row.get('text')
-            if not isinstance(text, str) or not text.strip() or '�' in text:
-                continue
-            # For short acknowledgments, the proposed text is not itself evidence;
-            # it is only the object of this user turn's explicit confirmation.
-            if role == 'assistant':
-                target = _confirmation_target(text)
-                if target:
-                    previous = (mid, target, text)
-            elif role == 'user':
-                index[mid] = {
-                    'text': text, 'confirmation': preceding,
-                    'time': row.get('time') if isinstance(row.get('time'), str) else '',
-                }
-        for mid in duplicates:
-            index.pop(mid, None)
-        for info in index.values():
-            preceding = info.pop('confirmation')
-            if preceding and preceding[0] not in duplicates and _AGREEMENT_RE.fullmatch(info['text'].strip()):
-                info['confirmation_target'] = preceding[1]
-                info['question'] = {'id': 'chat:' + preceding[0], 'text': preceding[2]}
-            else:
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+    def _reset_chat_cache(self):
+        with self._instance_lock:
+            self._chat_state = None
+            self._chat_cache = OrderedDict()
+            self._chat_misses = OrderedDict()
+            self._chat_cache_key = None
+
+    @staticmethod
+    def _sample_offsets(offset):
+        return sorted({0, offset // 4, offset // 2, (offset * 3) // 4, max(0, offset - 64)})
+
+    def _chat_state_current(self, handle, stat, state):
+        """Append-only proof without re-reading the file: identity, size and sampled fingerprints.
+
+        A same-size rewrite within one clock tick (Windows) would otherwise be served from the
+        old cache. Five 64-byte windows across the already-read prefix make that case detectable
+        without hashing the whole log on every memory check.
+        """
+        if state.get('identity') != (stat.st_dev, stat.st_ino):
+            return False
+        offset = state.get('offset', 0)
+        if stat.st_size < offset:
+            return False
+        if stat.st_size == offset and stat.st_mtime_ns != state.get('mtime_ns'):
+            return False
+        for position, sample in state.get('samples') or []:
+            if len(sample) != 64 or position + 64 > stat.st_size:
+                return False
+            handle.seek(position)
+            if handle.read(64) != sample:
+                return False
+        return True
+
+    def _new_chat_state(self, handle):
+        try:
+            st = os.fstat(handle.fileno())
+        except OSError:
+            return None
+        return {
+            'identity': (st.st_dev, st.st_ino), 'offset': 0, 'seq': 0,
+            'head': b'', 'tail': b'', 'mtime_ns': st.st_mtime_ns,
+            'seen': OrderedDict(), 'duplicates': OrderedDict(), 'corrections': [],
+            'question': None, 'watchers': {}, 'samples': [],
+            'scan_incomplete': False,
+        }
+
+    def _cache_chat_row(self, mid, info):
+        self._chat_cache[mid] = info
+        self._chat_cache.move_to_end(mid)
+        while len(self._chat_cache) > CHAT_CACHE_LIMIT:
+            self._chat_cache.popitem(last=False)
+
+    def _drop_chat_row(self, mid):
+        self._chat_cache.pop(mid, None)
+
+    def _remember_seen(self, state, mid):
+        seen = state['seen']
+        seen[mid] = True
+        seen.move_to_end(mid)
+        while len(seen) > CHAT_SEEN_LIMIT:
+            seen.popitem(last=False)
+            state['seen_truncated'] = True
+
+    def _mark_chat_duplicate(self, state, mid):
+        """A repeated ID is ambiguous: drop its text, confirmation and any correction it carried."""
+        state['seen'].pop(mid, None)
+        duplicates = state['duplicates']
+        duplicates[mid] = True
+        duplicates.move_to_end(mid)
+        while len(duplicates) > CHAT_DUP_LIMIT:
+            duplicates.popitem(last=False)
+            state['duplicates_truncated'] = True
+        state['corrections'] = [row for row in state['corrections'] if row.get('id') != mid]
+        self._drop_chat_row(mid)
+        for watcher in state['watchers'].pop(mid, ()):
+            info = self._chat_cache.get(watcher)
+            if info is not None:
                 info['confirmation_target'] = ''
-        self._chat_cache_key = key
-        self._chat_cache = index
-        return index
+                info.pop('question', None)
+        state['question'] = None
+
+    def _apply_chat_row(self, state, row, seq, preceding):
+        """One row of the append-only chat log, keeping only bounded evidence and veto cues."""
+        mid = row.get('message_id') or row.get('id')
+        if not isinstance(mid, str) or not SOURCE_REF.fullmatch(f'chat:{mid}'):
+            state['question'] = None
+            return
+        if mid in state['seen'] or mid in state['duplicates']:
+            self._mark_chat_duplicate(state, mid)
+            return
+        # Once an ID has been evicted, absence from the bounded sets is not proof that this
+        # row is new. Do not cache it: lookup counts the log, so a duplicate stays missing
+        # and a unique old id is still found.
+        admit = not (state.get('seen_truncated') or state.get('duplicates_truncated'))
+        if admit:
+            self._remember_seen(state, mid)
+        else:
+            self._drop_chat_row(mid)
+            state['corrections'] = [row for row in state['corrections'] if row.get('id') != mid]
+            for watcher in state['watchers'].pop(mid, ()):
+                info = self._chat_cache.get(watcher)
+                if info is not None:
+                    info['confirmation_target'] = ''
+                    info.pop('question', None)
+        if row.get('recalled'):
+            state['question'] = None
+            return
+        role = row.get('role')
+        text = row.get('content') if 'content' in row else row.get('text')
+        if not isinstance(text, str) or not text.strip() or '\ufffd' in text:
+            state['question'] = None
+            return
+        when = row.get('time') if isinstance(row.get('time'), str) else ''
+        # For short acknowledgments, the proposed text is not itself evidence; it is only the
+        # object of this user turn's explicit confirmation.
+        if role == 'assistant':
+            target = _confirmation_target(text)
+            state['question'] = (mid, target, text) if target else None
+            return
+        if role != 'user':
+            state['question'] = None
+            return
+        info = {'text': text, 'time': when, 'seq': seq}
+        if preceding and _AGREEMENT_RE.fullmatch(text.strip()):
+            qid, target, question = preceding
+            if qid not in state['duplicates']:
+                info['confirmation_target'] = target
+                info['question'] = {'id': 'chat:' + qid, 'text': question}
+                if admit:
+                    state['watchers'].setdefault(qid, []).append(mid)
+        if not admit:
+            return
+        self._cache_chat_row(mid, info)
+        if _REBUTTAL_CUE_RE.search(text):
+            state['corrections'].append({'id': mid, 'text': text, 'time': when, 'seq': seq})
+            if len(state['corrections']) > CHAT_CORRECTION_LIMIT:
+                state['corrections'] = state['corrections'][-CHAT_CORRECTION_LIMIT:]
+                state['corrections_truncated'] = True
+
+    def _remember_chat_samples(self, handle, state):
+        st = os.fstat(handle.fileno())
+        state['mtime_ns'] = st.st_mtime_ns
+        if not state['offset']:
+            return
+        samples = []
+        for position in self._sample_offsets(state['offset']):
+            if position + 64 > state['offset']:
+                continue
+            handle.seek(position)
+            samples.append((position, handle.read(64)))
+        state['samples'] = samples
+        handle.seek(0)
+        state['head'] = handle.read(min(64, state['offset']))
+        handle.seek(max(0, state['offset'] - 64))
+        state['tail'] = handle.read(min(64, state['offset']))
+
+    def _parse_chat_append(self, handle, state, budget=None):
+        """Parse only bytes appended since the last call, stopping at the shared deadline.
+
+        A timeout keeps the offset of complete lines already parsed and marks the index
+        incomplete. The unfinished tail is not evidence and is not reported as missing.
+        """
+        handle.seek(state['offset'])
+        offset = state['offset']
+        carry = b''
+        incomplete = False
+        while True:
+            if budget is not None and budget.expired():
+                incomplete = True
+                break
+            chunk = handle.read(CHAT_SCAN_CHUNK)
+            if not chunk:
+                break
+            carry += chunk
+            start = 0
+            while True:
+                newline = carry.find(b'\n', start)
+                if newline < 0:
+                    break
+                line = carry[start:newline]
+                start = newline + 1
+                # Every line, including a malformed one, breaks assistant-question adjacency;
+                # the preceding assistant question is captured before it is cleared for this row.
+                preceding = state['question']
+                state['question'] = None
+                if not line.strip():
+                    continue
+                state['seq'] += 1
+                try:
+                    row = json.loads(line.decode('utf-8'))
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    self._apply_chat_row(state, row, state['seq'], preceding)
+            carry = carry[start:]
+            offset += start
+            if budget is not None and budget.expired():
+                incomplete = True
+                break
+        state['offset'] = offset
+        state['scan_incomplete'] = incomplete
+        # A torn/partial tail stays unparsed until its newline arrives; that row can never be
+        # cited from a torn file. Samples cover only the committed prefix.
+        self._remember_chat_samples(handle, state)
+
+    def _ensure_chat_state(self, budget=None):
+        """(state or None). None means the log is missing/unreadable right now, never "empty".
+
+        Append parsing of the shared state is serialized: two callers must not read the same
+        offset, or the second pass would treat a real message ID as a duplicate and drop it.
+        """
+        path = self._chat_path()
+        for _attempt in range(2):
+            try:
+                handle = path.open('rb')
+            except FileNotFoundError:
+                self._reset_chat_cache()
+                return None
+            except OSError:
+                self._reset_chat_cache()
+                return None
+            with handle:
+                try:
+                    with self._instance_lock:
+                        st = os.fstat(handle.fileno())
+                        state = self._chat_state
+                        if state is not None and not self._chat_state_current(handle, st, state):
+                            state = None
+                        if state is None:
+                            self._chat_cache.clear()
+                            self._chat_misses.clear()
+                            state = self._new_chat_state(handle)
+                            if state is None:
+                                return None
+                        self._parse_chat_append(handle, state, budget)
+                        try:
+                            after = path.stat()
+                        except OSError:
+                            self._reset_chat_cache()
+                            return None
+                        if (after.st_dev, after.st_ino, after.st_size) != (
+                                st.st_dev, st.st_ino, st.st_size):
+                            continue  # replaced while reading: rebuild from the new file
+                        self._chat_state = state
+                        return state
+                except OSError:
+                    self._reset_chat_cache()
+                    return None
+        self._reset_chat_cache()
+        return None
+
+    def _chat_user_index(self, budget=None):
+        """Bounded recent user-speech index; old evidence is resolved by _chat_lookup on demand.
+
+        None means the log could not be read or the shared deadline expired before the index
+        was complete. An empty dict means the file is absent. Callers must not treat None as
+        "no evidence".
+        """
+        if not self._chat_path().exists():
+            self._reset_chat_cache()
+            return {}
+        state = self._ensure_chat_state(budget)
+        if state is None or state.get('scan_incomplete'):
+            return None
+        with self._instance_lock:
+            return dict(self._chat_cache)
+
+    def _chat_corrections(self, budget=None):
+        if not self._chat_path().exists():
+            return []
+        state = self._ensure_chat_state(budget)
+        if state is None or state.get('scan_incomplete'):
+            return None
+        if (state.get('seen_truncated') or state.get('duplicates_truncated')
+                or state.get('corrections_truncated')):
+            # The bounded lists have dropped history. A partial list would miss an old
+            # rebuttal or revive an evicted duplicate, so read the log or fail closed.
+            return self._scan_chat_corrections(budget)
+        with self._instance_lock:
+            duplicates = state['duplicates']
+            return [row for row in state['corrections'] if row.get('id') not in duplicates]
+
+    def _scan_chat_corrections(self, budget):
+        """Every unique user rebuttal in the log. None means the scan did not finish."""
+        rows = []
+        counts = {}
+        line_no = 0
+        try:
+            with self._chat_path().open('rb') as handle:
+                carry = b''
+                while True:
+                    if budget is not None and budget.expired():
+                        return None
+                    chunk = handle.read(CHAT_SCAN_CHUNK)
+                    if not chunk:
+                        break
+                    carry += chunk
+                    start = 0
+                    while True:
+                        newline = carry.find(b'\n', start)
+                        if newline < 0:
+                            break
+                        line = carry[start:newline]
+                        start = newline + 1
+                        if not line.strip():
+                            continue
+                        line_no += 1
+                        try:
+                            row = json.loads(line.decode('utf-8'))
+                        except ValueError:
+                            continue
+                        if not isinstance(row, dict) or row.get('recalled'):
+                            continue
+                        rid = row.get('message_id') or row.get('id')
+                        if not isinstance(rid, str):
+                            continue
+                        counts[rid] = counts.get(rid, 0) + 1
+                        if row.get('role') != 'user':
+                            continue
+                        text = row.get('content') if 'content' in row else row.get('text')
+                        if (not isinstance(text, str) or not text.strip() or '\ufffd' in text
+                                or not _REBUTTAL_CUE_RE.search(text)):
+                            continue
+                        rows.append({
+                            'id': rid, 'text': text,
+                            'time': row.get('time') if isinstance(row.get('time'), str) else '',
+                            'seq': line_no,
+                        })
+                    carry = carry[start:]
+        except OSError:
+            return None
+        return [row for row in rows if counts.get(row['id']) == 1]
+
+    def _chat_lookup(self, mid, budget=None):
+        """Resolve one chat:<id> row by ID, reading the file on demand for old evidence.
+
+        Returns (info, status) with status in ok | missing | unavailable. A scan is bounded by the
+        caller's wall-clock budget; timing out is "unavailable", never "this evidence never existed".
+        An evicted row keeps the same confirmation link the incremental parser recorded, and a
+        question ID that appears twice is not a confirmation.
+        """
+        if not isinstance(mid, str) or not mid:
+            return None, 'missing'
+        if not self._chat_path().exists():
+            self._reset_chat_cache()
+            return None, 'missing'
+        state = self._ensure_chat_state(budget)
+        if state is None:
+            return None, 'unavailable'
+        with self._instance_lock:
+            cached = self._chat_cache.get(mid)
+            if cached is not None:
+                return dict(cached), 'ok'
+            if mid in state['duplicates']:
+                return None, 'missing'
+        if state.get('scan_incomplete') and budget is not None and budget.expired():
+            return None, 'unavailable'
+        signature = self._chat_file_signature()
+        missing_at = self._chat_misses.get(mid)
+        if missing_at is not None and missing_at == signature and not state.get('duplicates_truncated'):
+            return None, 'missing'
+        found = None
+        preceding = None
+        question = None
+        counts = {}
+        line_no = 0
+        try:
+            with self._chat_path().open('rb') as handle:
+                carry = b''
+                while True:
+                    if budget is not None and budget.expired():
+                        return None, 'unavailable'
+                    chunk = handle.read(CHAT_SCAN_CHUNK)
+                    if not chunk:
+                        break
+                    carry += chunk
+                    start = 0
+                    while True:
+                        newline = carry.find(b'\n', start)
+                        if newline < 0:
+                            break
+                        line = carry[start:newline]
+                        start = newline + 1
+                        if not line.strip():
+                            question = None
+                            continue
+                        line_no += 1
+                        try:
+                            row = json.loads(line.decode('utf-8'))
+                        except ValueError:
+                            question = None
+                            continue
+                        if not isinstance(row, dict):
+                            question = None
+                            continue
+                        rid = row.get('message_id') or row.get('id')
+                        if isinstance(rid, str):
+                            counts[rid] = counts.get(rid, 0) + 1
+                        if row.get('recalled'):
+                            question = None
+                            continue
+                        role = row.get('role')
+                        text = row.get('content') if 'content' in row else row.get('text')
+                        valid = isinstance(text, str) and bool(text.strip()) and '\ufffd' not in text
+                        if role == 'assistant' and valid and isinstance(rid, str):
+                            target = _confirmation_target(text)
+                            question = (rid, target, text) if target else None
+                            continue
+                        if (found is None and role == 'user' and rid == mid and valid):
+                            found = {
+                                'text': text,
+                                'time': row.get('time') if isinstance(row.get('time'), str) else '',
+                                'seq': line_no,
+                            }
+                            preceding = question
+                        question = None
+                    carry = carry[start:]
+        except OSError:
+            return None, 'unavailable'
+        if found is None or counts.get(mid, 0) != 1:
+            with self._instance_lock:
+                self._chat_misses[mid] = signature
+                self._chat_misses.move_to_end(mid)
+                while len(self._chat_misses) > CHAT_MISS_LIMIT:
+                    self._chat_misses.popitem(last=False)
+            return None, 'missing'
+        if (preceding and counts.get(preceding[0], 0) == 1
+                and _AGREEMENT_RE.fullmatch(found['text'].strip())):
+            qid, target, question_text = preceding
+            found['confirmation_target'] = target
+            found['question'] = {'id': 'chat:' + qid, 'text': question_text}
+        with self._instance_lock:
+            self._cache_chat_row(mid, found)
+        return dict(found), 'ok'
 
     def _chat_user_messages(self, ids):
         """Return dict of {message_id: {'text': ..., 'time': ...}} for real user messages."""
         wanted = {value for value in ids if isinstance(value, str) and value}
         if not wanted:
             return {}
-        index = self._chat_user_index()
-        if index is None:
+        if self._ensure_chat_state() is None:
             return {}
-        return {mid: index[mid] for mid in wanted if mid in index}
+        found = {}
+        for mid in wanted:
+            info, status = self._chat_lookup(mid)
+            if status == 'ok':
+                found[mid] = info
+        return found
 
-    def _open_brain_ro(self):
+    def _open_brain_ro(self, budget=None):
         try:
+            timeout = 1.0
+            if budget is not None:
+                if budget.expired():
+                    return None, False
+                timeout = max(0.05, min(1.0, budget.remaining()))
             uri = self.root.joinpath('brain.db').resolve().as_uri() + '?mode=ro'
-            conn = sqlite3.connect(uri, uri=True, timeout=1.0)
+            conn = sqlite3.connect(uri, uri=True, timeout=timeout, isolation_level=None)
             conn.row_factory = sqlite3.Row
+            conn.execute(_busy_timeout_sql(timeout))
             return conn, True
         except (OSError, sqlite3.Error, ValueError):
             return None, False
 
-    def _resolve_db_evidence(self, pointer_kind, pointer_id, chat_index):
-        """Resolve event and memory pointers to deduplicated, still-live chat row IDs."""
-        result = {'exists': False, 'unavailable': False, 'missing_origin': False, 'origins': set()}
+    def _resolve_db_evidence(self, pointer_kind, pointer_id, chat_index, budget=None):
+        """Resolve event and memory pointers with bounded pages and one shared wall-clock budget.
+
+        Fixed query windows used to miss valid evidence just outside the limit (and could then look
+        like "no evidence"). Pagination stops early once an origin is found, is bounded by both page
+        count and the caller's deadline, and never reports "missing" when the window was truncated.
+        """
+        result = {'exists': False, 'unavailable': False, 'missing_origin': False,
+                  'origins': set(), 'infos': {}, 'truncated': False, 'scanned': 0}
         try:
             (self.root / 'brain.db').stat()
         except FileNotFoundError:
             return result
         except OSError:
             return {**result, 'unavailable': True}
-        conn, ok = self._open_brain_ro()
+        if budget is not None and budget.expired():
+            return {**result, 'unavailable': True, 'reason': 'evidence_budget_exhausted'}
+        conn, ok = self._open_brain_ro(budget)
         if not ok:
             return {**result, 'unavailable': True}
         try:
-            conn.execute('BEGIN')  # One snapshot for pointer, ledger, and quote reads.
+            conn.execute('BEGIN')
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             memory_id = pointer_id
             if pointer_kind == 'event':
@@ -572,60 +1070,179 @@ class LearnedContext:
                 return {**result, 'unavailable': True}
 
             def verify(mid, copied):
-                raw = chat_index.get(mid) if isinstance(mid, str) else None
+                if not isinstance(mid, str):
+                    result['missing_origin'] = True
+                    return
+                raw, status = self._chat_lookup(mid, budget)
+                if status == 'unavailable':
+                    result['unavailable'] = True
+                    return
                 # Copies can never supply the text we judge, nor can a later unrelated chat
                 # row with identical wording replace the identified original turn.
                 if (raw and isinstance(copied, str) and copied.strip()
                         and ' '.join(copied.split()) == ' '.join(raw['text'].split())):
                     result['origins'].add(mid)
+                    result['infos'][mid] = raw
                 else:
                     result['missing_origin'] = True
+
+            def budget_stop():
+                if budget is not None and budget.expired():
+                    result['unavailable'] = True
+                    result['reason'] = 'evidence_budget_exhausted'
+                    return True
+                return False
 
             if 'event_ledger' in tables and 'events' in tables:
-                if pointer_kind == 'event':
-                    where = 'event_id=?'
-                else:
-                    where = 'event_id IN (SELECT event_id FROM events WHERE memory_id=?)'
-                for row in conn.execute(
-                    f"SELECT payload_json FROM event_ledger WHERE kind='stage-evidence' AND {where} "
-                    "ORDER BY ledger_seq DESC, id DESC LIMIT 200", (pointer_id,),
-                ):
-                    try:
-                        payload = json.loads(row[0])
-                    except (ValueError, TypeError):
-                        continue
-                    if (isinstance(payload, dict) and payload.get('kind') == 'chat'
-                            and payload.get('role') == 'user'):
-                        verify(payload.get('message_id'), payload.get('text'))
+                cursor = None
+                pages = 0
+                ended_early = False
+                while pages < EVIDENCE_STAGE_PAGES:
+                    if budget_stop():
+                        break
+                    if pointer_kind == 'event':
+                        if cursor is None:
+                            rows = conn.execute(
+                                "SELECT ledger_seq, rowid AS rid, payload_json FROM event_ledger "
+                                "WHERE kind='stage-evidence' AND event_id=? "
+                                "ORDER BY ledger_seq DESC, rowid DESC LIMIT ?",
+                                (pointer_id, EVIDENCE_PAGE_ROWS)).fetchall()
+                        else:
+                            rows = conn.execute(
+                                "SELECT ledger_seq, rowid AS rid, payload_json FROM event_ledger "
+                                "WHERE kind='stage-evidence' AND event_id=? "
+                                "AND (ledger_seq < ? OR (ledger_seq = ? AND rowid < ?)) "
+                                "ORDER BY ledger_seq DESC, rowid DESC LIMIT ?",
+                                (pointer_id, cursor[0], cursor[0], cursor[1], EVIDENCE_PAGE_ROWS)).fetchall()
+                    elif cursor is None:
+                        rows = conn.execute(
+                            "SELECT ledger_seq, rowid AS rid, payload_json FROM event_ledger "
+                            "WHERE kind='stage-evidence' AND event_id IN "
+                            "(SELECT event_id FROM events WHERE memory_id=?) "
+                            "ORDER BY ledger_seq DESC, rowid DESC LIMIT ?",
+                            (pointer_id, EVIDENCE_PAGE_ROWS)).fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT ledger_seq, rowid AS rid, payload_json FROM event_ledger "
+                            "WHERE kind='stage-evidence' AND event_id IN "
+                            "(SELECT event_id FROM events WHERE memory_id=?) "
+                            "AND (ledger_seq < ? OR (ledger_seq = ? AND rowid < ?)) "
+                            "ORDER BY ledger_seq DESC, rowid DESC LIMIT ?",
+                            (pointer_id, cursor[0], cursor[0], cursor[1], EVIDENCE_PAGE_ROWS)).fetchall()
+                    if not rows:
+                        ended_early = True
+                        break
+                    pages += 1
+                    result['scanned'] += len(rows)
+                    for row in rows:
+                        try:
+                            payload = json.loads(row['payload_json'])
+                        except (ValueError, TypeError):
+                            continue
+                        if (isinstance(payload, dict) and payload.get('kind') == 'chat'
+                                and payload.get('role') == 'user'):
+                            verify(payload.get('message_id'), payload.get('text'))
+                    if result['origins']:
+                        ended_early = True
+                        break
+                    if len(rows) < EVIDENCE_PAGE_ROWS:
+                        ended_early = True
+                        break
+                    cursor = (rows[-1]['ledger_seq'], rows[-1]['rid'])
+                if not ended_early and not result['origins']:
+                    result['truncated'] = True
+                    result['unavailable'] = True
+                    result['reason'] = 'evidence_window_truncated'
 
             if memory_id and 'quotes' in tables:
-                quotes = [r[0] for r in conn.execute(
-                    "SELECT text FROM quotes WHERE memory_id=? AND speaker='user' ORDER BY ord LIMIT 50",
-                    (memory_id,),
-                ) if isinstance(r[0], str) and r[0].strip()]
+                quote_texts, quote_truncated, quote_found = set(), False, False
+                cursor = None
+                pages = 0
+                while pages < EVIDENCE_QUOTE_PAGES:
+                    if budget_stop():
+                        break
+                    if cursor is None:
+                        rows = conn.execute(
+                            "SELECT ord, rowid AS rid, text FROM quotes WHERE memory_id=? AND speaker='user' "
+                            "ORDER BY ord, rowid LIMIT 50", (memory_id,)).fetchall()
+                    else:
+                        rows = conn.execute(
+                            "SELECT ord, rowid AS rid, text FROM quotes WHERE memory_id=? AND speaker='user' "
+                            "AND (ord > ? OR (ord = ? AND rowid > ?)) "
+                            "ORDER BY ord, rowid LIMIT 50",
+                            (memory_id, cursor[0], cursor[0], cursor[1])).fetchall()
+                    if not rows:
+                        quote_found = True
+                        break
+                    pages += 1
+                    for row in rows:
+                        if isinstance(row['text'], str) and row['text'].strip():
+                            quote_texts.add(' '.join(row['text'].split()))
+                    if len(rows) < 50:
+                        quote_found = True
+                        break
+                    cursor = (rows[-1]['ord'], rows[-1]['rid'])
+                if pages >= EVIDENCE_QUOTE_PAGES and not quote_found:
+                    quote_truncated = True
                 # The quote projection has no message ID. A structured, live chat ref on
                 # this same memory can supply it; never search globally for similar text.
-                if quotes and 'sources' in tables:
-                    quote_texts = {' '.join(text.split()) for text in quotes}
-                    for row in conn.execute(
-                        "SELECT ref FROM sources WHERE memory_id=? AND kind='chat' "
-                        "AND (status IS NULL OR status IN ('', 'active', 'verified')) ORDER BY ord LIMIT 50",
-                        (memory_id,),
-                    ):
-                        ref = row[0]
-                        mid = ref.removeprefix('chat:') if isinstance(ref, str) else None
-                        raw = chat_index.get(mid)
-                        if raw and ' '.join(raw['text'].split()) in quote_texts:
-                            result['origins'].add(mid)
-                if quotes and not result['origins']:
-                    result['missing_origin'] = True
+                if quote_texts and 'sources' in tables:
+                    cursor = None
+                    pages = 0
+                    sources_ended = False
+                    while pages < EVIDENCE_SOURCE_PAGES:
+                        if budget_stop():
+                            break
+                        if cursor is None:
+                            rows = conn.execute(
+                                "SELECT ord, rowid AS rid, ref FROM sources WHERE memory_id=? AND kind='chat' "
+                                "AND (status IS NULL OR status IN ('', 'active', 'verified')) "
+                                "ORDER BY ord, rowid LIMIT 50", (memory_id,)).fetchall()
+                        else:
+                            rows = conn.execute(
+                                "SELECT ord, rowid AS rid, ref FROM sources WHERE memory_id=? AND kind='chat' "
+                                "AND (status IS NULL OR status IN ('', 'active', 'verified')) "
+                                "AND (ord > ? OR (ord = ? AND rowid > ?)) "
+                                "ORDER BY ord, rowid LIMIT 50",
+                                (memory_id, cursor[0], cursor[0], cursor[1])).fetchall()
+                        if not rows:
+                            sources_ended = True
+                            break
+                        pages += 1
+                        for row in rows:
+                            ref = row['ref']
+                            mid = ref.removeprefix('chat:') if isinstance(ref, str) else None
+                            raw, status = self._chat_lookup(mid, budget) if isinstance(mid, str) else (None, 'missing')
+                            if status == 'unavailable':
+                                result['unavailable'] = True
+                            elif raw and ' '.join(raw['text'].split()) in quote_texts:
+                                result['origins'].add(mid)
+                                result['infos'][mid] = raw
+                        if result['origins'] or len(rows) < 50:
+                            sources_ended = True
+                            break
+                        cursor = (rows[-1]['ord'], rows[-1]['rid'])
+                    if pages >= EVIDENCE_SOURCE_PAGES and not sources_ended:
+                        quote_truncated = True
+                if quote_texts and not result['origins']:
+                    if quote_truncated or (budget is not None and budget.expired()):
+                        result['truncated'] = True
+                        result['unavailable'] = True
+                        result.setdefault('reason', 'evidence_window_truncated')
+                    else:
+                        result['missing_origin'] = True
             return result
         except sqlite3.Error:
-            return {'exists': False, 'unavailable': True, 'missing_origin': False, 'origins': set()}
+            return {'exists': False, 'unavailable': True, 'missing_origin': False,
+                    'origins': set(), 'infos': {}, 'truncated': False, 'scanned': 0}
         finally:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
             conn.close()
 
-    def _evaluate_sources(self, sources, claim_text='', data=None, *, chat_index=None):
+    def _evaluate_sources(self, sources, claim_text='', data=None, *, chat_index=None, budget=None):
         """Unified strict evidence verification entry point.
 
         Distinguishes:
@@ -634,14 +1251,22 @@ class LearnedContext:
         3. Same-origin deduplication across direct chat: and indirect event:/memory: refs.
         4. Programmatic content support & whether Lan already vetoed/corrected this claim.
         """
+        if budget is None:
+            budget = _EvidenceBudget(self.evidence_budget_ms)
         if chat_index is None:
-            chat_index = self._chat_user_index()
+            chat_index = self._chat_user_index(budget)
         kept_refs, dropped, missing_refs, unverified_support = [], [], [], []
-        valid_origins, raw_origins, provenance = set(), set(), {}
-        any_unavailable = False
+        valid_origins, resolved_infos, provenance = set(), {}, {}
+        any_unavailable = chat_index is None
         for source in dict.fromkeys(s for s in (sources or []) if isinstance(s, str)):
             if not SOURCE_REF.fullmatch(source):
                 dropped.append(source)
+                continue
+            if budget.expired():
+                # Out of wall-clock budget: keep the reference unresolved instead of claiming
+                # it is missing. The caller degrades conservatively.
+                any_unavailable = True
+                kept_refs.append(source)
                 continue
             kind, _, value = source.partition(':')
             if kind == 'chat':
@@ -649,43 +1274,69 @@ class LearnedContext:
                     any_unavailable = True
                     kept_refs.append(source)
                     continue
-                if value not in chat_index:
+                info, status = self._chat_lookup(value, budget)
+                if status == 'unavailable':
+                    any_unavailable = True
+                    kept_refs.append(source)
+                    continue
+                if status != 'ok' or info is None:
                     dropped.append(source)
                     missing_refs.append(source)
                     continue
                 origins = {value}
+                resolved_infos[value] = info
             elif kind in ('event', 'memory'):
-                resolved = self._resolve_db_evidence(kind, value, chat_index)
+                if chat_index is None:
+                    any_unavailable = True
+                    kept_refs.append(source)
+                    continue
+                resolved = self._resolve_db_evidence(kind, value, chat_index, budget)
                 any_unavailable |= resolved['unavailable']
                 origins = resolved['origins']
-                if not resolved['unavailable'] and (not resolved['exists'] or resolved['missing_origin']):
+                resolved_infos.update(resolved.get('infos') or {})
+                if not resolved['unavailable'] and (not resolved['exists']
+                                                     or resolved['missing_origin']):
                     missing_refs.append(source)
             else:
                 kept_refs.append(source)  # long_task is for traceability only.
                 continue
             kept_refs.append(source)
             provenance[source] = sorted(origins)
-            raw_origins.update(origins)
             matched = set()
             for mid in origins:
-                info = chat_index[mid]
-                if _supports_claim(info['text'], claim_text, confirmation_target=info['confirmation_target']):
+                info = resolved_infos.get(mid)
+                if info is None:
+                    info, status = self._chat_lookup(mid, budget)
+                    if status == 'unavailable':
+                        any_unavailable = True
+                        continue
+                    if status != 'ok' or info is None:
+                        continue
+                    resolved_infos[mid] = info
+                if _supports_claim(info['text'], claim_text, confirmation_target=info.get('confirmation_target', '')):
                     matched.add(('chat', mid))
             valid_origins.update(matched)
-            if origins and not matched:
+            if origins and not matched and not any_unavailable:
                 unverified_support.append(source)
 
         rebutted = self._is_rebutted_by_lan(claim_text, data)
-        if not rebutted and valid_origins and chat_index and claim_text:
+        corrections = self._chat_corrections(budget)
+        corrections_unavailable = corrections is None
+        if corrections_unavailable:
+            # An unfinished correction scan is not "no rebuttal". Do not promote on a partial index.
+            any_unavailable = True
+            corrections = []
+        if not rebutted and not corrections_unavailable and valid_origins and chat_index is not None and claim_text:
             cited_times = [
-                chat_index[oid]['time']
+                resolved_infos[oid]['time']
                 for kind, oid in valid_origins
-                if kind == 'chat' and oid in chat_index and chat_index[oid].get('time')
+                if kind == 'chat' and oid in resolved_infos and resolved_infos[oid].get('time')
             ]
             if cited_times:
                 latest_cited = max(cited_times)
                 claim_tokens = _lexical_tokens(claim_text)
-                for mid, info in chat_index.items():
+                for info in corrections:
+                    mid = info['id']
                     if ('chat', mid) in valid_origins:
                         continue
                     mtime = info.get('time') or ''
@@ -697,7 +1348,7 @@ class LearnedContext:
 
         if rebutted:
             evidence_state = 'rebutted'
-        elif any_unavailable and not valid_origins:
+        elif corrections_unavailable or (any_unavailable and not valid_origins):
             evidence_state = 'unavailable'
         elif missing_refs and valid_origins:
             evidence_state = 'partial_stale'
@@ -717,15 +1368,20 @@ class LearnedContext:
             'unverified_support': unverified_support,
             'valid_origin_count': len(valid_origins),
             'raw_origins': [
-                {'id': 'chat:' + mid, 'text': chat_index[mid]['text'],
-                 **({'question': chat_index[mid]['question']} if 'question' in chat_index[mid] else {})}
-                for mid in sorted(raw_origins)
+                {'id': 'chat:' + mid, 'text': resolved_infos[mid]['text'],
+                 'seq': resolved_infos[mid].get('seq', 0),
+                 **({'question': resolved_infos[mid]['question']}
+                    if 'question' in resolved_infos[mid] else {})}
+                for mid in sorted(resolved_infos)
             ],
             'raw_provenance': provenance,
             'source_unavailable': any_unavailable or chat_index is None,
-            'chat_index': chat_index,
+            'chat_index': resolved_infos,
+            'chat_corrections': corrections,
+            'corrections_unavailable': corrections_unavailable,
             'evidence_state': evidence_state,
             'rebutted': rebutted,
+            'budget_exhausted': bool(budget is not None and budget.expired()),
         }
 
     def _is_rebutted_by_lan(self, claim_text, data, *, section=None):
@@ -809,8 +1465,13 @@ class LearnedContext:
         rows = {}
 
         def add(kind, text, identity):
-            if isinstance(text, str) and text.strip():
-                key = kind + ':' + _fingerprint(identity)
+            if not isinstance(text, str) or not text.strip():
+                return
+            # One counter per normalized proposition: the same veto repeated in several sections
+            # must not inflate a request. Identity is kept only for stability of the first source.
+            norm = _norm_text(text)
+            key = 'counter:' + _fingerprint([norm])
+            if key not in rows:
                 rows[key] = {'id': key, 'kind': kind, 'text': text}
 
         corrected_ids = set()
@@ -831,16 +1492,39 @@ class LearnedContext:
                     add('locked', other['text'], other['id'])
                 elif other['source'] == 'lan' and other['id'] in corrected_ids:
                     add('lan', other['text'], other['id'])
-        # Keep order by chat turn, including missing timestamps. Corrections are not selected by
-        # overlap with the candidate; a low-overlap paraphrase can still be a contradiction.
+        # Corrections are selected by turn order relative to the cited origin, not by overlap:
+        # a low-overlap paraphrase can still contradict. When the bounded index has evicted
+        # history, _chat_corrections has already reread the log or marked the pass unavailable.
         cited = {row['id'] for row in ev['raw_origins']}
-        after_origin = not cited
-        for mid, row in (ev['chat_index'] or {}).items():
-            if 'chat:' + mid in cited:
-                after_origin = True
-            elif after_origin and _REBUTTAL_CUE_RE.search(row['text']):
-                add('correction', row['text'], mid)
+        cited_seqs = [row.get('seq') or 0 for row in ev['raw_origins'] if row.get('seq')]
+        threshold = min(cited_seqs) if cited_seqs else 0
+        for row in ev.get('chat_corrections') or []:
+            if 'chat:' + row['id'] in cited:
+                continue
+            if (row.get('seq') or 0) > threshold and _REBUTTAL_CUE_RE.search(row.get('text') or ''):
+                add('correction', row['text'], row['id'])
         return [rows[key] for key in sorted(rows)]
+
+    def _select_counter_batch(self, item, ev, counters):
+        """(batch, index, count). The full set is kept until it no longer fits in one request."""
+        if len(counters) <= COUNTEREVIDENCE_LIMIT:
+            return list(counters), 0, 1
+        evidence_texts = [
+            row.get('text') for row in (ev.get('raw_origins') or [])
+            if isinstance(row, dict) and isinstance(row.get('text'), str)
+        ]
+        relevant = [
+            row for row in counters
+            if _counter_touches(row.get('text') or '', item.get('text') or '', evidence_texts)
+        ]
+        if not relevant:
+            return [], 0, 1
+        batch_count = (len(relevant) + COUNTEREVIDENCE_LIMIT - 1) // COUNTEREVIDENCE_LIMIT
+        raw_index = (item.get('verification') or {}).get('counter_batch') or 0
+        if type(raw_index) is not int or isinstance(raw_index, bool) or raw_index < 0 or raw_index >= batch_count:
+            raw_index = 0
+        start = raw_index * COUNTEREVIDENCE_LIMIT
+        return relevant[start:start + COUNTEREVIDENCE_LIMIT], raw_index, batch_count
 
     @staticmethod
     def _semantic_replacement_target(data, item):
@@ -858,10 +1542,16 @@ class LearnedContext:
             return 'manual', None, None
         if ev['rebutted'] or self._automatic_write_error(data, item['text'], source='evidence', previous=item):
             return 'contradicted', None, None
-        evidence = ev['raw_origins']
-        counters = self._semantic_counters(data, item, ev)
-        if _veto_grounded_in_origins(evidence, counters):
+        if ev.get('corrections_unavailable'):
+            return 'stale', None, None
+        # `seq` is local ordering metadata. It is not part of the receipt fingerprint: adding it
+        # would miss receipts saved before this field existed and send the same cognition to the
+        # model again.
+        evidence = _fingerprint_evidence(ev['raw_origins'])
+        all_counters = self._semantic_counters(data, item, ev)
+        if _veto_grounded_in_origins(evidence, all_counters):
             return 'contradicted', None, None
+        counters, batch_index, batch_count = self._select_counter_batch(item, ev, all_counters)
         known = item.get('verification') or {}
         if known.get('replaces') and self._semantic_replacement_target(data, item) is None:
             return 'stale', None, None
@@ -877,7 +1567,8 @@ class LearnedContext:
             return ('stale' if known else 'authority_unverified' if counters else 'none'), None, None
         payload = {
             'candidate': {'text': item['text'], 'kind': 'relationship'},
-            'evidence': evidence, 'counterevidence': counters,
+            'evidence': evidence,
+            'counterevidence': counters,
         }
         fingerprints = {
             'rule': rule,
@@ -885,6 +1576,11 @@ class LearnedContext:
             'evidence': evidence_fp,
             'counters': _fingerprint(counters),
         }
+        # Batch fields stay out of the single-request fingerprint so receipts saved before
+        # batching, and any set that still fits in one request, keep the same key.
+        if batch_count > 1:
+            fingerprints['batch'] = batch_index
+            fingerprints['batch_count'] = batch_count
         return 'pending', fingerprints, payload
 
     def _semantic_current(self, data, item, ev, rule):
@@ -903,7 +1599,7 @@ class LearnedContext:
             # an automatically confirmed entry current (even when uncited copies still exist).
             item['verification'] = {
                 'requested': requested, 'required': False,
-                'evidence': _fingerprint(ev['raw_origins']),
+                'evidence': _fingerprint(_fingerprint_evidence(ev['raw_origins'])),
             }
         if fingerprints is None:
             return state
@@ -918,13 +1614,18 @@ class LearnedContext:
             item.update(source='peter', status='uncertain')
         return receipt['state']
 
-    def _live_semantic_rows(self, data):
-        chat_index = self._chat_user_index()
+    def _live_semantic_rows(self, data, budget=None):
+        if budget is None:
+            budget = _EvidenceBudget(self.evidence_budget_ms)
+        chat_index = self._chat_user_index(budget)
         rule = self._semantic_rule()
         for item in data['relationship']['items']:
             if item['status'] == 'outdated' or item['source'] == 'lan' or item.get('locked'):
                 continue
-            ev = self._evaluate_sources(item.get('sources'), item['text'], data, chat_index=chat_index)
+            if budget.expired():
+                break
+            ev = self._evaluate_sources(item.get('sources'), item['text'], data,
+                                        chat_index=chat_index, budget=budget)
             yield item, ev, rule
 
     def pending_relationship_semantics(self):
@@ -935,7 +1636,8 @@ class LearnedContext:
             data = self._load()
             before = copy.deepcopy(data)
             tasks = {}
-            for item, ev, rule in self._live_semantic_rows(data):
+            budget = _EvidenceBudget(EVIDENCE_QUEUE_BUDGET_MS)
+            for item, ev, rule in self._live_semantic_rows(data, budget):
                 state, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
                 if state != 'pending':
                     continue
@@ -981,14 +1683,54 @@ class LearnedContext:
             if receipt['state'] not in allowed:
                 return False
             current = []
-            for item, ev, rule in self._live_semantic_rows(data):
-                _, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
-                if fingerprints is not None and _fingerprint(fingerprints) == key:
+            commit_without_recheck = False
+            budget = _EvidenceBudget(EVIDENCE_QUEUE_BUDGET_MS)
+            recorded = receipt.get('targets') if receipt['state'] == 'dispatched' else None
+            if isinstance(recorded, dict) and recorded:
+                by_id = {row['id']: row for row in data['relationship']['items']
+                         if isinstance(row, dict) and row.get('id')}
+                if any(by_id.get(iid) is None or by_id[iid].get('updated_at', '') != stamp
+                       for iid, stamp in recorded.items()):
+                    return False
+                chat_index = self._chat_user_index(budget)
+                rule = self._semantic_rule()
+                unchecked = False
+                basis_changed = False
+                for iid in recorded:
+                    item = by_id[iid]
+                    if budget.expired():
+                        unchecked = True
+                        break
+                    if item['status'] == 'outdated' or item['source'] == 'lan' or item.get('locked'):
+                        basis_changed = True
+                        break
+                    ev = self._evaluate_sources(item.get('sources'), item['text'], data,
+                                                chat_index=chat_index, budget=budget)
+                    if budget.expired() and (ev.get('source_unavailable') or not ev.get('raw_origins')):
+                        unchecked = True
+                        break
+                    state, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
+                    if fingerprints is None or _fingerprint(fingerprints) != key:
+                        basis_changed = True
+                        break
                     current.append((item, payload))
+                if basis_changed:
+                    return False
+                if unchecked:
+                    # The model call is already paid. Targets did not change, so keep the verdict
+                    # instead of leaving the receipt dispatched with no later retry.
+                    commit_without_recheck = True
+                    current = [(by_id[iid], {'evidence': [{'id': 'preserved'}]}) for iid in recorded]
+            else:
+                for item, ev, rule in self._live_semantic_rows(data, budget):
+                    _, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
+                    if fingerprints is not None and _fingerprint(fingerprints) == key:
+                        current.append((item, payload))
             if not current:
                 return False
             targets = {item['id']: item.get('updated_at', '') for item, _ in current}
-            if receipt['state'] == 'dispatched' and targets != receipt.get('targets'):
+            if (receipt['state'] == 'dispatched' and not commit_without_recheck
+                    and targets != receipt.get('targets')):
                 return False
             before = copy.deepcopy(data)
             if verdict is None:
@@ -1001,14 +1743,26 @@ class LearnedContext:
                     return True
                 receipt.update(state='budget', reason='budget_exhausted')
             else:
-                if verdict == 'supported' and not current[0][1]['evidence']:
+                if (verdict == 'supported' and not commit_without_recheck
+                        and not current[0][1]['evidence']):
                     verdict = 'insufficient'
+                batch_index = receipt.get('batch', 0)
+                batch_count = receipt.get('batch_count', 1)
+                # A cleared batch is not a promotion. The next pending scan judges the next
+                # slice; only the last clear batch, or a single request, may promote.
+                intermediate = (
+                    verdict == 'supported' and type(batch_index) is int and type(batch_count) is int
+                    and not isinstance(batch_index, bool) and batch_index + 1 < batch_count
+                )
                 receipt.update(state=verdict, reason=reason if reason in SEMANTIC_REASONS else verdict)
                 receipt.pop('targets', None)
                 now = _now()
                 for item, _ in current:
                     requested = (item.get('verification') or {}).get('requested', item['status'])
-                    if verdict == 'supported':
+                    if intermediate:
+                        item.setdefault('verification', {})['counter_batch'] = batch_index + 1
+                        item.update(source='peter', status='uncertain', evidence_state='none')
+                    elif verdict == 'supported':
                         previous = self._semantic_replacement_target(data, item)
                         if previous is not None:
                             previous.update(status='outdated', superseded_by=item['id'], updated_at=now)
@@ -1194,22 +1948,50 @@ class LearnedContext:
         projection['ongoing'] = '\n'.join(lines) or None
         return projection
 
-    def _apply_live_evidence_check(self, data):
-        """Evaluate current evidence health for active relationship items without mutating disk."""
+    def _apply_live_evidence_check(self, data, budget=None):
+        """Evaluate current evidence health for active relationship items without mutating disk.
+
+        One budget covers the whole pass. Items not reached are presented as unavailable, never as
+        verified or missing; locked/Lan items stay manual and are not rewritten here.
+        """
         block = data.get('relationship') or {}
         items = []
-        chat_index = self._chat_user_index() if block.get('items') else {}
+        if budget is None:
+            budget = _EvidenceBudget(self.evidence_budget_ms)
+        chat_index = self._chat_user_index(budget) if block.get('items') else {}
         rule = self._semantic_rule() if block.get('items') else ''
         for raw in block.get('items') or []:
             if not isinstance(raw, dict):
                 continue
             item = dict(raw)
             if item.get('status') in ('confirmed', 'uncertain'):
+                if budget.expired():
+                    item['semantic_state'] = 'unavailable'
+                    item['evidence_state'] = 'unavailable'
+                    item['budget_exhausted'] = True
+                    known = item.get('verification') or {}
+                    if (item.get('status') == 'confirmed' and item.get('source') == 'evidence'
+                            and not item.get('locked')):
+                        item['effective_status'] = 'uncertain'
+                        item['evidence_degraded'] = True
+                        # An unverified promotion must not stay in the relationship prompt as current.
+                        item['prompt_vetoed'] = True
+                    # A saved semantic veto must survive a later budget skip. Locked and Lan-authored
+                    # rows stay manual and are not marked vetoed here.
+                    if (known.get('was_contradicted') and not item.get('locked')
+                            and item.get('source') != 'lan'):
+                        item['prompt_vetoed'] = True
+                        item['evidence_degraded'] = True
+                    items.append(item)
+                    continue
                 sources = item.get('sources') or []
-                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data, chat_index=chat_index)
+                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data,
+                                            chat_index=chat_index, budget=budget)
                 state, key, payload = self._semantic_current(data, item, ev, rule)
                 receipt = block.get('semantic_receipts', {}).get(key, {})
                 item['semantic_state'] = state
+                if ev.get('budget_exhausted'):
+                    item['budget_exhausted'] = True
                 if receipt.get('reason'):
                     item['semantic_reason'] = receipt['reason']
                 if state == 'supported':
@@ -1218,7 +2000,8 @@ class LearnedContext:
                 elif state not in ('manual', 'literal', 'none'):
                     known = item.get('verification') or {}
                     item['effective_status'] = 'uncertain'
-                    item['prompt_vetoed'] = (state in ('contradicted', 'stale', 'authority_unverified')
+                    item['prompt_vetoed'] = (state in ('contradicted', 'stale', 'authority_unverified',
+                                                       'counterevidence_overflow')
                                               or bool((payload or {}).get('counterevidence'))
                                               or known.get('requested') == 'confirmed' or bool(known.get('replaces'))
                                               or bool(known.get('was_contradicted')))
@@ -1371,6 +2154,130 @@ class LearnedContext:
                     raise UserError(f'保存 {self.path.name} 及版本历史失败：{exc}。修改没有保存。') from exc
                 raise
             self._recover_storage_transaction()
+
+    @staticmethod
+    def _operation_identity(name, args, operation_id=None):
+        """(key or None, args fingerprint). The same arguments are not a retry.
+
+        An explicit idempotency_key wins. Otherwise the key is the tool-call identity threaded
+        from the chat loop. No identity means a new write: hashing the arguments would collapse
+        a deliberate second todo into a replay of the first.
+        """
+        explicit = args.get('idempotency_key') if isinstance(args, dict) else None
+        payload = {k: v for k, v in (args or {}).items() if k != 'idempotency_key'}
+        if isinstance(payload.get('sources'), list):
+            # Source order must not create a second write on retry.
+            payload['sources'] = sorted(str(item) for item in payload['sources'])
+        fingerprint = _fingerprint([name, payload])
+        if explicit is not None:
+            if not isinstance(explicit, str) or not explicit.strip() or len(explicit.strip()) > 100:
+                raise UserError('idempotency_key must be a non-empty string of at most 100 characters.')
+            return 'explicit:' + explicit.strip(), fingerprint
+        if operation_id is not None:
+            if not isinstance(operation_id, str) or not operation_id.strip() or len(operation_id.strip()) > 512:
+                raise UserError('operation_id must be a non-empty string of at most 512 characters.')
+            return 'call:' + operation_id.strip(), fingerprint
+        return None, fingerprint
+
+    @staticmethod
+    def _durable_idempotency_key(key):
+        text = str(key)
+        return text.startswith('explicit:') or text.startswith('call:')
+
+    @staticmethod
+    def _idempotent_guard_ok(data, guard):
+        """A replay is valid only while its result still matches current user-visible state.
+
+        Lan can delete, complete or edit the item after the first success. Returning the old
+        success then would claim a write that is no longer there, so the guard forces the retry
+        through normal admission (where deleted/completed text is vetoed).
+        """
+        if not isinstance(guard, dict) or not guard:
+            return True
+        kind = guard.get('kind')
+        if kind == 'section_append':
+            paragraph = guard.get('paragraph')
+            section = guard.get('section')
+            if section not in SECTIONS or not isinstance(paragraph, str) or not paragraph:
+                return False
+            body = (data.get(section) or {}).get('text', '')
+            parts = [_norm_text(part) for part in re.split(r'\n[ \t]*\n', body) if part.strip()]
+            return paragraph in parts
+        if kind == 'section_text':
+            text = guard.get('text')
+            section = guard.get('section')
+            if section not in SECTIONS or not isinstance(text, str) or not text:
+                return False
+            return _norm_text((data.get(section) or {}).get('text', '')) == text
+        if kind == 'ongoing_item':
+            row = next((item for item in (data.get('ongoing') or {}).get('items') or []
+                        if item.get('id') == guard.get('id')), None)
+            if row is None:
+                return False
+            if 'status' in guard and row.get('status') != guard.get('status'):
+                return False
+            if 'text' in guard and _norm_text(row.get('text')) != guard.get('text'):
+                return False
+            return True
+        if kind in ('relationship_item', 'relationship_refresh'):
+            row = next((item for item in (data.get('relationship') or {}).get('items') or []
+                        if item.get('id') == guard.get('id')), None)
+            if row is None or row.get('status') == 'outdated':
+                return False
+            if 'status' in guard and row.get('status') != guard.get('status'):
+                return False
+            if 'text' in guard and _norm_text(row.get('text')) != guard.get('text'):
+                return False
+            if 'sources' in guard:
+                current = sorted(str(source) for source in (row.get('sources') or []))
+                if current != list(guard.get('sources') or []):
+                    return False
+            return True
+        if kind == 'relationship_retired':
+            return any(row.get('id') == guard.get('id') and row.get('status') == 'outdated'
+                       for row in (data.get('relationship') or {}).get('items') or [])
+        return True
+
+    @classmethod
+    def _idempotent_result(cls, data, key, fingerprint):
+        block = data.get('idempotency') if isinstance(data, dict) else None
+        record = block.get(key) if isinstance(block, dict) else None
+        expired = data.get('idempotency_expired') if isinstance(data, dict) else None
+        if record is None and isinstance(expired, list) and key in expired:
+            raise UserError('该幂等键已过期，本次没有写入。请换一个新的幂等键。')
+        if not isinstance(record, dict):
+            return None
+        if record.get('args') != fingerprint:
+            raise UserError('该幂等键已用于不同参数；本次没有写入。')
+        if not cls._idempotent_guard_ok(data, record.get('guard')):
+            return None
+        result = record.get('result')
+        if isinstance(result, list) and len(result) == 3 and all(isinstance(x, str) for x in result):
+            return tuple(result)
+        return None
+
+    @staticmethod
+    def _remember_idempotent(data, key, fingerprint, result, guard=None):
+        block = data.setdefault('idempotency', {})
+        expired = data.setdefault('idempotency_expired', [])
+        if key in expired:
+            expired.remove(key)
+        block[key] = {'args': fingerprint, 'result': list(result), 'at': _now(),
+                      'guard': guard or {}}
+        legacy = [item for item in block if not LearnedContext._durable_idempotency_key(item)]
+        durable = [item for item in block if LearnedContext._durable_idempotency_key(item)]
+        if len(legacy) > IDEMPOTENCY_LIMIT:
+            for stale in sorted(legacy, key=lambda item: block[item].get('at', ''))[:len(legacy) - IDEMPOTENCY_LIMIT]:
+                block.pop(stale, None)
+        if len(durable) > EXPLICIT_IDEMPOTENCY_LIMIT:
+            overflow = sorted(durable, key=lambda item: block[item].get('at', ''))
+            overflow = overflow[:len(durable) - EXPLICIT_IDEMPOTENCY_LIMIT]
+            for stale in overflow:
+                block.pop(stale, None)
+                if stale not in expired:
+                    expired.append(stale)
+            if len(expired) > EXPLICIT_IDEMPOTENCY_LIMIT:
+                del expired[:-EXPLICIT_IDEMPOTENCY_LIMIT]
 
     def read_version_history(self):
         """Read the latest committed version rows, newest first, without initializing a file."""
@@ -1678,14 +2585,16 @@ class LearnedContext:
             changed = False
             now = _now()
             rule = self._semantic_rule() if items else ''
-            chat_index = self._chat_user_index() if items else {}
+            budget = _EvidenceBudget(EVIDENCE_QUEUE_BUDGET_MS)
+            chat_index = self._chat_user_index(budget) if items else {}
             for item in items:
                 if not isinstance(item, dict) or item.get('status') not in ('confirmed', 'uncertain'):
                     continue
                 sources = item.get('sources') or []
                 if not sources and item.get('source') != 'evidence':
                     continue
-                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data, chat_index=chat_index)
+                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data,
+                                            chat_index=chat_index, budget=budget)
                 semantic, _, _ = self._semantic_current(data, item, ev, rule)
                 evidence_state = ('valid' if semantic == 'supported' else
                                   'rebutted' if semantic == 'contradicted' else ev['evidence_state'])
@@ -1859,49 +2768,57 @@ class LearnedContext:
     # ---------- unified candidate submission contract (for P6-S6 / background consolidation) ----------
 
     def submit_candidate(self, section, text, *, status='uncertain', sources=(),
-                         replace_old_text=None, origin='consolidation'):
+                         replace_old_text=None, origin='consolidation', idempotency_key=None):
         """Unified governance entry point for S6 consolidation or automated candidate proposals.
 
         Always enforces 4-section independent budgets, strict evidence verification (no direct
         unverified `confirmed` writes), Lan `locked`/`vetoed` sovereignty, and atomic versioning.
         Returns `(message, state, tool_name)` identical to `invoke()`.
         """
+        extra = {} if idempotency_key is None else {'idempotency_key': idempotency_key}
         if section == 'ongoing':
             return self.invoke('ongoing_update', {
-                'action': 'add', 'text': text, 'sources': list(sources or ()),
+                'action': 'add', 'text': text, 'sources': list(sources or ()), **extra,
             })
         if replace_old_text is not None:
             return self.invoke('profile_replace', {
                 'section': section, 'old_text': replace_old_text, 'new_text': text,
-                'status': status, 'sources': list(sources or ()),
+                'status': status, 'sources': list(sources or ()), **extra,
             })
         return self.invoke('profile_append', {
-            'section': section, 'text': text, 'status': status, 'sources': list(sources or ()),
+            'section': section, 'text': text, 'status': status, 'sources': list(sources or ()), **extra,
         })
 
     # ---------- Peter's tools ----------
 
-    def invoke(self, name, args):
+    def invoke(self, name, args, operation_id=None):
         if not isinstance(args, dict):
             return 'arguments must be an object.', '被拒绝', name
         try:
             if name in ('profile_append', 'profile_replace'):
-                return self._invoke_profile(name, args)
+                return self._invoke_profile(name, args, operation_id)
             if name == 'ongoing_update':
-                return self._invoke_ongoing(args)
+                return self._invoke_ongoing(args, operation_id)
             return 'Unknown profile tool.', '被拒绝', name
         except UserError as exc:
             self._log_error(name, exc)
             return str(exc), '被拒绝', name
 
-    def _invoke_profile(self, name, args):
+    def _invoke_profile(self, name, args, operation_id=None):
         section = args.get('section') or 'facts'
         if section == 'relationship':
-            return self._invoke_relationship(name, args)
+            return self._invoke_relationship(name, args, operation_id)
         if section not in SECTIONS:
             return 'section must be facts, growth or relationship.', '被拒绝', name
         with self.lock:
             data = self._load()
+            try:
+                key, fingerprint = self._operation_identity(name, args, operation_id)
+                replayed = self._idempotent_result(data, key, fingerprint)
+            except UserError as exc:
+                return str(exc), '被拒绝', name
+            if replayed is not None:
+                return replayed
             before = data[section]['text']
             before_bytes = self._section_bytes(data, section)
             if name == 'profile_append':
@@ -1941,13 +2858,21 @@ class LearnedContext:
                     f'({over} over). Nothing was changed. Merge or shorten {section} first; '
                     f'other sections are unaffected.'
                 ), '被拒绝', name
-            self._commit_with_version(name, old_data, data)
-            return (
+            result = (
                 f'Saved. {section} is now {after_bytes} of {limit} bytes; '
                 f'it takes effect from the next request.'
             ), '成功', name
+            if name == 'profile_append':
+                guard = {'kind': 'section_append', 'section': section,
+                         'paragraph': _norm_text(candidate)}
+            else:
+                guard = {'kind': 'section_text', 'section': section, 'text': _norm_text(after)}
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result, guard=guard)
+            self._commit_with_version(name, old_data, data)
+            return result
 
-    def _invoke_relationship(self, name, args):
+    def _invoke_relationship(self, name, args, operation_id=None):
         """Ticket 422 / P6-S3: Peter updates the stable relationship base through unified governance."""
         requested = args.get('status') or 'uncertain'
         if requested not in ('confirmed', 'uncertain'):
@@ -1957,6 +2882,13 @@ class LearnedContext:
             return 'sources must be a list of strings.', '被拒绝', name
         with self.lock:
             data = self._load()
+            try:
+                key, fingerprint = self._operation_identity(name, args, operation_id)
+                replayed = self._idempotent_result(data, key, fingerprint)
+            except UserError as exc:
+                return str(exc), '被拒绝', name
+            if replayed is not None:
+                return replayed
             before = json.loads(json.dumps(data, ensure_ascii=False))
             before_bytes = self._section_bytes(data, 'relationship')
             block = data.setdefault('relationship', {'items': [], 'updated_at': ''})
@@ -1997,8 +2929,17 @@ class LearnedContext:
                             if state == 'literal':
                                 existing.update(source='evidence', status=requested, evidence_state='valid')
                             block['updated_at'] = now
+                            result = (f'Relationship evidence updated ({state}). Nothing duplicated.',
+                                      '成功', name)
+                            if key is not None:
+                                self._remember_idempotent(
+                                    data, key, fingerprint, result,
+                                    guard={'kind': 'relationship_refresh', 'id': existing['id'],
+                                           'status': existing.get('status'),
+                                           'text': _norm_text(existing.get('text')),
+                                           'sources': sorted(str(source) for source in existing.get('sources') or [])})
                             self._commit_with_version(name + '_refresh_evidence', before, data)
-                            return f'Relationship evidence updated ({state}). Nothing duplicated.', '成功', name
+                            return result
                     return (
                         f'Relationship note already exists ({existing["id"]}, {existing["status"]}, '
                         f'{existing["source"]}). Nothing duplicated.'
@@ -2126,10 +3067,26 @@ class LearnedContext:
                     f'relationship would be {after_bytes} bytes; the relationship limit is {limit} '
                     f'({over} over). Nothing was changed. Merge or retire outdated/low-priority items first.'
                 ), '被拒绝', name
+            result = (' '.join([message, *notes,
+                                f'relationship: {after_bytes} of {limit} bytes used.']), '成功', name)
+            if name == 'profile_append':
+                guard = {'kind': 'relationship_item', 'id': items[-1]['id'],
+                         'status': items[-1].get('status'),
+                         'text': _norm_text(items[-1].get('text')),
+                         'sources': sorted(str(source) for source in (items[-1].get('sources') or []))}
+            elif replacement is not None:
+                guard = {'kind': 'relationship_item', 'id': replacement['id'],
+                         'status': replacement.get('status'),
+                         'text': _norm_text(replacement.get('text')),
+                         'sources': sorted(str(source) for source in (replacement.get('sources') or []))}
+            else:
+                guard = {'kind': 'relationship_retired', 'id': previous['id']}
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result, guard=guard)
             self._commit_with_version(name, before, data)
-            return ' '.join([message, *notes, f'relationship: {after_bytes} of {limit} bytes used.']), '成功', name
+            return result
 
-    def _invoke_ongoing(self, args):
+    def _invoke_ongoing(self, args, operation_id=None):
         action = args.get('action')
         text = args.get('text')
         item_id = args.get('id')
@@ -2140,6 +3097,13 @@ class LearnedContext:
             return self._list_ongoing(args)
         with self.lock:
             data = self._load()
+            try:
+                key, fingerprint = self._operation_identity('ongoing_update', args, operation_id)
+                replayed = self._idempotent_result(data, key, fingerprint)
+            except UserError as exc:
+                return str(exc), '被拒绝', 'ongoing_update'
+            if replayed is not None:
+                return replayed
             before = json.loads(json.dumps(data, ensure_ascii=False))
             before_bytes = self._section_bytes(data, 'ongoing')
             items = data['ongoing']['items']
@@ -2204,8 +3168,17 @@ class LearnedContext:
                     f'({over} over). Nothing was changed.'
                 ), '被拒绝', 'ongoing_update'
             data['ongoing']['updated_at'] = now
+            result = (f'{message} ongoing: {after_bytes} of {limit} bytes used.',
+                      '成功', 'ongoing_update')
+            guard_id = item['id'] if action in ('update', 'complete', 'reopen') else items[-1]['id']
+            guarded = item if action in ('update', 'complete', 'reopen') else items[-1]
+            if key is not None:
+                self._remember_idempotent(data, key, fingerprint, result,
+                                          guard={'kind': 'ongoing_item', 'id': guard_id,
+                                                 'status': guarded.get('status'),
+                                                 'text': _norm_text(guarded.get('text'))})
             self._commit_with_version(f'ongoing_{action}', before, data)
-            return f'{message} ongoing: {after_bytes} of {limit} bytes used.', '成功', 'ongoing_update'
+            return result
 
     def _list_ongoing(self, args, limit=20):
         """Ticket 413: finished items are not injected, so he reads them on request, with the time."""

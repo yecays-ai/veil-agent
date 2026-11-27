@@ -14,6 +14,8 @@ TICK_SECONDS = 30
 MAX_INPUT_TOKENS = 16_000
 MAX_OUTPUT_TOKENS = 2_048
 MAX_RESPONSE_CHARS = 16_000
+# Some providers wrap JSON in a single Markdown fence despite response_format=json_object.
+_CODE_FENCE = chr(96) * 3
 
 
 def _contains_secret(*values):
@@ -72,7 +74,13 @@ def _ids(rows):
 def _verdict(output, evidence_ids, counter_ids):
     if not isinstance(output, str) or len(output) > MAX_RESPONSE_CHARS:
         raise ValueError('invalid response size')
-    result = json.loads(output, object_pairs_hook=_unique_object)
+    text = output.strip()
+    if text.startswith(_CODE_FENCE) and text.endswith(_CODE_FENCE):
+        newline = text.find('\n')
+        inner = text[newline + 1:-3].strip() if newline != -1 else ''
+        if inner:
+            text = inner
+    result = json.loads(text, object_pairs_hook=_unique_object)
     if not isinstance(result, dict) or result.keys() != {
         'verdict', 'supporting_evidence_ids', 'counterevidence',
     }:
