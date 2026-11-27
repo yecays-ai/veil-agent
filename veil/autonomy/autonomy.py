@@ -1099,6 +1099,76 @@ class AutonomyController:
         return (f'Recent chat:\n{recent}\nActive long task: {active_task}\n'
                 f'Previous wake focus: {focus or "(none)"}\nPrevious wake next step: {next_step or "(none)"}')[:600]
 
+    def _wake_situation(self, wake_reason=None):
+        """Structured, program-maintained wake state for leisure gating and association (P6-S6-2)."""
+        stamp = datetime.now().astimezone()
+        task = self.chat.long_tasks.read()
+        active_task = (task if task and task.get('status') != 'completed'
+                       and not self._task_is_stale(task, stamp) else None)
+        previous = activity_view(self.rows[-1]) if self.rows else None
+        prev_unconfirmed = (
+            sum(1 for item in (previous.get('tools') or [])
+                if isinstance(item, dict) and item.get('state') == '结果未确认')
+            if previous else 0
+        )
+        work_cp = getattr(self.chat, 'work_checkpoint', None)
+        inv_cp = getattr(self.chat, 'investigation_checkpoint', None)
+        has_work_cp = False
+        has_inv_cp = False
+        try:
+            if work_cp is not None and hasattr(work_cp, 'active'):
+                has_work_cp = bool(work_cp.active())
+            elif work_cp is not None and hasattr(work_cp, 'read'):
+                cp_data = work_cp.read()
+                has_work_cp = bool(isinstance(cp_data, dict) and cp_data.get('status') == 'active')
+        except Exception:
+            has_work_cp = False
+        try:
+            if inv_cp is not None and hasattr(inv_cp, 'active'):
+                has_inv_cp = bool(inv_cp.active())
+            elif inv_cp is not None and hasattr(inv_cp, 'read'):
+                inv_data = inv_cp.read()
+                has_inv_cp = bool(isinstance(inv_data, dict) and inv_data.get('status') == 'active')
+        except Exception:
+            has_inv_cp = False
+        thoughts = getattr(self.chat, 'thoughts', None)
+        thought_preview = ''
+        if thoughts is not None:
+            try:
+                rows = thoughts._read()
+                active_thoughts = [item.get('text', '') for item in rows
+                                   if isinstance(item, dict) and item.get('state') in ('kept', 'passing')
+                                   and item.get('text')]
+                thought_preview = ' ; '.join(active_thoughts[-3:])[:240]
+            except Exception:
+                thought_preview = ''
+        life_preview = ''
+        try:
+            from veil.life.life_state import state_text
+            life_preview = (state_text(life_rows=self.chat.life_records.read(),
+                                       today=stamp.date().isoformat(),
+                                       moods=self.chat.life_records.moods()) or '')[:240]
+        except Exception:
+            life_preview = ''
+        return {
+            'wake_kind': 'scheduled' if wake_reason else 'autonomy',
+            'scheduled_reason': wake_reason or '',
+            'has_active_long_task': bool(active_task),
+            'long_task_status': str((active_task or {}).get('status') or ''),
+            'long_task_title': str((active_task or {}).get('title') or '')[:120],
+            'has_pending_action': bool((active_task or {}).get('pending_action')),
+            'has_work_checkpoint': has_work_cp,
+            'has_investigation_checkpoint': has_inv_cp,
+            'previous_result': str((previous or {}).get('result') or ''),
+            'previous_unconfirmed_tools': prev_unconfirmed,
+            'previous_focus': _short_context_value((previous or {}).get('current_focus'), 120) if previous else '',
+            'previous_next_step': _short_context_value((previous or {}).get('next_step'), 120) if previous else '',
+            'has_thoughts': bool(thought_preview),
+            'thought_preview': thought_preview,
+            'has_life_state': bool(life_preview),
+            'life_preview': life_preview,
+        }
+
     def _threads_text(self):
         """Ticket 389: what actually happened across several wakes; facts only, never a request to continue."""
         if not self.chat.cfg.autonomy.get('threads', True) or len(self.rows) < 2:
@@ -1310,12 +1380,32 @@ class AutonomyController:
         self.chat.autonomy_message_lock = self.hub.cond
         try:
             before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+            wake_situation = self._wake_situation(wake_reason)
             with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
                 self.chat.long_tasks.begin_tool_run()
-                answer = self.chat.send(self._context(wake_reason), autonomy=True,
-                                        memory_query=self._recall_query())
+                try:
+                    answer = self.chat.send(self._context(wake_reason), autonomy=True,
+                                            memory_query=self._recall_query(),
+                                            wake_context=wake_situation)
+                except TypeError:
+                    answer = self.chat.send(self._context(wake_reason), autonomy=True,
+                                            memory_query=self._recall_query())
                 self._mark_missed_reported()
                 self.chat.apply_pending_recall()
+            from veil.brain.recall.leisure_association import audit_autonomy_output
+            record['output_audit'] = audit_autonomy_output(answer, self.chat.last_tool_summaries)
+            mem_debug = getattr(getattr(self.chat, 'memory', None), 'last_recall_debug', None)
+            if isinstance(mem_debug, dict) and isinstance(mem_debug.get('leisure_association'), dict):
+                la = mem_debug['leisure_association']
+                record['leisure_association'] = {
+                    'effective': bool(la.get('effective', False)),
+                    'wake_mode': str((la.get('wake_gate') or {}).get('mode') or la.get('context_mode') or ''),
+                    'is_leisure': bool((la.get('wake_gate') or {}).get('is_leisure', False)),
+                    'picked': list(la.get('picked') or []),
+                    'reason': str(la.get('reason') or ''),
+                    'similarity': la.get('similarity'),
+                    'meaning_bonus': la.get('meaning_bonus', 0.0),
+                }
             record['decision'] = answer.strip()[:1000]
             record['reason'] = answer.strip()[:1000]
             for line in answer.splitlines():

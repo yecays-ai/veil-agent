@@ -4005,7 +4005,11 @@ class Chat:
         try:
             return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
         finally:
-            delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
+            delivered = bool(
+                self.sent_messages
+                or getattr(self, 'reply_row_saved', False)
+                or (autonomy and getattr(self, 'autonomy_reply_delivered', False))
+            )
             req_id = getattr(self, '_turn_recall_request_id', '') or ''
             if self.memory is not None:
                 if delivered:
@@ -4082,7 +4086,7 @@ class Chat:
 
     def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None,
               persist_user=True, regeneration_parent_message_id=None, force_reply=False,
-              reply_later_batch=None, user_events=None, memory_query=None):
+              reply_later_batch=None, user_events=None, memory_query=None, wake_context=None):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -4120,6 +4124,7 @@ class Chat:
         self.last_reply_message_id = None
         self.last_reply_request_id = None
         self.reply_row_saved = False
+        self.autonomy_reply_delivered = False
         self.regeneration_parent_message_id = (regeneration_parent_message_id
                                                if isinstance(regeneration_parent_message_id, str)
                                                else None)
@@ -4148,9 +4153,18 @@ class Chat:
         defer_recall = bool(self.memory and not skip_recall
                             and getattr(self.memory, 'budgets_recall', None) is True)
         recall_context_kwargs = {'defer': True} if defer_recall else {}
-        recalled = (self.memory.context(recall_query, include_opening=opening_turn,
-                                        recent=self.history[-8:], **recall_context_kwargs, **recall_mode)
-                    if self.memory and not skip_recall else [])
+        if autonomy and isinstance(wake_context, dict):
+            recall_context_kwargs['wake_context'] = wake_context
+        if self.memory and not skip_recall:
+            try:
+                recalled = self.memory.context(recall_query, include_opening=opening_turn,
+                                               recent=self.history[-8:], **recall_context_kwargs, **recall_mode)
+            except TypeError:
+                recall_context_kwargs.pop('wake_context', None)
+                recalled = self.memory.context(recall_query, include_opening=opening_turn,
+                                               recent=self.history[-8:], **recall_context_kwargs, **recall_mode)
+        else:
+            recalled = []
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not skip_recall else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         memory_kinds = getattr(self.memory, 'last_context_kinds', {}) if self.memory and not skip_recall else {}
@@ -4746,6 +4760,8 @@ class Chat:
                 else:
                     raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
+            if autonomy and isinstance(reply, str) and reply.strip():
+                self.autonomy_reply_delivered = True
             if not autonomy and not self.reply_displayed:
                 self.last_reply_message_id = uuid.uuid4().hex
                 self.last_reply_request_id = request_id

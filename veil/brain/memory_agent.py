@@ -976,6 +976,8 @@ class Memory:
                 out['association_enabled'] = data['association_enabled']
             if type(data.get('association_contextual_enabled')) is bool:
                 out['association_contextual_enabled'] = data['association_contextual_enabled']
+            if type(data.get('leisure_association_enabled')) is bool:
+                out['leisure_association_enabled'] = data['leisure_association_enabled']
             return out
         except (OSError, ValueError):
             return {}
@@ -992,14 +994,22 @@ class Memory:
         eff = self.effective_recall_settings()
         enabled = bool(eff.get('association_enabled', True))
         contextual = bool(eff.get('association_contextual_enabled', False))
+        leisure = bool(eff.get('leisure_association_enabled', False))
         mode = 'disabled' if not enabled else ('contextual' if contextual else 'legacy')
+        leisure_effective = bool(enabled and leisure)
         return {
             'available': True,
             'enabled': enabled,
             'contextual_enabled': contextual,
+            'leisure_enabled': leisure,
+            'leisure_effective': leisure_effective,
             'effective_mode': mode,
             'min_similarity': float(eff.get('association_min_similarity', 0.52)),
             'pool_size': int(eff.get('association_pool_size', 32)),
+            'leisure_min_similarity': float(eff.get('leisure_association_min_similarity', 0.38)),
+            'leisure_min_importance': int(eff.get('leisure_association_min_importance', 5)),
+            'leisure_cooldown_turns': int(eff.get('leisure_association_cooldown_turns', 12)),
+            'leisure_pool_size': int(eff.get('leisure_association_pool_size', 36)),
             'persistence_path': self._association_switch_path(),
         }
 
@@ -1007,7 +1017,9 @@ class Memory:
         with self.mutex:
             current = self._load_association_switches()
             for key, value in updates.items():
-                if key in ('association_enabled', 'association_contextual_enabled') and type(value) is bool:
+                if (key in ('association_enabled', 'association_contextual_enabled',
+                            'leisure_association_enabled')
+                        and type(value) is bool):
                     current[key] = value
             self.store.replace(self._association_switch_path(), current)
             if isinstance(getattr(self, 'recall_settings', None), dict):
@@ -1019,6 +1031,9 @@ class Memory:
 
     def set_association_contextual_enabled(self, enabled):
         return self._save_association_switches(association_contextual_enabled=bool(enabled))
+
+    def set_leisure_association_enabled(self, enabled):
+        return self._save_association_switches(leisure_association_enabled=bool(enabled))
 
     def bind_recall_request(self, request_id):
         """P6-S5: bind the active turn's pending delivery/rollback state to an explicit request_id."""
@@ -1344,6 +1359,10 @@ class Memory:
                             'created': row['created'] or '', 'type': row['type'] or '',
                             'importance': row['importance'],
                             'pinned': 'true' if row['pinned'] else '',
+                            'why_remembered': row.get('why_remembered') or '',
+                            'last_active': row.get('last_active') or '',
+                            'effective_importance': row.get('effective_importance'),
+                            'dynamic_importance': row.get('dynamic_importance'),
                             'body': row['body'] or '', 'links': []}
             except Exception:
                 return {}
@@ -1546,6 +1565,7 @@ class Memory:
                 'relevant_ids': list(pending.get('relevant_ids') or []),
                 'association_ids': list(pending.get('association_ids') or []),
                 'carried_ids': list(pending.get('carried_ids') or []),
+                'wake_mode': str(pending.get('wake_mode') or ''),
                 'delivered': True,
                 'effective_used': None,
             }
@@ -1877,7 +1897,8 @@ class Memory:
                 self.retrieval_failure('experience_directory', exc)
         return lines
 
-    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False, defer=False):
+    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False,
+                wake_context=None, defer=False):
         """This turn's automatic memories. `wake` selects related context for an autonomous activity.
 
         Ticket 419: retrieval, dedup and cooldown run here; how many memories are sent and how much
@@ -1914,7 +1935,9 @@ class Memory:
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
             'association': {}, 'carried': [], 'retrieval': {}, 'degraded': '',
             # P6-S5: situational classification and explicit lifecycle separation for S6.
-            'context_signal': {}, 'lifecycle': {}, 'followup_released_reason': ''}
+            'context_signal': {}, 'lifecycle': {}, 'followup_released_reason': '',
+            # P6-S6-2: autonomous leisure association diagnostics (IDs/reasons only).
+            'leisure_association': {}, 'wake_mode': ''}
         recall_cfg = self.effective_recall_settings()
         ret_cfg = getattr(self, 'retrieval_settings', None) or {}
         explicit = asks_about_past(query) and not (rotate or wake)
@@ -2244,6 +2267,88 @@ class Memory:
                 # P6-S5: defer rotation.mark_association() to finish_recall() so a budget-dropped
                 # association never pollutes cooldown or streak state.
                 pending_association_key = choice['key']
+        elif wake:
+            # P6-S6-2: autonomous leisure natural association.
+            # Strict leisure gate blocks all work/task wakes (0 interference); idle leisure wakes
+            # reuse the multi-source long-tail pool, shared turn embedding similarity, personal
+            # meaning (`why_remembered`), long-term importance, and cooldown/dedup.
+            from veil.brain.recall.leisure_association import (
+                choose_leisure, classify_wake_mode, settings as leisure_settings,
+            )
+            lcfg = leisure_settings(recall_cfg)
+            gate = classify_wake_mode(wake_context, query=query, recent=recent)
+            self.last_recall_debug['wake_mode'] = gate['mode']
+            shown = {other for other, _ in kept}
+            association_dropped = []
+            pool_meta = {'source': 'skipped', 'refreshed': False, 'long_tail': 0, 'ordinary': 0}
+            visible_pool = []
+            considered = []
+            similarities = None
+            if lcfg['master_enabled'] and lcfg['enabled'] and gate['is_leisure']:
+                pool_rows, pool_meta = self._association_pool(limit=int(lcfg['pool_size']))
+                if not pool_rows and breath_blocks:
+                    pool_meta['source'] = 'opening_fallback'
+                    pool_rows = list(breath_blocks)
+                visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
+                missing_meta = [key for key, _ in visible_pool if key not in metas]
+                if missing_meta:
+                    metas.update(self._recall_meta(missing_meta))
+                for key, body in visible_pool:
+                    if key in shown:
+                        association_dropped.append({'id': key, 'reason': 'duplicate'})
+                    elif cooled(key):
+                        association_dropped.append({'id': key, 'reason': 'cooldown'})
+                    elif duplicate(key, kept):
+                        association_dropped.append({'id': key, 'reason': 'same_event'})
+                    else:
+                        considered.append((key, body))
+                if considered:
+                    qvec = getattr(self, '_turn_query_vector', None)
+                    if qvec is None and prefetched is not None:
+                        try:
+                            qvec = prefetched.result(timeout=0.05)
+                        except Exception:
+                            qvec = None
+                    if qvec is not None:
+                        similarities = self._association_similarities(qvec, [key for key, _ in considered])
+            previous = (self.rotation.previous_association()
+                        if hasattr(self.rotation, 'previous_association') else None)
+            choice = choose_leisure(
+                query, considered, metas, self.rotation.last, self.rotation.turn, shown,
+                recall_cfg, wake_context=wake_context, similarities=similarities,
+                recent=recent, previous=previous,
+            )
+            association_dropped.extend(choice['dropped'])
+            listed = association_dropped[:40]
+            leisure_diag = {
+                'mode': 'leisure',
+                'enabled': bool(lcfg['enabled']),
+                'master_enabled': bool(lcfg['master_enabled']),
+                'effective': bool(lcfg['master_enabled'] and lcfg['enabled']),
+                'wake_gate': choice['wake_gate'],
+                'pool_source': pool_meta.get('source', 'skipped'),
+                'pool_refreshed': bool(pool_meta.get('refreshed')),
+                'context_mode': choice.get('context_mode') or gate['mode'],
+                'similarity': choice.get('similarity'),
+                'meaning_bonus': choice.get('meaning_bonus', 0.0),
+                'candidates': len(visible_pool),
+                'from_importance': pool_meta.get('long_tail', 0),
+                'from_ordinary': pool_meta.get('ordinary', 0),
+                'from_drift': 0,
+                'picked': [choice['key']] if choice['key'] else [],
+                'dropped': listed,
+                'dropped_more': (max(0, len(association_dropped) - len(listed))
+                                 + int(choice.get('dropped_more') or 0)),
+                'reason': choice['reason'] or '',
+            }
+            self.last_recall_debug['association'] = dict(leisure_diag)
+            self.last_recall_debug['leisure_association'] = dict(leisure_diag)
+            if choice['key']:
+                kept.append((choice['key'],
+                             prompts.text('memory.association.leisure.label') + '\n' + choice['body']))
+                sources[choice['key']] = 'association'
+                kinds[choice['key']] = 'association'
+                pending_association_key = choice['key']
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
@@ -2475,6 +2580,7 @@ class Memory:
                                  if item.get('kind') in ('search', 'context', 'relevant', 'rotation')],
                 'association_ids': list(injected_assoc),
                 'carried_ids': [item['id'] for item in recall_items if item.get('source') == 'followup'],
+                'wake_mode': str(debug.get('wake_mode') or ''),
                 'recall_marks': recall_marks,
                 'association_marks': assoc_marks,
                 'has_association_rollback': has_assoc_rollback,

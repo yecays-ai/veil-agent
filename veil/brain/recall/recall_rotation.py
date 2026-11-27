@@ -41,6 +41,12 @@ DEFAULTS = {
     'association_contextual_enabled': False,
     'association_min_similarity': 0.52,
     'association_pool_size': 32,
+    # P6-S6-2: independent candidate switch for autonomous leisure natural association (default off).
+    'leisure_association_enabled': False,
+    'leisure_association_min_similarity': 0.38,
+    'leisure_association_min_importance': 5,
+    'leisure_association_cooldown_turns': 12,
+    'leisure_association_pool_size': 36,
 }
 EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})   # everything that joins an experience
 REPEAT_LINKS = frozenset({'same_event'})                                # the same thing twice: shown once
@@ -62,7 +68,7 @@ def settings(memory_cfg):
     if raw.get('enabled') is False:
         return {**result, 'cooldown_turns': 0, 'dedup': False, 'excerpt_chars': 0,
                 'random_chance': 0.0, 'rotation_candidates': 0, 'directory': False,
-                'association_enabled': False}
+                'association_enabled': False, 'leisure_association_enabled': False}
     for key in ('cooldown_turns', 'excerpt_chars', 'rotation_candidates'):
         value = raw.get(key)
         if type(value) is int and 0 <= value <= 10_000:
@@ -84,13 +90,21 @@ def settings(memory_cfg):
         result['association_enabled'] = raw['association_enabled']
     if type(raw.get('association_contextual_enabled')) is bool:
         result['association_contextual_enabled'] = raw['association_contextual_enabled']
+    if type(raw.get('leisure_association_enabled')) is bool:
+        result['leisure_association_enabled'] = raw['leisure_association_enabled']
     sim = raw.get('association_min_similarity')
     if type(sim) in (int, float) and 0.05 <= float(sim) <= 0.95:
         result['association_min_similarity'] = float(sim)
+    leisure_sim = raw.get('leisure_association_min_similarity')
+    if type(leisure_sim) in (int, float) and 0.05 <= float(leisure_sim) <= 0.95:
+        result['leisure_association_min_similarity'] = float(leisure_sim)
     for key, low, high in (('association_min_importance', 0, 10),
                            ('association_cooldown_turns', 0, 200),
                            ('association_light_chars', 8, 400),
-                           ('association_pool_size', 8, 128)):
+                           ('association_pool_size', 8, 128),
+                           ('leisure_association_min_importance', 0, 10),
+                           ('leisure_association_cooldown_turns', 0, 200),
+                           ('leisure_association_pool_size', 8, 128)):
         value = raw.get(key)
         if type(value) is int and low <= value <= high:
             result[key] = value

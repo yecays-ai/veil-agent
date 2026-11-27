@@ -277,6 +277,16 @@ _RECALL_DEFINITIONS = ConfigRegistry((
                      Scope.ROLE, ValueType.NUMBER, ApplyMode.NEXT_REQUEST, sensitive=False),
     ConfigDefinition('memory.recall.association_pool_size', '情境自然联想候选池上限',
                      Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.leisure_association_enabled', '自主闲暇自然联想（候选开关）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.leisure_association_min_similarity', '自主闲暇联想最低余弦相似度',
+                     Scope.ROLE, ValueType.NUMBER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.leisure_association_min_importance', '自主闲暇联想最低长期重要度',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.leisure_association_cooldown_turns', '自主闲暇联想冷却轮数',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.recall.leisure_association_pool_size', '自主闲暇联想候选池上限',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
 ))
 
 
@@ -332,5 +342,20 @@ def recall_config_overview(*, role_id: str, memory_cfg: Mapping | None = None,
         'memory.recall.association_pool_size': ConfigEvidence(
             role_id, _obs(rot_raw, 'association_pool_size', int(rot_cfg['association_pool_size'])),
             Observation(Source.RUNTIME, int(rot_eff.get('association_pool_size', 32)))),
+        'memory.recall.leisure_association_enabled': ConfigEvidence(
+            role_id, _obs(rot_raw, 'leisure_association_enabled', bool(rot_cfg['leisure_association_enabled'])),
+            Observation(Source.RUNTIME, bool(rot_eff.get('leisure_association_enabled', False)))),
+        'memory.recall.leisure_association_min_similarity': ConfigEvidence(
+            role_id, _obs(rot_raw, 'leisure_association_min_similarity', float(rot_cfg['leisure_association_min_similarity'])),
+            Observation(Source.RUNTIME, float(rot_eff.get('leisure_association_min_similarity', 0.38)))),
+        'memory.recall.leisure_association_min_importance': ConfigEvidence(
+            role_id, _obs(rot_raw, 'leisure_association_min_importance', int(rot_cfg['leisure_association_min_importance'])),
+            Observation(Source.RUNTIME, int(rot_eff.get('leisure_association_min_importance', 5)))),
+        'memory.recall.leisure_association_cooldown_turns': ConfigEvidence(
+            role_id, _obs(rot_raw, 'leisure_association_cooldown_turns', int(rot_cfg['leisure_association_cooldown_turns'])),
+            Observation(Source.RUNTIME, int(rot_eff.get('leisure_association_cooldown_turns', 12)))),
+        'memory.recall.leisure_association_pool_size': ConfigEvidence(
+            role_id, _obs(rot_raw, 'leisure_association_pool_size', int(rot_cfg['leisure_association_pool_size'])),
+            Observation(Source.RUNTIME, int(rot_eff.get('leisure_association_pool_size', 36)))),
     }
     return recall_config_registry().overview(role_id=role_id, evidence=evidence)
