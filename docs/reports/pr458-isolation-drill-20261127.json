@@ -1,0 +1,32 @@
+{
+  "conflict_file_intact": true,
+  "conflict_guard_aborted": true,
+  "conflict_guard_exit": 1,
+  "conflict_head": "25c9b3553c4e7ec887c331d944f6d3e4637e011a",
+  "conflict_head_unchanged": true,
+  "entrypoints": {
+    "backup_restore.py": 0,
+    "data_repair.py": 0,
+    "python -m veil": 0,
+    "veil_agent.py": 0,
+    "veil_brain.py": 0,
+    "web_agent.py": 0,
+    "web_launcher.py": 0
+  },
+  "new_commit": "25c9b3553c4e7ec887c331d944f6d3e4637e011a",
+  "new_layout_present": true,
+  "old_commit": "d78a8b7bc1af4c60e99f67880bf809df3fd3e314",
+  "old_layout_restored": true,
+  "old_root_web_agent": true,
+  "os": "Windows",
+  "python": "3.12.10",
+  "rollback_data_unchanged": true,
+  "rollback_exit": 0,
+  "rollback_head": "d78a8b7bc1af4c60e99f67880bf809df3fd3e314",
+  "rollback_ok": true,
+  "synthetic_files": 5,
+  "tool": "pr458-isolation-drill",
+  "upgrade_after_sha256": "3d2323e0e19dfe74a40187364a5c855c4265f91bcec3e08cb02386c4e167e6a5",
+  "upgrade_before_sha256": "3d2323e0e19dfe74a40187364a5c855c4265f91bcec3e08cb02386c4e167e6a5",
+  "upgrade_data_unchanged": true
+}

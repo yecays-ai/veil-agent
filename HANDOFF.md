@@ -1,20 +1,23 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T09:15:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（未合并、未部署正式目录）
+> 更新时间：2026-11-27T11:30:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复，待独立复审；未合并、未部署正式目录）
 
 ## 当前停点
 
 - **本单（工单 458 · 仓库目录结构重整）**：
   - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
-  - 根目录保留 5 个 `__main__` 过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`）。
+  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
   - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
   - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
+  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
+  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
+  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md) 与同名 JSON；只使用合成数据。
   - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
-- **状态**：待完成隔离环境全链路演练、推送 PR、CI 与实质性审查后停手等 Lan 决定合并。
+- **状态**：F1–F11 集中修复完成，隔离演练通过，待推送 CI 与独立复审；未合并、未部署。
 
 ## 下一个窗口第一步
 
-1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，在合并最新 `main` 后运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --rewrite` 自动改写该分支 import。
+1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，先在该分支的隔离副本运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --check`，确认无目标冲突后再运行 `--all --move --rewrite`；工具会先改写、再移动、生成兼容入口，并在失败时恢复原文件。
 2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
 3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 
