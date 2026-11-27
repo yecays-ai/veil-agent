@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import desktop_files
-from desktop_files import DesktopFileReadTools, MAX_READ_BYTES
-from tools_agent import tool_policy
-from veil_agent import load_character
-from windows_observer import observation_image_message
+from veil.tools import desktop_files
+from veil.tools.desktop_files import DesktopFileReadTools, MAX_READ_BYTES
+from veil.tools.tools_agent import tool_policy
+from veil.core.veil_agent import load_character
+from veil.windows.windows_observer import observation_image_message
 
 
 class DesktopFileReadTests(unittest.TestCase):

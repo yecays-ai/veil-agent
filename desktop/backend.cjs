@@ -7,12 +7,28 @@ function pythonPath(root) {
   return process.env.VEIL_PYTHON || path.join(root, '.venv/Scripts/python.exe');
 }
 
+async function hasPackageLayout(root) {
+  try {
+    await Promise.all([
+      path.join(root, 'veil', 'server', 'web_launcher.py'),
+      path.join(root, 'veil', 'server', 'web_agent.py'),
+    ].map(file => fs.access(file)));
+    return true;
+  } catch { return false; }
+}
+
+async function hasLegacyLayout(root) {
+  try {
+    await Promise.all(['web_launcher.py', 'web_agent.py'].map(file => fs.access(path.join(root, file))));
+    return true;
+  } catch { return false; }
+}
+
 async function validRoot(root) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) return false;
   try {
-    await Promise.all(['web_launcher.py', 'web_agent.py'].map(file => fs.access(path.join(root, file))));
     await fs.access(pythonPath(root));
-    return true;
+    return (await hasPackageLayout(root)) || (await hasLegacyLayout(root));
   } catch { return false; }
 }
 
@@ -36,10 +52,16 @@ async function readEndpoint(root, { requireReady = true } = {}) {
   } catch { return null; }
 }
 
-function launch(root) {
+async function launchArgs(root) {
+  return (await hasPackageLayout(root))
+    ? ['-m', 'veil.server.web_launcher', '--no-browser']
+    : [path.join(root, 'web_launcher.py'), '--no-browser'];
+}
+
+async function launch(root) {
+  const args = await launchArgs(root);
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath(root),
-      [path.join(root, 'web_launcher.py'), '--no-browser'], {
+    const child = spawn(pythonPath(root), args, {
         cwd: root, windowsHide: true, stdio: 'ignore', shell: false,
         env: { ...process.env, PYTHONUTF8: '1' }
       });
@@ -63,4 +85,4 @@ async function connect(root, launcher = launch) {
   return endpoint;
 }
 
-module.exports = { validRoot, readEndpoint, connect };
+module.exports = { validRoot, readEndpoint, connect, launchArgs };

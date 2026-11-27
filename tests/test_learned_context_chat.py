@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 
 
 CONFIG = '''name = "Test"

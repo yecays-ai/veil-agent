@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_types import UserError
-from pending_approvals import PendingApprovals
+from veil.core.agent_types import UserError
+from veil.tools.pending_approvals import PendingApprovals
 
 
 class PendingApprovalsTests(unittest.TestCase):

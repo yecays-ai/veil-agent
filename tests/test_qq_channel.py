@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from away_bridge import AwayBridge
-from qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
-from web_agent import Hub
+from veil.integrations.away_bridge import AwayBridge
+from veil.integrations.qq_channel import QQ_PREFIX, IdleClock, QQChannel, QQUnavailable, clipboard_bytes, comparable, new_messages, parse_chat
+from veil.server.web_agent import Hub
 
 
 SETTINGS = {'enabled': True, 'poll_seconds': 20, 'idle_seconds': 120, 'daily_max_sent': 3}
@@ -125,7 +125,7 @@ class IdleClockTests(unittest.TestCase):
 
 
     def test_input_made_by_another_part_of_veil_is_not_lan(self):
-        from desktop_access import program_input_made, register_input_tracker
+        from veil.windows.desktop_access import program_input_made, register_input_tracker
         now = [100_000]
         last = [100_000]
         clock = IdleClock(lambda: last[0], lambda: now[0])
@@ -254,7 +254,7 @@ class QQChannelTests(unittest.TestCase):
     def test_missing_component_is_reported_not_silent(self):
         import sys
         from unittest.mock import patch
-        from qq_channel import QQWindow
+        from veil.integrations.qq_channel import QQWindow
         self.channel.ui = QQWindow('Lan')
         hub = Hub('Peter', SimpleNamespace(enabled=lambda: False))
         bridge = AwayBridge(self.channel, hub)

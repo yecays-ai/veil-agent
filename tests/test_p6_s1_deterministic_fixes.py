@@ -20,13 +20,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import brain_retrieval
-import brain_writer
-import veil_brain
-from brain_read import BrainRead
-from memory_agent import Memory
-from recall_judge import DEFAULTS as JUDGE_DEFAULTS, JudgeFailed, RecallJudge, card_text, split_card
-from veil_agent import Budget, Character, Store
+from veil.brain.recall import brain_retrieval
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.storage.brain_read import BrainRead
+from veil.brain.memory_agent import Memory
+from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS, JudgeFailed, RecallJudge, card_text, split_card
+from veil.core.veil_agent import Budget, Character, Store
 
 CRLF_RAW = ('---\r\nid: old\r\ntitle: 老记忆\r\nimportance: 8\r\ntags:\r\n- 那年\r\n---\r\n'
             '开头一句关于蓝色玩笑的内容。' + '中间是一段很长很长的对话。' * 5 + '结尾是那只蓝色风筝。\r\n'
@@ -229,7 +229,7 @@ class ConfigAndDateTests(BrainFixture):
         def fake_search_text(db_path, query, limit=8, embedder=None, settings=None, **kwargs):
             captured.update({'query': query, 'limit': limit, 'settings': settings, **kwargs})
             return 'ok', {'ids': []}
-        with patch('brain_retrieval.search_text', fake_search_text):
+        with patch('veil.brain.recall.brain_retrieval.search_text', fake_search_text):
             self.assertEqual(authority.breath_search(
                 'q', 5, CountingEmbedder([1.0], 'model-a'), date_from='2026-11-01',
                 date_to='2026-11-30'), 'ok')

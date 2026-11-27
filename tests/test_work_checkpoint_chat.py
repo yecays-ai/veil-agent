@@ -5,8 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
-from agent_types import now
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.agent_types import now
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 
 
 def system_text(messages):

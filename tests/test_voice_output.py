@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Budget, Character, Chat, Store, make_voice, self_facts
-from voice_output import (MiniMaxVoice, VoiceConfig, VoiceError, billed_characters,
+from veil.core.veil_agent import Budget, Character, Chat, Store, make_voice, self_facts
+from veil.chat.voice_output import (MiniMaxVoice, VoiceConfig, VoiceError, billed_characters,
                           load_voice_config)
 
 

@@ -33,17 +33,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 
-import brain_authority
-import brain_backup
-import brain_events
-import brain_writer
-import veil_brain
-from brain_authority import BrainAuthority, ProjectionConflict
-from event_memory import EventMemory, facts
-from experience_memory import ExperienceMemory
-from memory_agent import Memory
-from memory_native import NativeMemoryTools
-from veil_agent import Budget, Character, Store
+from veil.brain.storage import brain_authority
+from veil.brain.storage import brain_backup
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.storage.brain_authority import BrainAuthority, ProjectionConflict
+from veil.brain.event_memory import EventMemory, facts
+from veil.brain.experience_memory import ExperienceMemory
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools
+from veil.core.veil_agent import Budget, Character, Store
 from test_p6_s2_write_and_recovery import _init_db, _seed_event, _seed_memory
 
 
@@ -103,7 +103,7 @@ class TestDateAndNumberFacts(unittest.TestCase):
 
 class TestAccumulatedStory(unittest.TestCase):
     def test_each_merge_keeps_earlier_facts(self):
-        from event_memory import EventMemory as EM
+        from veil.brain.event_memory import EventMemory as EM
         em = EM.__new__(EM)
         em.settings = {'story_batch_chars': 12000}
         em.cfg = SimpleNamespace(persona='')

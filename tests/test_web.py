@@ -16,10 +16,10 @@ from pathlib import Path
 from dataclasses import replace
 from unittest.mock import Mock, patch
 
-from veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
+from veil.core.veil_agent import (ActivityState, Budget, Chat, Store, UserError, collapse_latest_photo,
                         estimate_request_tokens, load_character, run_chat)
-from web_agent import Hub, clean_voice_transcript, serve_chat, start_server, voice_transport_category
-from tools_agent import FilesystemTools
+from veil.server.web_agent import Hub, clean_voice_transcript, serve_chat, start_server, voice_transport_category
+from veil.tools.tools_agent import FilesystemTools
 
 TOKEN = 'test-token'
 
@@ -240,7 +240,7 @@ output_cny_per_million = "8"
         reopened_hub = Hub('Test', ActivityState(self.store.root / 'test' / 'reopen-state.json'),
                            media_root=self.store.root / 'test' / 'media')
         reopened_chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
-        with patch('web_agent.run_chat'):
+        with patch('veil.server.web_agent.run_chat'):
             serve_chat(reopened_chat, reopened_hub)
         replayed = next(event for event in reopened_hub.events if event['kind'] == 'assistant')
 
@@ -267,7 +267,7 @@ output_cny_per_million = "8"
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
         self.hub.busy = False
         email = SimpleNamespace(name='email', label='Email')
-        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+        with patch('veil.server.web_agent.run_chat'), patch('veil.integrations.away_bridge.AwayBridge.start'), \
                 patch.object(self.hub, 'request_stop'):
             serve_chat(chat, self.hub, channels=(email,))
         email_bridge = self.hub.away[-1]
@@ -294,7 +294,7 @@ output_cny_per_million = "8"
             'request_id': 'edit-request', 'message_id': 'edit-message'})
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model, output=self.hub.output)
         self.hub.busy = False
-        with patch('web_agent.run_chat'), patch('away_bridge.AwayBridge.start'), \
+        with patch('veil.server.web_agent.run_chat'), patch('veil.integrations.away_bridge.AwayBridge.start'), \
                 patch.object(self.hub, 'request_stop'):
             serve_chat(chat, self.hub, channels=())
         self.hub.busy = False
@@ -324,7 +324,7 @@ output_cny_per_million = "8"
                 category, reason = voice_transport_category(exc)
                 self.assertEqual(category, expected_category)
                 self.assertEqual(type(reason).__name__, expected_type)
-        with patch('web_agent.getproxies', return_value={'https': 'http://fictional-proxy.invalid:8080'}):
+        with patch('veil.server.web_agent.getproxies', return_value={'https': 'http://fictional-proxy.invalid:8080'}):
             category, reason = voice_transport_category(urllib.error.URLError(socket.gaierror(11001, 'lookup failed')))
         self.assertEqual(category, 'proxy')
         self.assertEqual(type(reason).__name__, 'gaierror')
@@ -344,7 +344,7 @@ output_cny_per_million = "8"
             def __exit__(self, *_): return False
             def read(self): return '{"text":"Recognized words😞"}'.encode()
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', return_value=Response()):
+                'veil.server.web_agent.urlopen', return_value=Response()):
             transcript, error = self.hub.transcribe_voice_bytes(b'fictional audio', 'audio/wav')
         self.assertEqual((transcript, error), ('Recognized words', None))
 
@@ -374,7 +374,7 @@ output_cny_per_million = "8"
         self.assertIn('旧聊天保留', event['text'])
 
     def test_trace_lines_become_trace_events_not_notices(self):
-        from tools_agent import TraceLine
+        from veil.tools.tools_agent import TraceLine
         self.hub.output(TraceLine('先想想', 'thought', 'req-1', 3.2))
         self.hub.output(TraceLine('🔧 Peter 用了 web_search：x（成功）', 'tool', 'req-1', 4.0))
         events = self.hub.snapshot(0)['events'][-2:]
@@ -459,7 +459,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}}, token='wrong')[0], 403)
         # Ticket 456 review: an edit without a concurrency token is refused, never written blindly.
         self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'}})[0], 400)
-        with patch('brain_p4_api.memory_sha256', return_value='a' * 64):
+        with patch('veil.brain.brain_p4_api.memory_sha256', return_value='a' * 64):
             self.assertEqual(self.call('/api/memory/edit', {'id': 'fixture-id', 'changes': {'title': 'New'},
                                                            'expected_sha256': 'a' * 64}),
                              (200, {'ok': True, 'message': 'saved'}))
@@ -535,7 +535,7 @@ output_cny_per_million = "8"
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'expiring-state.json'),
                   media_root=media_root)
         png = b'\x89PNG\r\n\x1a\nfictional'
-        with patch('web_agent.MAX_PENDING_MEDIA', 1), patch('web_agent.time.monotonic') as clock:
+        with patch('veil.server.web_agent.MAX_PENDING_MEDIA', 1), patch('veil.server.web_agent.time.monotonic') as clock:
             clock.return_value = 10
             first = hub.save_media('image/png', png, 'first.png')
             self.assertIsNotNone(first)
@@ -663,7 +663,7 @@ output_cny_per_million = "8"
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
         self.assertNotIn(media_id, {row.get('media', {}).get('id') for row in chat.history_events
                                     if isinstance(row.get('media'), dict)})
-        with patch('web_agent.run_chat', return_value=None):
+        with patch('veil.server.web_agent.run_chat', return_value=None):
             serve_chat(chat, self.hub)
 
         self.assertFalse(any(event.get('media', {}).get('id') == media_id for event in self.hub.events
@@ -679,7 +679,7 @@ output_cny_per_million = "8"
         reopened = Hub('Test', ActivityState(self.store.root / 'test' / 'unsent-voice-state.json'),
                        media_root=self.store.root / 'test' / 'media')
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
-        with patch('web_agent.run_chat', return_value=None):
+        with patch('veil.server.web_agent.run_chat', return_value=None):
             serve_chat(chat, reopened)
         pushed = {event['media']['id'] for event in reopened.events if isinstance(event.get('media'), dict)}
         for gone in (silent, failed):
@@ -752,7 +752,7 @@ output_cny_per_million = "8"
         manager.cap_path = self.store.root / 'test' / 'capabilities.json'
         manager.capability_event = manager.capability_event_model = None
         manager.enabled = True
-        with patch('tools_agent.save_capabilities', side_effect=OSError('fictional')):
+        with patch('veil.tools.tools_agent.save_capabilities', side_effect=OSError('fictional')):
             self.assertFalse(manager.announce_photo_input())
         self.assertTrue(manager.enabled)
 
@@ -773,7 +773,7 @@ output_cny_per_million = "8"
             self.assertTrue(self.wait(lambda: self.hub.ready and not self.hub.busy))
             body = {'mime': 'audio/webm', 'name': 'voice.webm',
                     'data': base64.b64encode(raw).decode(), 'send_first': True}
-            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('web_agent.urlopen', side_effect=transcribe):
+            with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch('veil.server.web_agent.urlopen', side_effect=transcribe):
                 status, uploaded = self.call('/api/voice', body)
                 self.assertEqual(status, 202)
                 self.assertEqual(uploaded['media']['transcript'], '')
@@ -806,7 +806,7 @@ output_cny_per_million = "8"
             def __exit__(self, *_): return False
             def read(self): return b'{"text":"web transcript"}'
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', return_value=Response()):
+                'veil.server.web_agent.urlopen', return_value=Response()):
             status, result = self.call('/api/voice', {
                 'mime': 'audio/webm', 'name': 'voice.webm',
                 'data': base64.b64encode(raw).decode()})
@@ -818,7 +818,7 @@ output_cny_per_million = "8"
         raw = b'\x1a\x45\xdf\xa3fictional webm audio'
         media = self.hub.save_voice('audio/webm', raw, 'voice.webm')
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', side_effect=urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed'))):
+                'veil.server.web_agent.urlopen', side_effect=urllib.error.URLError(socket.gaierror(11001, 'getaddrinfo failed'))):
             transcript, error = self.hub.transcribe_voice(media['id'])
         self.assertIsNone(transcript)
         self.assertIn('DNS', error)
@@ -836,7 +836,7 @@ output_cny_per_million = "8"
             def read(self): return b'{"text":"hello after retry"}'
 
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', return_value=Response()):
+                'veil.server.web_agent.urlopen', return_value=Response()):
             status, result = self.call('/api/voice/retry', {'media_id': media['id']})
         self.assertEqual(status, 200)
         self.assertEqual(result['transcript'], 'hello after retry')
@@ -857,7 +857,7 @@ output_cny_per_million = "8"
                 raise TimeoutError('fictional transcription gate timed out')
             return Response()
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', side_effect=transcribe) as request:
+                'veil.server.web_agent.urlopen', side_effect=transcribe) as request:
             self.hub.start_voice_transcription(media['id'])
             self.assertTrue(started.wait(2), 'background transcription did not start')
             def retry():
@@ -890,7 +890,7 @@ output_cny_per_million = "8"
                 raise TimeoutError('fictional transcription gate timed out')
             return Response()
         with patch('dotenv.dotenv_values', return_value={'EMBED_API_KEY': 'fictional'}), patch(
-                'web_agent.urlopen', side_effect=transcribe) as request:
+                'veil.server.web_agent.urlopen', side_effect=transcribe) as request:
             jobs = [self.hub.start_voice_transcription(media['id']) for media in medias[:4]]
             self.assertTrue(all_started.wait(5), 'four background workers did not start')
             rejected = self.hub.start_voice_transcription(medias[4]['id'])
@@ -992,7 +992,7 @@ output_cny_per_million = "8"
         chat = Chat(self.cfg, self.store, Budget(self.store), self.model)
         def fake_loop(actual_chat, **_kwargs):
             actual_chat.send('fictional capability question')
-        with patch('web_agent.run_chat', side_effect=fake_loop):
+        with patch('veil.server.web_agent.run_chat', side_effect=fake_loop):
             serve_chat(chat, self.hub)
         model_messages = self.model.call_args.args[0]
         self.assertFalse(any(item['content'].startswith('CURRENT CAPABILITIES') for item in model_messages))
@@ -1068,7 +1068,7 @@ output_cny_per_million = "8"
 
     def test_submission_deduplication_window_is_bounded(self):
         hub = Hub('Test', ActivityState(self.store.root / 'test' / 'other-state.json'))
-        with patch('web_agent.MAX_SUBMISSIONS', 2):
+        with patch('veil.server.web_agent.MAX_SUBMISSIONS', 2):
             for text, request_id in (('one', 'one'), ('two', 'two')):
                 hub.busy = False
                 self.assertEqual(hub.submit(text, request_id), 'accepted')
@@ -1153,7 +1153,7 @@ output_cny_per_million = "8"
         self.assertFalse(reopened.enabled())
 
     def test_activity_availability_transitions_are_dated_in_capability_history(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
         manager = FilesystemTools.__new__(FilesystemTools)
         manager.cap_path = self.store.root / 'test' / 'capabilities.json'
         toolset = SimpleNamespace(tools=[], files=manager, description='Fictional tools.',
@@ -1381,7 +1381,7 @@ output_cny_per_million = "8"
         self.assertEqual(result['a'], 'cancel')
 
     def test_open_approval_times_out_with_a_distinct_result(self):
-        with patch('web_agent.APPROVAL_WAIT_SECONDS', 0):
+        with patch('veil.server.web_agent.APPROVAL_WAIT_SECONDS', 0):
             self.assertEqual(self.hub.approval('approve me'), 'timeout')
         self.assertIsNone(self.hub.pending)
         self.assertTrue(any(e['kind'] == 'notice' and '超时' in e['text'] for e in self.hub.events))
@@ -1433,8 +1433,8 @@ output_cny_per_million = "8"
         hub.chat = chat
 
         # Simulate the startup recovery block
-        from web_agent import serve_chat
-        with patch('web_agent.run_chat'):
+        from veil.server.web_agent import serve_chat
+        with patch('veil.server.web_agent.run_chat'):
             serve_chat(chat, hub)
 
         self.assertFalse(hub.inbox.empty())
@@ -1447,7 +1447,7 @@ output_cny_per_million = "8"
 
 class StartupErrorTests(unittest.TestCase):
     def test_service_environment_refreshes_stale_windows_path(self):
-        import web_launcher
+        from veil.server import web_launcher
 
         class RegistryKey:
             def __init__(self, path):
@@ -1477,7 +1477,7 @@ class StartupErrorTests(unittest.TestCase):
                          r'C:\Windows\System32;E:\Program Files;C:\Users\test\AppData\Roaming\npm;C:\stale')
 
     def test_launcher_waits_until_chat_loop_is_ready(self):
-        import web_launcher
+        from veil.server import web_launcher
         with tempfile.TemporaryDirectory() as tmp:
             hub = Hub('Test', ActivityState(Path(tmp) / 'state.json'))
             port = free_port()
@@ -1498,7 +1498,7 @@ class StartupErrorTests(unittest.TestCase):
 
     def test_launcher_uses_old_events_endpoint_for_an_older_running_service(self):
         import io
-        import web_launcher
+        from veil.server import web_launcher
         with tempfile.TemporaryDirectory() as tmp:
             endpoint = Path(tmp) / 'web_service.json'
             endpoint.write_text(json.dumps({'port': 12345, 'token': TOKEN}), encoding='utf-8')
@@ -1519,8 +1519,8 @@ class StartupErrorTests(unittest.TestCase):
         return False
 
     def test_detached_service_leaves_startup_reason_for_launcher(self):
-        import web_agent
-        import web_launcher
+        from veil.server import web_agent
+        from veil.server import web_launcher
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch.object(web_agent, 'ROOT', root):

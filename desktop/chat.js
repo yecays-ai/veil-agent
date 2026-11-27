@@ -2211,7 +2211,7 @@ function renderWorkbench(){
     const remove=document.createElement('button');remove.type='button';remove.textContent='移除';remove.onclick=()=>saveWorkbench({remove_host:host});
     row.append(name,remove);hosts.append(row);
   }
-  workbenchNote(s.enabled&&!s.image_ready?'还没有运行环境，双击 workbench-switch.cmd':workbench.changed?'重启后生效':'');
+  workbenchNote(s.enabled&&!s.image_ready?'还没有运行环境，双击 scripts/windows/workbench-switch.cmd':workbench.changed?'重启后生效':'');
 }
 let workbenchBusy=Promise.resolve();
 function saveWorkbench(change){workbenchBusy=workbenchBusy.then(()=>saveWorkbenchNow(change));return workbenchBusy}

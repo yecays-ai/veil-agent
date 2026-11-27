@@ -3,9 +3,9 @@ import sqlite3
 import tempfile
 import unittest
 
-import brain_backup
-import brain_writer
-import veil_brain
+from veil.brain.storage import brain_backup
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 
 class BackupTests(unittest.TestCase):

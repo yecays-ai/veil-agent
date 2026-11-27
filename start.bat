@@ -8,5 +8,5 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" veil_agent.py %*
+".venv\Scripts\python.exe" -m veil %*
 if errorlevel 1 pause

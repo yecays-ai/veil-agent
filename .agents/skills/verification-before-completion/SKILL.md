@@ -118,3 +118,17 @@ Skip any step = lying, not verifying
 - Paraphrases and synonyms
 - Implications of success
 - ANY communication suggesting completion/correctness
+
+## VEIL 验收边界（项目补充）
+
+本 Skill 管的是**开发侧证据**，它不能代替用户的体验验收。以下状态必须分开记录，不能互相顶替：
+
+| 状态 | 证据来源 | 能否写成「已验收」 |
+| --- | --- | --- |
+| 已合并 | PR 合并提交 | 不能 |
+| 已部署 | 正式目录提交与桌面打包时间 | 不能 |
+| 开发侧验证通过 | 测试/CI 的完整输出与退出码 | 不能 |
+| 用户验收通过 | 用户在 `docs/ACCEPTANCE.md` 勾选或明确口头确认 | 只有这一项能 |
+
+- 新增或变更的行为，交付时必须同时给出：验证命令与真实输出、影响范围、以及用户在 `docs/ACCEPTANCE.md` 里对应的验收条目。
+- 没有用户明确记录的事项留在「待验收 / 待确认」，不得用 CI 通过或 PR 已合并来推定通过。

@@ -28,11 +28,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import brain_authority_init
-import brain_backup
-import brain_events
-import brain_writer
-import veil_brain
+from veil.brain.storage import brain_authority_init
+from veil.brain.storage import brain_backup
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 
 def _init_db(db_path: Path) -> sqlite3.Connection:
@@ -113,13 +113,13 @@ class TestCommitEventBundle(unittest.TestCase):
 
     def test_single_versions_row_after_bundle_commit(self):
         """commit_event_bundle should produce exactly one versions row (no double write)."""
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         store = Store(self.root)
         cfg = type('Cfg', (), {
             'id': self.role,
             'memory': {'brain': {'write_authority': True}},
         })()
-        from brain_authority import BrainAuthority
+        from veil.brain.storage.brain_authority import BrainAuthority
         auth = BrainAuthority(cfg, store)
         conn = self._open()
         versions_before = _count(conn, 'versions')
@@ -160,13 +160,13 @@ class TestCommitEventBundle(unittest.TestCase):
 
     def test_mid_transaction_crash_rollback(self):
         """Simulate a crash mid-transaction: nothing should be committed."""
-        from veil_agent import Store
+        from veil.core.veil_agent import Store
         store = Store(self.root)
         cfg = type('Cfg', (), {
             'id': self.role,
             'memory': {'brain': {'write_authority': True}},
         })()
-        from brain_authority import BrainAuthority
+        from veil.brain.storage.brain_authority import BrainAuthority
         auth = BrainAuthority(cfg, store)
         conn = self._open()
         versions_before = _count(conn, 'versions')
@@ -197,7 +197,7 @@ class TestMissingFactsDateNormalization(unittest.TestCase):
     """Verify _missing_facts treats '11-25' and '11月25日' as equivalent."""
 
     def test_date_equivalent_not_missing(self):
-        from event_memory import EventMemory
+        from veil.brain.event_memory import EventMemory
         em = EventMemory.__new__(EventMemory)
         # Test the _month_day_set helper
         text = '11月25日 Peter和Lan一起喝了咖啡'
@@ -205,7 +205,7 @@ class TestMissingFactsDateNormalization(unittest.TestCase):
         self.assertIn((11, 25), result)
 
     def test_date_format_cross_match(self):
-        from event_memory import EventMemory
+        from veil.brain.event_memory import EventMemory
         em = EventMemory.__new__(EventMemory)
         stages = [{'facts': {'dates': ['11-25'], 'numbers': ['11', '25']}}]
         missing = em._missing_facts(stages, '11月25日的下午，Peter去看了电影')
@@ -244,8 +244,8 @@ class TestCaptureEvidence(unittest.TestCase):
 
     def test_chat_user_messages_not_crowded_out(self):
         """Even with 20 tool rows, all 3 user chat rows must be in evidence."""
-        from event_memory import EventMemory
-        from veil_agent import Store
+        from veil.brain.event_memory import EventMemory
+        from veil.core.veil_agent import Store
         em = EventMemory.__new__(EventMemory)
         em.store = Store(self.store_root)
         em.cfg = type('Cfg', (), {'id': self.role})()
@@ -267,7 +267,7 @@ class TestMergeManyPassesStory(unittest.TestCase):
     """Verify that _merge_many passes the existing story text, not empty string."""
 
     def test_merge_story_chunk_receives_story(self):
-        from event_memory import EventMemory
+        from veil.brain.event_memory import EventMemory
         em = EventMemory.__new__(EventMemory)
         # Track what _merge_story_chunk receives
         calls = []

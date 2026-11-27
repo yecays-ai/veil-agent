@@ -6,8 +6,8 @@ import threading
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, MemoryToolError, ordinary_hits, vault_path
-from veil_agent import Budget, Character, Chat, Store, UserError
+from veil.brain.memory_agent import Memory, MemoryToolError, ordinary_hits, vault_path
+from veil.core.veil_agent import Budget, Character, Chat, Store, UserError
 
 
 class Backend:
@@ -228,7 +228,7 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(self.backend.calls[-1][0], 'breath')
 
     def test_ombre_model_calls_are_estimated_into_the_shared_ledger(self):
-        from memory_agent import ombre_model_tokens
+        from veil.brain.memory_agent import ombre_model_tokens
         content = '下周有安排。' * 40
         normal_in, normal_out = ombre_model_tokens(content)
         expected = (Decimal(normal_in) * Decimal('2')
@@ -367,7 +367,7 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(sorted(results), [False, True])
 
     def test_ombre_model_estimate_covers_pinned_output_caps_and_retries(self):
-        from memory_agent import ombre_model_tokens
+        from veil.brain.memory_agent import ombre_model_tokens
         tokens_in, tokens_out = ombre_model_tokens('fictional memory', worst_case=True)
         normal_in, normal_out = ombre_model_tokens('fictional memory')
         self.assertGreaterEqual(tokens_in, 3 * ((3200 + 16 + 1000 + 16 + 5400) // 2))
@@ -376,7 +376,7 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(normal_out, 800)
 
     def test_three_fake_child_retries_are_inside_the_shared_reservation(self):
-        from memory_agent import ombre_model_tokens
+        from veil.brain.memory_agent import ombre_model_tokens
         tokens_in, tokens_out = ombre_model_tokens('fictional memory', worst_case=True)
         normal_in, normal_out = ombre_model_tokens('fictional memory')
         maximum = (Decimal(tokens_in) * Decimal('2') + Decimal(tokens_out) * Decimal('8')) / 1_000_000

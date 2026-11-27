@@ -12,11 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import brain_events
-import brain_export
-import brain_read
-import brain_writer
-import veil_brain
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_export
+from veil.brain.storage import brain_read
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 
 def vector(_value=None):

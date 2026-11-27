@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-import persona_versions
+from veil.persona import persona_versions
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,7 +100,7 @@ class RestorePersonaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'persona').mkdir()
-            shutil.copy(ROOT / 'restore-persona.ps1', root)
+            shutil.copy(ROOT / 'scripts' / 'windows' / 'restore-persona.ps1', root)
             persona = root / 'persona' / 'peter.md'
             persona.write_bytes(b'Fictional one\n')
             persona_versions.snapshot(persona, at(1))

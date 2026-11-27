@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Chat, Budget, Store, UserError, load_character, send_message_schema
-from virtual_cards import VirtualCardError, normalize_amount, normalize_gift, normalize_icon, normalize_note
+from veil.core.veil_agent import Chat, Budget, Store, UserError, load_character, send_message_schema
+from veil.life.virtual_cards import VirtualCardError, normalize_amount, normalize_gift, normalize_icon, normalize_note
 
 
 class VirtualCardRuleTests(unittest.TestCase):

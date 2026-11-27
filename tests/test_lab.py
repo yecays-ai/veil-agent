@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools_agent import ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, _rename_noreplace, permitted_tools
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.tools.tools_agent import ALLOW, ASK, DENY, LAB_ONLY, OWN_WORK, FilesystemTools, _rename_noreplace, permitted_tools
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 
 class LabTests(unittest.TestCase):
@@ -49,8 +49,8 @@ persistent_append_file = "growth-journal.md"
         self.lab = self.tools.lab
 
     def open_tools(self):
-        with patch('tools_agent.shutil.which', return_value='fake-node'), \
-                patch('tools_agent._McpWorker', return_value=self.worker):
+        with patch('veil.tools.tools_agent.shutil.which', return_value='fake-node'), \
+                patch('veil.tools.tools_agent._McpWorker', return_value=self.worker):
             return FilesystemTools(self.root, self.cfg, self.store)
 
     def call(self, name, path, content=None, approval=None, tools=None):
@@ -302,14 +302,14 @@ persistent_append_file = "growth-journal.md"
         def create_racing_destination(src, dst, *args, **kwargs):
             Path(dst).write_bytes(b'racing destination')
             return atomic_rename(src, dst)
-        with patch('tools_agent._rename_noreplace', side_effect=create_racing_destination):
+        with patch('veil.tools.tools_agent._rename_noreplace', side_effect=create_racing_destination):
             result = self.move('lab/play.md', 'lab/archive/play.md')
         self.assertEqual(result[1], '被拒绝', result)
         self.assertEqual(source.read_bytes(), b'complete original')
         self.assertEqual(target.read_bytes(), b'racing destination')
 
         target.unlink()
-        with patch('tools_agent._rename_noreplace', side_effect=OSError('simulated move failure')):
+        with patch('veil.tools.tools_agent._rename_noreplace', side_effect=OSError('simulated move failure')):
             result = self.move('lab/play.md', 'lab/archive/play.md')
         self.assertEqual(result[1], '出错', result)
         self.assertEqual(source.read_bytes(), b'complete original')
@@ -329,7 +329,7 @@ persistent_append_file = "growth-journal.md"
             calls += 1
             return _rename_noreplace(src, dst)
 
-        with patch('tools_agent._rename_noreplace', side_effect=replace_before_atomic_move):
+        with patch('veil.tools.tools_agent._rename_noreplace', side_effect=replace_before_atomic_move):
             result = self.move('lab/play.md', 'lab/archive/play.md')
         self.assertEqual(result[1], '出错', result)
         self.assertEqual(source.read_bytes(), b'concurrent replacement')
@@ -462,7 +462,7 @@ persistent_append_file = "growth-journal.md"
                 target.write_bytes(b'replacement different length')
                 os.replace(target, path)
             return real_open(path, flags, *args, **kwargs)
-        with patch('tools_agent.os.open', side_effect=replace_then_open):
+        with patch('veil.tools.tools_agent.os.open', side_effect=replace_then_open):
             self.assertEqual(self.call('append_file', 'lab/race.md', 'bad')[1], '被拒绝')
         self.assertEqual((self.lab / 'race.md').read_bytes(), b'replacement different length')
 

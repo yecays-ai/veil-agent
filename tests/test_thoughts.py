@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from thoughts import ThoughtIndex
+from veil.autonomy.thoughts import ThoughtIndex
 
 
 class Clock:
@@ -90,7 +90,7 @@ class ThoughtIndexTests(unittest.TestCase):
 class WakeLabContextTests(unittest.TestCase):
     def test_wake_lists_lab_files_and_only_previews_the_newest(self):
         import os
-        from autonomy import AutonomyController as Autonomy
+        from veil.autonomy.autonomy import AutonomyController as Autonomy
         with tempfile.TemporaryDirectory() as temp:
             lab = Path(temp) / 'lab'
             (lab / 'hunt').mkdir(parents=True)

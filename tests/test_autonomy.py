@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from autonomy import MAX_RUNTIME_SECONDS, AutonomyController
-from veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
-from web_agent import Hub
+from veil.autonomy.autonomy import MAX_RUNTIME_SECONDS, AutonomyController
+from veil.core.veil_agent import ActivityState, Budget, BudgetExceeded, Chat, RequestFailed, Store, UserError, load_character
+from veil.server.web_agent import Hub
 
 
 class AutonomyTests(unittest.TestCase):
@@ -87,7 +87,7 @@ daily_budget_cny = "2"
         self.assertIn('on your own 1 time(s)', text)
 
     def test_wake_rules_come_from_the_instruction_registry(self):
-        import prompts
+        from veil import prompts
         text = self.controller._context()
         rules = prompts.text('autonomy.wake.rules')
         protocol = prompts.text('autonomy.wake.protocol')
@@ -384,7 +384,7 @@ daily_budget_cny = "2"
         context = '\n'.join(message['content'] for message in messages if message['role'] == 'system')
         self.assertNotIn('most recent completed autonomous activity record', context)
 
-        from autonomy import activity_history
+        from veil.autonomy.autonomy import activity_history
         looked_up = activity_history(self.store, self.cfg)
         self.assertIn('实验室整理', looked_up)
         self.assertIn('等待新信息', looked_up)
@@ -563,7 +563,7 @@ daily_budget_cny = "2"
         self.assertEqual(state, '成功')
 
     def test_next_wake_cancellation_and_late_claim_are_at_most_once(self):
-        from agent_types import AUTONOMY_WAKE
+        from veil.core.agent_types import AUTONOMY_WAKE
         self.activity.set(True)
         self.controller.interval = timedelta(hours=3)
         alarm = {'alarm_id': 'fixture-alarm',
@@ -611,7 +611,7 @@ daily_budget_cny = "2"
         self.assertIsNone(status['next_wake_reason'])
 
     def test_set_next_wake_tool_is_offered_as_a_direct_action(self):
-        from tools_agent import tool_policy
+        from veil.tools.tools_agent import tool_policy
         self.activity.set(True)
         names = {schema['function']['name'] for schema in self.chat.tool_schemas()}
         self.assertIn('set_next_wake', names)
@@ -796,7 +796,7 @@ daily_budget_cny = "2"
         self.assertNotIn('Files you already read', prompt)
 
     def test_unchanged_read_is_listed_only_while_the_file_is_unchanged(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         note = workspace / 'lab' / 'notes.html'
@@ -819,7 +819,7 @@ daily_budget_cny = "2"
         self.assertEqual(unchanged_read_lines([row], tools, workspace, canonical), [])
 
     def test_only_successful_untruncated_file_reads_are_listed(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         note = workspace / 'lab' / 'notes.html'
@@ -840,7 +840,7 @@ daily_budget_cny = "2"
         self.assertEqual(unchanged_read_lines([row], outside, workspace, canonical), [])
 
     def test_a_multi_file_read_lists_each_unchanged_file(self):
-        from autonomy import unchanged_read_lines
+        from veil.autonomy.autonomy import unchanged_read_lines
         workspace = self.root / 'workspace'
         (workspace / 'lab').mkdir(parents=True)
         for name in ('one.py', 'two.py'):
@@ -943,7 +943,7 @@ daily_budget_cny = "2"
 
     def test_large_receipt_cannot_erase_confirmed_write_when_recovering(self):
         from test_tools import ToolLoopTests
-        from veil_agent import RequestFailed
+        from veil.core.veil_agent import RequestFailed
         helper = ToolLoopTests()
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 4, 'max_output_tokens': 50})
         calls = [helper.tool_call('read_text_file', '{"path":"lab/source.md"}', 'read'),

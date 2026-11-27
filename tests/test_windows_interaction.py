@@ -11,10 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from desktop_access import desktop_access
-from tools_agent import FilesystemTools, permitted_tools, tool_policy
-from veil_agent import Budget, Chat, Store, load_character
-from windows_interaction import (
+from veil.windows.desktop_access import desktop_access
+from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
+from veil.core.veil_agent import Budget, Chat, Store, load_character
+from veil.windows.windows_interaction import (
     HumanTookOver,
     InteractionPaused,
     InteractionUncertain,
@@ -25,7 +25,7 @@ from windows_interaction import (
     load_application_allowlist,
     validate_applications,
 )
-from windows_observer import ObservationError, WINDOW_TOOL_SCHEMAS, WindowsToolResult
+from veil.windows.windows_observer import ObservationError, WINDOW_TOOL_SCHEMAS, WindowsToolResult
 
 
 WINDOW_ID = 'w-' + '1' * 24
@@ -182,7 +182,7 @@ class WindowsInteractionTests(unittest.TestCase):
                 backend._foreground_window = api.GetForegroundWindow
                 backend._uia = lambda: SimpleNamespace(UIAutomationInitializerInThread=contextlib.nullcontext,
                     ControlFromHandle=lambda _: SimpleNamespace(SetFocus=focus))
-                with patch('windows_interaction.ctypes.windll', SimpleNamespace(
+                with patch('veil.windows.windows_interaction.ctypes.windll', SimpleNamespace(
                         kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 1)), create=True):
                     result = backend.manage_window({'id': WINDOW_ID, 'handle': 100}, 'activate',
                                                    lambda: False, FakeInputMonitor(), 0)
@@ -209,7 +209,7 @@ class WindowsInteractionTests(unittest.TestCase):
                                           lambda: False, FakeInputMonitor(), 0)
 
     def test_live_document_reads_readonly_from_value_pattern(self):
-        from windows_observer import _control_identity
+        from veil.windows.windows_observer import _control_identity
         pattern = SimpleNamespace(IsReadOnly=False)
         control = SimpleNamespace(ControlTypeName='DocumentControl', Name='Test document',
             AutomationId='editor', IsPassword=False, IsEnabled=True, IsOffscreen=False,
@@ -351,7 +351,7 @@ class WindowsInteractionTests(unittest.TestCase):
         }
         backend = object.__new__(WindowsInteractionBackend)
         monitor = FakeInputMonitor()
-        with patch('windows_interaction.os.path.isfile', return_value=False):
+        with patch('veil.windows.windows_interaction.os.path.isfile', return_value=False):
             with self.assertRaisesRegex(ObservationError, 'not installed'):
                 backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
                                           url='https://example.com/')
@@ -360,8 +360,8 @@ class WindowsInteractionTests(unittest.TestCase):
             self.skipTest('Chrome process launch arguments are Windows-specific.')
         with patch.object(backend, '_check_default_desktop'), \
                 patch.object(backend, '_cancelled'), \
-                patch('windows_interaction.os.path.isfile', return_value=True), \
-                patch('windows_interaction.subprocess.Popen', return_value=Mock()) as popen:
+                patch('veil.windows.windows_interaction.os.path.isfile', return_value=True), \
+                patch('veil.windows.windows_interaction.subprocess.Popen', return_value=Mock()) as popen:
             backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
                                       url='https://example.com/')
         args = popen.call_args.args[0]
@@ -384,8 +384,8 @@ class WindowsInteractionTests(unittest.TestCase):
         monitor = FakeInputMonitor()
         with patch.object(backend, '_check_default_desktop'), \
                 patch.object(backend, '_cancelled'), \
-                patch('windows_interaction.os.path.isfile', return_value=True), \
-                patch('windows_interaction.subprocess.Popen', side_effect=OSError('blocked')):
+                patch('veil.windows.windows_interaction.os.path.isfile', return_value=True), \
+                patch('veil.windows.windows_interaction.subprocess.Popen', side_effect=OSError('blocked')):
             with self.assertRaisesRegex(ObservationError, 'could not start Google Chrome Guest'):
                 backend.start_application(app, lambda: False, monitor, monitor.snapshot(),
                                           url='https://example.com/')
@@ -751,7 +751,7 @@ idle_seconds = 3
     def test_approval_followed_by_continuous_input_stops_with_clear_reason(self):
         monitor = FakeInputMonitor(idle=False)
         tools, _ = self.make_tools(monitor=monitor)
-        with patch('windows_interaction.APPROVAL_IDLE_WAIT_SECONDS', 0.3):
+        with patch('veil.windows.windows_interaction.APPROVAL_IDLE_WAIT_SECONDS', 0.3):
             result, state = tools._error(
                 self._capture(lambda: tools._run_action_with_input_guard(
                     lambda _stop, _snap: {'confirmed': True}, lambda: False, approved=True)),
@@ -1347,7 +1347,7 @@ max_steps = 3
                 'app_id': 'app_paint', 'label': 'Paint', 'can_interact': True,
                 'process_paths': (paint_path,), 'actions': ['canvas'],
             }
-            with patch('windows_interaction.os.fsync', side_effect=OSError('fake disk failure')):
+            with patch('veil.windows.windows_interaction.os.fsync', side_effect=OSError('fake disk failure')):
                 _, state, _ = tools.invoke('windows_canvas_action', {
                     'app_id': 'app_paint', 'window_id': WINDOW_ID,
                     'action': 'save_to_lab', 'lab_path': 'drawings/sun.png',
@@ -1492,7 +1492,7 @@ max_steps = 3
 
 class OwnInputMonitorTests(unittest.TestCase):
     def make(self):
-        from windows_interaction import DesktopInputMonitor
+        from veil.windows.windows_interaction import DesktopInputMonitor
         clock = {'last': 1000, 'now': 1000}
         monitor = DesktopInputMonitor(last_input_tick=lambda: clock['last'], now_tick=lambda: clock['now'])
         monitor._human_tick = 1000
@@ -1586,7 +1586,7 @@ class ApprovedAppCardTests(unittest.TestCase):
             self.assertIsNone(tools.candidate_for_window(backend.windows[1]))
 
     def test_settings_page_can_list_and_revoke_approved_apps(self):
-        from windows_interaction import list_approved_apps, remove_approved_app
+        from veil.windows.windows_interaction import list_approved_apps, remove_approved_app
         with tempfile.TemporaryDirectory() as directory:
             tools, _backend, approval, _asked = self.make(directory, ['y'])
             tools.invoke('windows_manage', {'app_id': 'fastorange', 'window_id': self.WID, 'action': 'activate'}, approval)
@@ -1598,7 +1598,7 @@ class ApprovedAppCardTests(unittest.TestCase):
             self.assertEqual(list_approved_apps(Path(directory) / 'missing.json'), [])
 
     def test_settings_page_can_add_an_open_app_without_a_card(self):
-        from windows_interaction import list_approved_apps
+        from veil.windows.windows_interaction import list_approved_apps
         with tempfile.TemporaryDirectory() as directory:
             tools, _backend, _approval, asked = self.make(directory, [])
             self.assertEqual([c['app_id'] for c in tools.list_candidates()], ['fastorange'])

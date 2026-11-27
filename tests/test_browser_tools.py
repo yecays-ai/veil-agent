@@ -9,10 +9,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-import browser_tools
-from browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
+from veil.integrations import browser_tools
+from veil.integrations.browser_tools import (BrowserTools, BrowserWorkbenchGateway, PublicProxy, public_addresses, public_url,
                            MAX_BYTES, MAX_MCP_REQUEST_BYTES)
-from veil_agent import model_tool_result
+from veil.core.veil_agent import model_tool_result
 
 
 CFG = SimpleNamespace(web={'enabled': True, 'browser_interaction': True})
@@ -281,8 +281,8 @@ class BrowserSafetyTests(unittest.TestCase):
             # Identity must be hashable like a real StreamWriter.
             class Writer:
                 def close(self): pass
-            with patch('browser_tools.public_addresses', AsyncMock(return_value=['93.184.216.34'])), \
-                    patch('browser_tools.asyncio.open_connection', AsyncMock(side_effect=OSError)) as dial:
+            with patch('veil.integrations.browser_tools.public_addresses', AsyncMock(return_value=['93.184.216.34'])), \
+                    patch('veil.integrations.browser_tools.asyncio.open_connection', AsyncMock(side_effect=OSError)) as dial:
                 await PublicProxy().handle(reader, Writer())
                 dial.assert_awaited_once_with('93.184.216.34', 443)
         asyncio.run(scenario())
@@ -349,9 +349,9 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
     def test_chat_and_wake_offer_browser_keep_evidence_and_forward_stop(self):
         from dataclasses import replace
         from tests.test_tools import ToolLoopTests
-        from tools_agent import FilesystemTools, permitted_tools
-        from veil_agent import Chat
-        from browser_tools import TOOL
+        from veil.tools.tools_agent import FilesystemTools, permitted_tools
+        from veil.core.veil_agent import Chat
+        from veil.integrations.browser_tools import TOOL
         for autonomous in (False, True):
             with self.subTest(autonomous=autonomous):
                 helper = ToolLoopTests()
@@ -359,7 +359,7 @@ class BrowserLoopIntegrationTests(unittest.TestCase):
                 try:
                     cfg = replace(helper.cfg, web=CFG.web,
                                   tools={**helper.cfg.tools, 'max_result_bytes': 8192})
-                    with patch('tools_agent.shutil.which', return_value=None):
+                    with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                         manager = FilesystemTools(helper.root, cfg, helper.store)
                     manager.browser_tools = BrowserTools(CFG, platform_enabled=True, monitor=Idle())
                     manager.tools = [TOOL]

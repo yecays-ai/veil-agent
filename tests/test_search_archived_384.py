@@ -8,11 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from experience_memory import ExperienceMemory
-from memory_agent import Memory
-from memory_native import NativeMemoryTools, ToolSet
+from veil.brain.experience_memory import ExperienceMemory
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools, ToolSet
 from test_memory import Backend
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class OmbreLikeBackend(Backend):

@@ -6,10 +6,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from memory_agent import Memory
-from memory_native import NativeMemoryTools
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools
 from test_memory import Backend
-from veil_agent import Budget, Character, Chat, Store
+from veil.core.veil_agent import Budget, Character, Chat, Store
 
 
 class LegacyHiddenContextTests(unittest.TestCase):

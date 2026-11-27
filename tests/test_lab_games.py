@@ -8,8 +8,8 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 
-from lab_games import LabGames
-from web_agent import start_server
+from veil.life.lab_games import LabGames
+from veil.server.web_agent import start_server
 
 
 class LabGameTests(unittest.TestCase):
@@ -85,7 +85,7 @@ class LabGameTests(unittest.TestCase):
         def short_write(fd, data):
             real_write(fd, data[:5])
             return 5
-        with patch('lab_games.os.write', side_effect=short_write):
+        with patch('veil.life.lab_games.os.write', side_effect=short_write):
             with self.assertRaises(OSError):
                 self.service.save(self.capability, self.score())
         self.assertEqual((self.game / 'scores.jsonl').read_bytes(), b'')

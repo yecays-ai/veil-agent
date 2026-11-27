@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import brain_writer
+from veil.brain.storage import brain_writer
 
 
 def _state(connection):

@@ -48,7 +48,7 @@ if "%BEHIND%"=="0" goto backup_done
 if /i "%~3"=="--skip-backup" goto backup_skipped
 if not exist ".venv\Scripts\python.exe" goto no_venv
 echo       New version found. Backing up your data first...
-".venv\Scripts\python.exe" backup_restore.py pre-update
+".venv\Scripts\python.exe" -m veil.system.backup_restore pre-update
 if errorlevel 1 goto backup_failed
 goto backup_done
 :backup_skipped
@@ -67,7 +67,7 @@ if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 goto failed
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" setup_fetch.py
+".venv\Scripts\python.exe" -m veil.integrations.setup_fetch
 if errorlevel 1 goto failed
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%CD%\scripts\install-nowhere.ps1" -RepositoryPath "%CD%" -BootstrapPythonPath "%CD%\.venv\Scripts\python.exe"
 if errorlevel 1 echo Warning: Nowhere is unavailable; Peter can still use VEIL. Rerun setup.bat after resolving the Nowhere installation error.

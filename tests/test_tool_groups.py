@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tool_groups import CHAT_WARM_REQUESTS, group_of
-from agent_types import UserError
-from veil_agent import Budget, Chat, Store, load_character
+from veil.tools.tool_groups import CHAT_WARM_REQUESTS, group_of
+from veil.core.agent_types import UserError
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 
 
 def tool(name):

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from unittest.mock import Mock
 
-import brain_writer
-import veil_brain
-from memory_agent import Memory
-from veil_agent import Budget, Character, Store
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.memory_agent import Memory
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class FakeEmbedder:
@@ -56,7 +56,7 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.memory.last_recall_debug = {}
         self.memory.retrieval_settings = {'backend': 'brain', 'weight_vector': 0.65,
                                          'weight_keyword': 0.35}
-        with patch('memory_agent.brain_retrieval_search', side_effect=RuntimeError('down')):
+        with patch('veil.brain.memory_agent.brain_retrieval_search', side_effect=RuntimeError('down')):
             self.assertEqual(self.memory.search_candidates('anything', 5), '')
         self.assertEqual(self.memory.last_recall_debug['retrieval']['failed'], 'RuntimeError')
 
@@ -75,7 +75,7 @@ class MemoryAuthorityTests(unittest.TestCase):
 
     def test_archive_page_reads_brain_not_stale_vault(self):
         """P2-B: after the switch the vault archive is an old Ombre copy; the page must read Brain."""
-        from memory_native import NativeMemoryTools
+        from veil.brain.memory_native import NativeMemoryTools
         connection = sqlite3.connect(str(self.db))
         try:
             created = brain_writer.create_memory(
@@ -95,7 +95,7 @@ class MemoryAuthorityTests(unittest.TestCase):
                          'archived through brain')
 
     def test_lan_can_archive_and_restore_a_memory_through_brain(self):
-        from memory_native import NativeMemoryTools
+        from veil.brain.memory_native import NativeMemoryTools
         text = self.memory.call('hold', {'content': 'archivable memory', 'title': 'Arch'})
         memory_id = text.split('→')[1]
         tools = NativeMemoryTools(self.memory)
@@ -107,7 +107,7 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertNotIn(memory_id, [row['memory_id'] for row in tools.panel_archived()])
 
     def test_panel_edit_refuses_a_stale_hash_and_saves_with_the_current_one(self):
-        from memory_native import NativeMemoryTools
+        from veil.brain.memory_native import NativeMemoryTools
         text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
         memory_id = text.split('→')[1]
         tools = NativeMemoryTools(self.memory)
@@ -124,7 +124,7 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertEqual('new body', self.memory.content_for(memory_id))
 
     def test_atomic_edit_archives_the_raw_markdown_for_title_restore(self):
-        from memory_native import NativeMemoryTools
+        from veil.brain.memory_native import NativeMemoryTools
         text = self.memory.call('hold', {'content': 'old body', 'title': 'Old Title'})
         memory_id = text.split('→')[1]
         tools = NativeMemoryTools(self.memory)
@@ -146,8 +146,8 @@ class MemoryAuthorityTests(unittest.TestCase):
         self.assertEqual('Old Title', pages[0]['title'])
 
     def test_panel_entries_expose_the_same_sha_as_the_edit_lock(self):
-        from brain_p4_api import memory_sha256
-        from memory_native import NativeMemoryTools
+        from veil.brain.brain_p4_api import memory_sha256
+        from veil.brain.memory_native import NativeMemoryTools
         text = self.memory.call('hold', {'content': 'hash me', 'title': 'H'})
         memory_id = text.split('→')[1]
         hub = SimpleNamespace(chat=SimpleNamespace(cfg=self.memory.cfg, store=self.store,

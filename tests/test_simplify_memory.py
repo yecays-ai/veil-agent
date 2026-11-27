@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'simplify_memory.py'
+SCRIPT = ROOT / 'scripts' / 'simplify_memory.py'
 ROLE = 'peter'
 
 LETTER_ONE_ID = '54b1257a8088'

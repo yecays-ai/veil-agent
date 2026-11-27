@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage
+from veil.core.veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage
 
 
 class CacheOrderTests(unittest.TestCase):

@@ -1,34 +1,36 @@
 # HANDOFF
 
-> 更新时间：2026-11-26T15:40:00Z
+> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
 
 ## 当前停点
 
-- **PR #456 · P4/P5 Brain 管理中心与全局工作区**（`ticket/451-p4-p5-brain-workspace`，已合并 `main` `a1f2255`）：
-  - 已解决 `HANDOFF.md` / `STATUS.md` / `diagnostics.py` 冲突，P6-S2/S1/S4 的写入事务、诊断与召回改动原样保留。
-  - CodeRabbit 审查的 6 条 inline major、1 条 outside-diff major 与 22 条 minor/additional 已逐条核对：实质问题全部修复（记忆编辑载荷与 409 草稿保留、归档改为真实写入、限额保存不再清空接口/模型、基础/有效限额分离、巡检时限与持久化失败明确报错、旧编辑入口强制 `expected_sha256`、版本与快照完整展示、置顶桥接统一），纯风格建议不改；记录见 `docs/tickets/451-p4-p5-brain-workspace.md`。
-  - 待推送后复跑 CI（Python `unittest discover`、`desktop` 的 `node --test`、Windows 冒烟）；Lan 的视觉与真实交互验收未做，**不自行合并**。
-- **P6-S2 / P6-S1**：均已合并并通过加固 PR（#450/#451/#454/#452/#453），CI 全绿。正式 `data/peter` 未动。
-- **P6-S4**：`ticket/454-p6-s4-ablations`（worktree `E:\Peter-Agent\VEIL\worktrees\454-p6-s4-ablations`）PR #455 已完成全部 24/24 实验、Lan 全量 46 场景人工盲评与 P6-0（41 项）+ P6（20 项）原始需求覆盖审计（含 `混合检索+Rerank+判官` 4 路对照、`AB-COMB` 多机制端到端回复对照及时间衰减保护补测）：
-  - 状态：**24 completed / 0 partial / 0 blocked**；
-  - 预算：累计 **¥3.084122 / ¥20（15.4%）**（Tier 0 ¥0、Tier 1 ¥2.160207、Tier 2 ¥0.923915，1,006 条 append-only 结算记录）；
-  - 验证：合成单测 **40/40 通过**，Baseline-1 门禁 **20/20 通过**，隐私/路径/密钥/人设泄露扫描 0 命中；
-  - 交付文档：`docs/reports/p6-s4-ablations-20261126.md`、`docs/reports/p6-s4-decision-table-20261126.md`、`docs/reports/p6-s4-requirements-coverage-audit-20261126.md`、`recall-lab/recall_lab/comb_e2e.py`；本机匿名对照 `.local-tmp/s4/lan-blind-review.md`（已由 Lan 全量审阅，不进 git）。
-  - 按工单规则，**达到完整交付且可合并状态后停止，不自行合并，不启动 S3/S5/S6/S7**。
+- **本单（工单 458 · 仓库目录结构重整）**：
+  - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
+  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
+  - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
+  - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
+  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
+  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
+  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
+  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
+  - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
+- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
 
 ## 下一个窗口第一步
 
-1. 先看 PR #456 的 CI 结果；全绿后由 Lan 做视觉与真实交互验收并决定合并（不自行合并）。
-2. 确认 PR #455 最新 HEAD 对应 CI 全绿后，由 Lan 合并 PR #455。
-3. S4 合并后按决策表与 `p6-s4-requirements-coverage-audit-20261126.md` 分阶段施工：
-   - **S3**：四区独立存储预算（AB-A3）+ S2 新证据链下严格溯源晋升（AB-A2，循环自证率=0）+ 1500B 满载优先级压缩与 `stale_ref` 降级；
-   - **S5**：`AB-R1b` 停用词过滤作为**可关闭候选机制**（先验证最终判官链路净收益再决定是否默认开启），判官链维持现状（可选灰度 K=12），优化工作/技术 `trap` 误报抑制，设计带情境相关性约束的聊天自然联想；Qwen3-Reranker 待本地化/异步方案（且须保留向量兜底 + 前置分数门控）；
-   - **S7**：HEAD 前缀纯化（AB-C1）+ 非首轮省略空提示（AB-C2a）+ 预留 `p7.experience_hints` 槽位；不做 C2b 短闲聊硬截断与 C3 替换相关长事件全文；
-   - **S6**：激活 `last_active` 与长期重要度动态重评（保护 `imp>=7`/`pinned` 零衰减且永不删除）；先修自主态旁白/无工具扮演再灰度 `AB-A1b`；`AB-E1` 认知巩固带开关与日预算顶做多日灰度并衔接 P7。
-4. 继续遵守红线：不执行未授权的正式 `data/peter` 历史恢复；不启停正式 Peter。
+1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，先在该分支的隔离副本运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --check`，确认无目标冲突后再运行 `--all --move --rewrite`；工具会先改写、再移动、生成兼容入口，并在失败时恢复原文件。
+2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
+3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 
-## 维护窗口红线
+## 环境与工具注意
 
-- 正式恢复必须先创建协同 bundle，再 dry-run 给 Lan 看目标与追加预览；只有 Lan 明确确认后才执行 apply。
-- 代码回退不得用旧 DB 覆盖新增记忆；恢复必须走 `restore_bundle`，并检查 0 重复、0 悬空引用。
-- 换 Embedding 模型必须使用 `scripts/embedding_reindex.py` 显式重建（先 dry-run、再 `--apply`），不得依赖后台重试自动改模型。
+- 正式目录 `.git` 为写保护，**不要在正式目录开分支、提交或改文件**；开发一律在独立 worktree / 副本里做。
+- 本机 `git` 走 HTTPS 拉取时可能因 schannel 凭据不可用而失败；本单改用 `gh api` 推送分支，未改任何全局 git 配置。
+- 本机 Node 24 用于桌面构建；Python 3.11/3.12 跑测试。
+
+## 红线（不变）
+
+- 不启停正式 Peter、不写正式 `data/peter`、不向正式 Peter 发消息。
+- 正式恢复必须先做协同 bundle + dry-run，经 Lan 确认后才 `--apply`。
+- 换 Embedding 模型必须用 `scripts/embedding_reindex.py`（先 dry-run 再 `--apply`），不依赖后台重试。
+- 不提交人设正文、密钥、真实聊天/记忆、本机绝对路径、日志。

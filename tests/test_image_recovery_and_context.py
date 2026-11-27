@@ -6,10 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from agent_types import RequestFailed, TooLong, UserError
-from veil_agent import (Budget, Chat, ChatOutput, Store, conservative_token_ratio,
+from veil.core.agent_types import RequestFailed, TooLong, UserError
+from veil.core.veil_agent import (Budget, Chat, ChatOutput, Store, conservative_token_ratio,
                         estimate_request_tokens, load_character, run_chat)
-from web_agent import ChatInput, Hub
+from veil.server.web_agent import ChatInput, Hub
 
 
 class ImageRecoveryAndContextTests(unittest.TestCase):

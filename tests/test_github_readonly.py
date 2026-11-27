@@ -12,12 +12,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.error import HTTPError
 
-from github_readonly import GitHubReadTools, MCP_URL, TOKEN_ENV, official_code_search, public_get
-from tools_agent import FilesystemTools, permitted_tools, tool_policy
-from veil_agent import ActivityState, Budget, Character, Chat, Store, load_character
-from autonomy import AutonomyController
-from desktop_files import DesktopFileTools
-from web_agent import Hub
+from veil.integrations.github_readonly import GitHubReadTools, MCP_URL, TOKEN_ENV, official_code_search, public_get
+from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
+from veil.core.veil_agent import ActivityState, Budget, Character, Chat, Store, load_character
+from veil.autonomy.autonomy import AutonomyController
+from veil.tools.desktop_files import DesktopFileTools
+from veil.server.web_agent import Hub
 
 SHA = 'a' * 40
 TREE = 'b' * 40
@@ -184,14 +184,14 @@ class GitHubBoundaryTests(unittest.TestCase):
         response.read.return_value = b'{"private": false}'
         opener = Mock()
         opener.open.return_value = response
-        with patch('github_readonly.build_opener', return_value=opener), patch.dict(
+        with patch('veil.integrations.github_readonly.build_opener', return_value=opener), patch.dict(
                 os.environ, {'GITHUB_TOKEN': 'developer-secret', TOKEN_ENV: 'read-only-secret'}):
             public_get('/repos/example/companion')
         request = opener.open.call_args.args[0]
         self.assertEqual(request.get_method(), 'GET')
         self.assertFalse(request.has_header('Authorization'))
         self.assertIsNone(request.data)
-        from github_readonly import _NoRedirect
+        from veil.integrations.github_readonly import _NoRedirect
         self.assertIsNone(_NoRedirect().redirect_request(None, None, None, None, None, None))
 
     def test_real_mcp_adapter_only_calls_search_code_with_readonly_transport(self):
@@ -232,7 +232,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
                             web={'github_readonly': True, 'github_repository': 'example/companion'},
                             autonomy={'interval_minutes': 90, 'daily_max_runs': 12,
                                       'daily_budget_cny': Decimal('3'), 'min_alarm_gap_minutes': 15})
-            with patch('tools_agent.shutil.which', return_value=None):
+            with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                 manager = FilesystemTools(root, cfg, store)
             get = Mock(side_effect=fixture_get)
             manager.github_tools = GitHubReadTools(cfg, get=get)
@@ -262,7 +262,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             activity = ActivityState(store.root / 'test' / 'resident-state.json')
             activity.set(True)
             hub = Hub('Test', activity)
-            from memory_native import ToolSet
+            from veil.brain.memory_native import ToolSet
             native = SimpleNamespace(tools=[], description='', bind_capabilities=lambda _files: None,
                                      handles=lambda _name: False)
             chat = Chat(cfg, store, Budget(store), model, tools=ToolSet(manager, native), output=hub.output)
@@ -280,7 +280,7 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             # Existing file protection remains active, including on repeated wakes.
             self.assertEqual(manager.invoke('desktop_create_file', requests[-1][1])[1], '被拒绝')
             disabled = replace(cfg, tools={**cfg.tools, 'enabled': False})
-            with patch('tools_agent.shutil.which', return_value=None):
+            with patch('veil.tools.tools_agent.shutil.which', return_value=None):
                 closed = FilesystemTools(root, disabled, store)
             self.assertNotIn('mcp__github__github_read', [t.name for t in closed.tools])
             self.assertEqual(closed.invoke('github_read', requests[0][1])[1], '被拒绝')

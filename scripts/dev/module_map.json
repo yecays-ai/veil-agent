@@ -1,0 +1,166 @@
+{
+  "batches": {
+    "B1": {
+      "veil/windows": [
+        "windows_process",
+        "windows_discovery",
+        "windows_interaction",
+        "windows_observer",
+        "desktop_access",
+        "desktop_icons",
+        "guest_profiles",
+        "screen_pop"
+      ],
+      "veil/tools": [
+        "tools_agent",
+        "tool_access",
+        "tool_aliases",
+        "tool_failures",
+        "tool_groups",
+        "learned_tools",
+        "pending_approvals",
+        "desktop_files",
+        "executor_opencode",
+        "workbench_scope",
+        "workbench_switch"
+      ]
+    },
+    "B2": {
+      "veil/integrations": [
+        "web_tools",
+        "browser_tools",
+        "mcp_services",
+        "mcp_hidden_stdio",
+        "github_readonly",
+        "github_token_setup",
+        "xiaohongshu_tools",
+        "xiaohongshu_setup",
+        "setup_fetch",
+        "qq_channel",
+        "email_channel",
+        "away_bridge"
+      ]
+    },
+    "B3": {
+      "veil/brain/storage": [
+        "veil_brain",
+        "brain_writer",
+        "brain_lock",
+        "brain_authority",
+        "brain_authority_init",
+        "brain_events",
+        "brain_read",
+        "brain_store",
+        "brain_migrate",
+        "brain_backup",
+        "brain_export",
+        "event_migration",
+        "tag_governance"
+      ],
+      "veil/brain/recall": [
+        "brain_retrieval",
+        "recall_budget",
+        "recall_judge",
+        "recall_relevance",
+        "recall_rotation",
+        "natural_association"
+      ],
+      "veil/brain": [
+        "memory_agent",
+        "memory_native",
+        "memory_sidecar",
+        "event_memory",
+        "experience_memory",
+        "short_term_notes",
+        "learned_context",
+        "recent_experiences",
+        "relationship_base",
+        "brain_health",
+        "brain_p4_api"
+      ]
+    },
+    "B4": {
+      "veil/autonomy": [
+        "autonomy",
+        "thoughts",
+        "long_tasks",
+        "work_checkpoint",
+        "investigation_checkpoint",
+        "delegate_agent",
+        "codex_watch"
+      ],
+      "veil/life": [
+        "life_state",
+        "life_records",
+        "calendar_agreements",
+        "virtual_cards",
+        "lab_games",
+        "lab_preview",
+        "lab_sandbox",
+        "nowhere_integration"
+      ],
+      "veil/chat": [
+        "bubble_split",
+        "chat_search",
+        "attachment_utils",
+        "stickers",
+        "voice_output"
+      ],
+      "veil/persona": [
+        "persona_versions",
+        "user_persona",
+        "voice_style",
+        "profile_notes",
+        "background"
+      ]
+    },
+    "B5": {
+      "veil/system": [
+        "maintenance",
+        "diagnostics",
+        "backup_restore",
+        "data_repair",
+        "ledger_recovery",
+        "request_snapshots",
+        "runtime_monitor"
+      ],
+      "scripts": [
+        "simplify_memory"
+      ]
+    },
+    "B6": {
+      "veil/core": [
+        "veil_agent",
+        "agent_types",
+        "runtime_env",
+        "model_settings",
+        "config_registry",
+        "capability_state"
+      ],
+      "veil/server": [
+        "web_agent",
+        "web_launcher",
+        "hub_screen_pop"
+      ],
+      "veil/prompts": [
+        "instructions"
+      ]
+    }
+  },
+  "packages": {
+    "prompts": {
+      "batch": "B6",
+      "target_dir": "veil/prompts",
+      "target_module": "veil.prompts"
+    }
+  },
+  "root_shims": [
+    "web_agent.py",
+    "web_launcher.py",
+    "setup_fetch.py",
+    "backup_restore.py",
+    "veil_agent.py",
+    "data_repair.py",
+    "veil_brain.py"
+  ]
+}

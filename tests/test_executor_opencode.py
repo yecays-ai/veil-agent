@@ -13,9 +13,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import executor_opencode as ex
-import browser_tools
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.tools import executor_opencode as ex
+from veil.integrations import browser_tools
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 PROVIDER = {'model': 'fake-model', 'base_url': 'https://example.invalid/v1', 'max_input_tokens': 8000,
             'input_cny_per_million': '2', 'output_cny_per_million': '8'}
@@ -77,7 +77,7 @@ def run(script, **overrides):
                   stopped=lambda: False, record_cost=costs.append, api_factory=lambda *_: api,
                   popen=fake_popen, sleep=lambda _s: None)
     kwargs.update(overrides)
-    with patch('executor_opencode.kill_tree') as kill:
+    with patch('veil.tools.executor_opencode.kill_tree') as kill:
         result = ex.run('do it', **kwargs)
     return result, api, costs, kill
 
@@ -116,7 +116,7 @@ class BrowserGatewayConfigTests(unittest.TestCase):
         self.assertEqual(events, ['enter', 'stop', 'close'])
 
         events.clear()
-        with patch('executor_opencode.KeyProxy.close'):
+        with patch('veil.tools.executor_opencode.KeyProxy.close'):
             result, _api, _costs, _kill = run([], browser_gateway=factory,
                                                popen=Mock(side_effect=OSError('start failed')))
         self.assertEqual(result.state, '出错')
@@ -456,7 +456,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(protected['permission']['edit']['/data/journal.jsonl'], 'deny')
 
     def test_old_workbench_json_with_removed_host_keys_still_loads(self):
-        from veil_agent import workbench_local_settings
+        from veil.core.veil_agent import workbench_local_settings
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'data' / 'peter' / 'workbench.json'
             path.parent.mkdir(parents=True)
@@ -544,7 +544,7 @@ class RunTests(unittest.TestCase):
         self.assertIn('decision=cancelled', result.text)
 
     def test_windows_git_and_docker_cleanup_hide_the_console(self):
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         with patch.object(scope, '_WINDOWS', True), patch.object(scope.subprocess, 'CREATE_NO_WINDOW', 0x08000000,
                                                                  create=True), patch.object(scope.subprocess, 'run') as git:
             scope._git(Path('C:/project'), 'status')
@@ -1020,7 +1020,7 @@ max_steps = 4
                 self.load()
 
     def test_switch_script_state_round_trip_and_folder_rules(self):
-        import workbench_switch as sw
+        from veil.tools import workbench_switch as sw
         state = sw.load_state(self.root)
         self.assertFalse(state['enabled'])
         folder = self.root / 'mine'
@@ -1048,7 +1048,7 @@ max_steps = 4
             self.assertFalse(kwargs['autonomy'])
             self.assertEqual(Path(kwargs['workdir']).resolve(), (self.root / 'data' / 'test' / 'workspace').resolve())  # ticket 247: one file root
             return outcome
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
         self.assertEqual(execution.state, '成功')
         self.assertIn('Made x.', execution.result)
@@ -1075,7 +1075,7 @@ max_steps = 4
             manager.store.load.return_value = {'stage': 'stopped'}
             self.assertTrue(kwargs['stopped']())
             return ex.ExecutorResult('stopped', '出错', Decimal(0), 1, 'user_stopped')
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             result = chat._run_workbench('do it', 'req', False, task_id='fixture')
         self.assertEqual(result.reason, 'user_stopped')
         self.assertEqual(manager.record_workbench.call_args.kwargs['reason'], 'user_stopped')
@@ -1089,7 +1089,7 @@ max_steps = 4
             seen.update(kwargs)
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             chat._execute_tool_call(call, 'req', 'step:0', True, chat.tool_schemas())
         self.assertTrue(seen['autonomy'])
         self.assertEqual(Decimal(seen['limits']['run_budget_cny']), Decimal('0.05'))
@@ -1104,7 +1104,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
         chat.approval = lambda prompt: asked.append(prompt) or answer
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', autonomy, chat.tool_schemas())
         return execution, seen, asked
 
@@ -1173,7 +1173,7 @@ max_steps = 4
             seen.update(kwargs)
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('done', '成功')
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', autonomy, chat.tool_schemas())
         return execution, seen
 
@@ -1205,7 +1205,7 @@ max_steps = 4
         chat.approval = lambda _p: 'y'
         call = SimpleNamespace(id='c1', function=SimpleNamespace(
             name='workbench', arguments=json.dumps({'task': 'fix it', 'project': self.root.name})))
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run') as run_mock:
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
         run_mock.assert_not_called()
         self.assertEqual(execution.state, '被拒绝')
@@ -1236,7 +1236,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         self.assertTrue(Path(seen['workdir']).samefile(project))
@@ -1259,7 +1259,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('ok', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         self.assertTrue(Path(seen['workdir']).samefile(project))
@@ -1275,7 +1275,7 @@ max_steps = 4
             kwargs['record_cost'](Decimal(0))
             return ex.ExecutorResult('[approval: operation="bash:pip", waiting=true, decision=user_denied]', '成功')
 
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run', side_effect=fake_run):
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run', side_effect=fake_run):
             execution = chat._execute_tool_call(call, 'req-1', 'step:0', False, chat.tool_schemas())
 
         rows = chat.store.read('test/memory/_agent/workbench_permissions.jsonl')
@@ -1290,7 +1290,7 @@ max_steps = 4
         call = SimpleNamespace(id='c1', function=SimpleNamespace(
             name='workbench', arguments=json.dumps({'task': 'run tests', 'project': 'calculator-test'})))
 
-        with patch('veil_agent.ROOT', self.root), patch('executor_opencode.run') as run_mock:
+        with patch('veil.core.veil_agent.ROOT', self.root), patch('veil.tools.executor_opencode.run') as run_mock:
             execution = chat._execute_tool_call(call, 'req', 'step:0', False, chat.tool_schemas())
 
         run_mock.assert_not_called()
@@ -1298,7 +1298,7 @@ max_steps = 4
         self.assertIn('archive/calculator-test', execution.result)
 
     def test_old_workbench_folder_is_merged_into_the_workspace_without_losing_anything(self):
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         old = self.root / 'data' / 'test' / 'workbench'
         (old / 'game').mkdir(parents=True)
         (old / 'game' / 'index.html').write_text('<p>g</p>', encoding='utf-8')
@@ -1317,7 +1317,7 @@ max_steps = 4
         self.assertEqual(scope.merge_legacy_workbench(self.root / 'nothing', workspace), [])
 
     def test_workbench_migration_rejects_reparse_roots_and_cleans_partial_copies(self):
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         outside = self.root / 'outside'
         (outside / 'notes').mkdir(parents=True)
         (outside / 'notes' / 'secret.txt').write_text('keep', encoding='utf-8')
@@ -1346,7 +1346,7 @@ max_steps = 4
             Path(destination).mkdir(parents=True)
             (Path(destination) / 'partial').write_text('partial')
             raise OSError('copy failed')
-        with patch('workbench_scope.shutil.copytree', side_effect=partial_copy):
+        with patch('veil.tools.workbench_scope.shutil.copytree', side_effect=partial_copy):
             self.assertEqual(scope.merge_legacy_workbench(old, workspace), [])
         self.assertTrue((old / 'game' / 'index.html').exists())
         self.assertFalse(any(workspace.joinpath('from-workbench').glob('*.migrating-*')))
@@ -1354,7 +1354,7 @@ max_steps = 4
 
     def test_project_without_a_possible_snapshot_needs_lan_and_never_in_a_wake(self):
         proj = self.make_project('big-app', {'a.txt': 'x'}, git=False)
-        with patch('workbench_scope.MAX_COPY_FILES', 0):
+        with patch('veil.tools.workbench_scope.MAX_COPY_FILES', 0):
             execution, seen = self.run_with_roots('fix big-app', approval='n')
             self.assertEqual(seen, {})
             execution, seen = self.run_with_roots('fix big-app', approval='y')
@@ -1704,7 +1704,7 @@ class RealOpenCodeTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = Path(tempfile.mkdtemp())
         name = 'veil-workbench-' + secrets.token_hex(8)
-        script = ('import sys; from pathlib import Path; import executor_opencode as e; '
+        script = ('import sys; from pathlib import Path; from veil.tools import executor_opencode as e; '
                   'p={"model":"fake","base_url":sys.argv[3],"max_input_tokens":8000, '
                   '"input_cny_per_million":"2","output_cny_per_million":"8"}; '
                   'e.run("run",command="opencode",workdir=Path(sys.argv[1]),home=Path(sys.argv[2]),'
@@ -1713,7 +1713,7 @@ class RealOpenCodeTests(unittest.TestCase):
                   'maintenance=True,container_name=sys.argv[4])')
         process = subprocess.Popen([sys.executable, '-c', script, str(base / 'bench'), str(base / 'home'),
                                     f'http://127.0.0.1:{server.server_address[1]}/v1', name],
-                                   cwd=str(Path(ex.__file__).resolve().parent),
+                                   cwd=str(Path(__file__).resolve().parents[1]),
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         def cleanup():
             if process.poll() is None:
@@ -1745,7 +1745,7 @@ class RealOpenCodeTests(unittest.TestCase):
 class ScopeTests(unittest.TestCase):
     def test_git_snapshot_restores_after_the_project_is_broken_and_keeps_user_state(self):
         import subprocess
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         base = Path(tempfile.mkdtemp())
         project = base / 'p'
         project.mkdir()
@@ -1771,7 +1771,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual((project / 'u.txt').read_text(encoding='utf-8'), 'untracked')
 
     def test_symlinks_are_not_followed_and_old_snapshots_are_pruned(self):
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         base = Path(tempfile.mkdtemp())
         project, outside = base / 'p', base / 'outside.txt'
         project.mkdir()
@@ -1783,20 +1783,20 @@ class ScopeTests(unittest.TestCase):
             self.skipTest('symlinks not available')
         meta = scope.snapshot(project, base / 'snaps', 's0')
         self.assertFalse((Path(meta['dir']) / 'files' / 'link.txt').exists())
-        with patch('workbench_scope.KEEP_SNAPSHOTS', 2):
+        with patch('veil.tools.workbench_scope.KEEP_SNAPSHOTS', 2):
             for i in range(1, 5):
                 scope.snapshot(project, base / 'snaps', f's{i}')
         self.assertEqual(len([p for p in (base / 'snaps').iterdir()]), 2)
 
     def test_project_roots_must_be_a_list(self):
-        from veil_agent import _executor_roots
+        from veil.core.veil_agent import _executor_roots
         self.assertEqual(_executor_roots(['/a', ' /b ']), ['/a', '/b'])
         for bad in ('/a/b', [1], [''], None):
             with self.assertRaises(ValueError):
                 _executor_roots(bad)
 
     def test_copy_snapshot_restores_a_non_git_project(self):
-        import workbench_scope as scope
+        from veil.tools import workbench_scope as scope
         base = Path(tempfile.mkdtemp())
         project = base / 'p'
         project.mkdir()
@@ -1810,7 +1810,7 @@ class ScopeTests(unittest.TestCase):
 
 class WorkbenchSwitchApiTests(unittest.TestCase):
     def test_state_round_trip_and_folder_rules(self):
-        import workbench_switch as ws
+        from veil.tools import workbench_switch as ws
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'proj').mkdir()
@@ -1830,7 +1830,7 @@ class WorkbenchSwitchApiTests(unittest.TestCase):
             self.assertFalse(ws.remove_folder(again, 'nope'))
 
     def test_bad_file_is_refused_not_coerced(self):
-        import workbench_switch as ws
+        from veil.tools import workbench_switch as ws
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = ws.settings_path(root)

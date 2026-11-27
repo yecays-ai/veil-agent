@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('style_probe', ROOT / 'experiments/style-snippet-351/style_probe.py')
+spec = importlib.util.spec_from_file_location('style_probe', ROOT / 'research/experiments/style-snippet-351/style_probe.py')
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
 
@@ -17,7 +17,7 @@ MODELS = [
     {'label': 'm2', 'input_cny_per_million': Decimal(1), 'cached_input_cny_per_million': Decimal('0.1'),
      'output_cny_per_million': Decimal(8)},
 ]
-SCENARIOS = json.loads((ROOT / 'experiments/style-snippet-351/scenarios.json').read_text(encoding='utf-8'))
+SCENARIOS = json.loads((ROOT / 'research/experiments/style-snippet-351/scenarios.json').read_text(encoding='utf-8'))
 
 
 class FakeModel:
@@ -106,7 +106,7 @@ class StyleProbeTests(unittest.TestCase):
 
     def test_output_inside_repo_refused(self):
         with self.assertRaises(SystemExit):
-            probe.main(['select', '--out', str(ROOT / 'experiments/x'), '--numbers', '1'])
+            probe.main(['select', '--out', str(ROOT / 'research/experiments/x'), '--numbers', '1'])
 
 
 if __name__ == '__main__':

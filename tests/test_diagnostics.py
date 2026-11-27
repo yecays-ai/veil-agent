@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-import diagnostics
-from diagnostics import (classify_denial, config_findings, links, module_states, overview,
+from veil.system import diagnostics
+from veil.system.diagnostics import (classify_denial, config_findings, links, module_states, overview,
                          recent_issues, report_text)
 
 
@@ -429,7 +429,7 @@ class ReviewFixTests(Base):
 
 class SyncTests(unittest.TestCase):
     def test_group_labels_cover_every_registered_group(self):
-        import tool_groups
+        from veil.tools import tool_groups
         registered = set(tool_groups.GROUP_SUMMARIES)
         missing = registered - set(diagnostics.GROUP_LABELS)
         self.assertEqual(missing, set(), 'add the Chinese label for these groups')

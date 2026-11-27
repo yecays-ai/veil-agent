@@ -1,0 +1,4160 @@
+"""Local browser front end for the same chat loop the terminal uses.
+
+The chat loop itself (run_chat) is unchanged and runs on the main thread; this
+file only supplies its input/output/approval functions and a small HTTP server
+bound to 127.0.0.1.
+"""
+import argparse
+import base64
+import bisect
+import hashlib
+import hmac
+import json
+import logging
+import os
+import queue
+import re
+import secrets
+import sqlite3
+import socket
+import ssl
+import stat
+import sys
+import threading
+import time
+from collections import OrderedDict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, getproxies, urlopen
+from urllib.error import HTTPError, URLError
+
+from veil.chat.attachment_utils import (ATTACHMENT_EXTENSIONS, MAX_ATTACHMENT_BYTES,
+                              inspect_attachment, redirected_path, valid_attachment_row)
+from veil.core.model_settings import SettingsError
+from veil.core.veil_agent import (ROOT, AUTONOMY_WAKE, CODEX_WATCH_WAKE, GLANCE_WAKE, MAX_PHOTO_BYTES,
+                        ActivityState, Budget, Chat, Store, UserError,
+                        background_cfg, load_character, memory_available, now,
+                        make_model, make_voice, run_chat,
+                        safe_tool_activity_detail)
+from veil.tools import workbench_switch
+from veil.persona import persona_versions
+from veil.system import diagnostics
+from veil.autonomy.autonomy import AutonomyController, GlanceController
+from veil.server.hub_screen_pop import ScreenPopMixin
+from veil.autonomy.codex_watch import CodexWatchController
+
+workbench_lock = threading.Lock()
+
+MAX_BODY = 200_000
+MEMORY_CHANGE_PATHS = ('/api/memory/edit', '/api/memory/delete', '/api/memory/versions',
+                       '/api/memory/restore-version', '/api/memory/archive', '/api/memory/archived',
+                       '/api/memory/unarchive',
+                       '/api/memory/lock', '/api/memory/seen', '/api/memory/event/split',
+                       '/api/memory/event/move')
+MAX_MEDIA_BYTES = MAX_PHOTO_BYTES
+MAX_VOICE_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_ACTIVE_VOICE_TRANSCRIPTIONS = 4
+MAX_PENDING_MEDIA = 32
+PENDING_MEDIA_TTL = 60 * 60
+MAX_SUBMISSIONS = 1024
+MAX_LIVE_EVENTS = 5000   # live replay window for page reloads; older chat comes from the durable chat log
+EVENT_TRIM_SLACK = 500
+# Ticket 150: Peter waits only while Lan is actually typing. A keystroke counts as typing for
+# a few seconds; a draft she leaves alone does not hold him. The grace lets her next keystroke
+# arrive after she presses send; the ceiling only guards a stuck typing signal.
+TYPING_ACTIVE_SECONDS = 4.0
+TYPING_GRACE_SECONDS = 2.0
+TYPING_MAX_WAIT_SECONDS = 90.0
+MEDIA_ID_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+MEDIA_TYPES = {
+    'image/png': ('.png', b'\x89PNG\r\n\x1a\n'),
+    'image/jpeg': ('.jpg', b'\xff\xd8\xff'),
+    'image/gif': ('.gif', b'GIF8'),
+    'image/webp': ('.webp', b'RIFF'),
+}
+VOICE_TYPES = {
+    'audio/webm': '.webm',
+    'audio/ogg': '.ogg',
+    'audio/mp4': '.m4a',
+    'audio/wav': '.wav',
+}
+SENSEVOICE_METADATA_TAG = re.compile(
+    r'<\|(?:zh|en|yue|ja|ko|nospeech|HAPPY|SAD|ANGRY|NEUTRAL|FEARFUL|DISGUSTED|SURPRISED|'
+    r'EMO_UNKNOWN|BGM|Speech|Applause|Laughter|Cry|Sneeze|Breath|Cough|Sing|Speech_Noise|'
+    r'withitn|woitn|GBG|Event_UNK)\|>', re.IGNORECASE)
+SENSEVOICE_EVENT_EMOJI = '🎼👏😀😭🤧😷'
+SENSEVOICE_EMOTION_EMOJI = '😊😔😞😡😰🤢😮'
+SENSEVOICE_EVENT_EMOJI_PREFIX = re.compile(rf'^(?:[{re.escape(SENSEVOICE_EVENT_EMOJI)}]\s*)+')
+SENSEVOICE_EMOTION_EMOJI_SUFFIX = re.compile(rf'\s*[{re.escape(SENSEVOICE_EMOTION_EMOJI)}]+$')
+
+
+VOICE_NO_SPEECH_ERROR = '没有识别到说话内容，可以重试识别。'
+
+
+def clean_voice_transcript(text):
+    """Remove SenseVoice rich emotion/event markers from dictation text."""
+    text = SENSEVOICE_METADATA_TAG.sub('', text).strip()
+    text = SENSEVOICE_EVENT_EMOJI_PREFIX.sub('', text)
+    return SENSEVOICE_EMOTION_EMOJI_SUFFIX.sub('', text).strip()
+VOICE_MIME = 'audio/mpeg'
+MAX_GENERATED_VOICE_BYTES = 25 * 1024 * 1024
+VOICE_TRANSPORT_ERRORS = {
+    'dns': '语音识别 DNS 解析失败（socket.gaierror），请检查本机网络或 DNS。',
+    'tls_certificate': '语音识别 TLS 证书验证失败，请检查系统证书或 HTTPS 检查代理。',
+    'tls': '语音识别 TLS 握手失败，请检查系统时间、证书或 HTTPS 代理。',
+    'proxy': '语音识别代理连接失败，请检查代理设置。',
+    'timeout': '语音识别请求超时，录音已保留；可以稍后重试。',
+    'connection_refused': '语音识别连接被拒绝，请检查网络或代理。',
+    'socket': '语音识别 socket 连接失败，请检查本机网络。',
+    'transport': '语音识别传输失败，请查看 Agent 日志中的异常类型。',
+}
+logger = logging.getLogger(__name__)
+APPROVAL_WAIT_SECONDS = 600
+
+
+def voice_transport_category(exc):
+    """Classify urllib's wrapped transport exception without exposing credentials."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    detail = str(reason).lower()
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return 'tls_certificate', reason
+    if isinstance(reason, ssl.SSLError):
+        return 'tls', reason
+    if 'proxy' in detail or 'tunnel' in detail or (getproxies().get('https') and isinstance(reason, OSError)):
+        return 'proxy', reason
+    if isinstance(reason, socket.gaierror):
+        return 'dns', reason
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return 'timeout', reason
+    if isinstance(reason, ConnectionRefusedError) or getattr(reason, 'winerror', None) == 10061:
+        return 'connection_refused', reason
+    if isinstance(reason, OSError):
+        return 'socket', reason
+    return 'transport', reason
+
+
+def valid_media_row(row):
+    if not isinstance(row, dict):
+        return False
+    if row.get('kind') == 'attachment':
+        return valid_attachment_row(row)
+    media_id, filename, mime = row.get('id'), row.get('filename'), row.get('mime')
+    suffix = (MEDIA_TYPES[mime][0] if mime in MEDIA_TYPES else
+              ('.mp3' if mime == VOICE_MIME else VOICE_TYPES.get(mime)))
+    return (isinstance(media_id, str) and MEDIA_ID_PATTERN.fullmatch(media_id) is not None
+            and isinstance(mime, str) and suffix is not None
+            and filename == media_id + suffix
+            and isinstance(row.get('name'), str) and isinstance(row.get('request_id'), str)
+            and (row.get('submission_digest') is None or
+                 (isinstance(row.get('submission_digest'), str)
+                  and re.fullmatch(r'[0-9a-f]{64}', row['submission_digest']) is not None)))
+
+
+class ChatInput(str):
+    def __new__(cls, text, media, complete=None, message_id=None, user_events=None, force_reply=False,
+                persisted=False):
+        value = super().__new__(cls, text)
+        value.media = media
+        value.complete = complete or (lambda _committed: None)
+        value.message_id = message_id
+        value.user_events = user_events
+        value.force_reply = force_reply
+        value.persisted = persisted
+        return value
+
+
+class ChatAction:
+    def __init__(self, action, payload):
+        self.action = action
+        self.payload = payload
+
+
+class Hub(ScreenPopMixin):
+    """Message list shared by the chat loop (main thread) and HTTP handlers."""
+
+    def __init__(self, name, activity, memory_port=None, media_root=None, data_root=None, config_root=None):
+        self.name = name
+        self.data_root = Path(data_root) if data_root else ROOT / 'data'
+        self.started_at = time.time()          # ticket 432: the diagnostics page shows real uptime
+        self.life_path = self.data_root / 'life-records.json'
+        self.config_root = Path(config_root) if config_root else ROOT
+        self.acceptance_limits = None
+        self.chat = None
+        self.activity = activity
+        self.memory_tools = None
+        self.events = []          # newest MAX_LIVE_EVENTS or so; ids keep counting, see push()
+        self.last_event_id = 0
+        self.submit_errors = {}
+        self.busy = True          # true until the loop is waiting for input
+        self.stopping = False
+        self.stopped = False
+        self.ready = False        # true once the chat loop first waits for input
+        self.cond = threading.Condition()
+        self.inbox = queue.Queue()
+        self.answers = queue.Queue()
+        self.pending = None       # event id of the approval being asked, else None
+        self.screen_pop_cond = threading.Condition()
+        self.screen_pop_shell_seen = 0.0
+        self.screen_pop_requests = OrderedDict()
+        self.voice_jobs = {}
+        self.voice_jobs_lock = threading.Lock()
+        self.voice_job_slots = threading.BoundedSemaphore(MAX_ACTIVE_VOICE_TRANSCRIPTIONS)
+        self.transcribing_voice = False
+        self.submissions = OrderedDict()  # recent request ids -> normalized text digest
+        self.submission_pending = False  # admission reserved while media storage runs
+        self.user_typing = False
+        self.typed_at = None
+        self.emitted_error_requests = set()
+        self.autonomy = None
+        self.glance = None
+        self.codex_watch = None
+        self.models_view = None       # ticket 134: what the 模型 settings card shows
+        self.models_reload_pending = False
+        self.background_running = None
+        self.capability_record = lambda: None
+        self.defer_outputs = False
+        self.deferred_outputs = []
+        self.current_capabilities = lambda: 'Current capabilities are not available.'
+        self.runtime_status = lambda: {
+            'state': 'healthy', 'classification': 'healthy', 'message': '运行正常。'}
+        self.activity_transition = lambda enabled: self.activity.set(enabled)
+        self.autonomy_busy = False
+        self.last_interaction = time.monotonic() - 1200
+        self.next_calendar_poll = 0.0
+        self.autonomy_interrupted = threading.Event()
+        self.away = []   # tickets 098/102: an AwayBridge per configured channel (email, QQ)
+        self.media_root = Path(media_root) if media_root else None
+        self.media_index = {}
+        self.startup_media_ids = set()
+        self.pending_media = OrderedDict()
+        self.pending_media_times = {}
+        self.media_lock = threading.RLock()
+        if self.media_root:
+            self.media_root.mkdir(parents=True, exist_ok=True)
+            if redirected_path(self.media_root) or not self.media_root.is_dir():
+                raise UserError('附件目录被重定向，已停止；请保留 data 文件夹。')
+            self.upload_root = self.media_root / '.uploads'
+            self.upload_root.mkdir(exist_ok=True)
+            if redirected_path(self.upload_root) or not self.upload_root.is_dir():
+                raise UserError('附件临时目录被重定向，已停止；请保留 data 文件夹。')
+            for upload in self.upload_root.iterdir():
+                if upload.is_file():
+                    upload.unlink(missing_ok=True)
+            index = self.media_root / 'index.jsonl'
+            try:
+                raw_index = index.read_bytes()
+                lines = raw_index.splitlines(keepends=True)
+                if lines and not lines[-1].endswith((b'\n', b'\r')):
+                    lines.pop()  # an interrupted final append was never committed
+                    repaired = index.with_suffix('.repair')
+                    repaired.write_bytes(b''.join(lines))
+                    repaired.replace(index)
+                for raw_line in lines:
+                    if not raw_line.strip():
+                        continue
+                    row = json.loads(raw_line.decode('utf-8'))
+                    if not valid_media_row(row):
+                        raise ValueError('invalid media index row')
+                    self.media_index[row['id']] = row
+                    digest = row.get('submission_digest')
+                    if digest:
+                        self.submissions[row['request_id']] = bytes.fromhex(digest)
+                        if len(self.submissions) > MAX_SUBMISSIONS:
+                            self.submissions.popitem(last=False)
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, UnicodeError) as exc:
+                raise UserError('媒体索引无法读取，已停止；请保留 data 文件夹。') from exc
+            recovered_voice = False
+            voice_mimes = {suffix: mime for mime, suffix in VOICE_TYPES.items()}
+            indexed = {row['filename'] for row in self.media_index.values()}
+            for candidate in self.media_root.iterdir():
+                if not candidate.is_file() or candidate.name in indexed:
+                    continue
+                attachment_match = re.fullmatch(r'([0-9a-f]{32})(\.[a-z0-9]{1,12})', candidate.name)
+                if attachment_match and attachment_match.group(2) in ATTACHMENT_EXTENSIONS:
+                    candidate.unlink(missing_ok=True)
+                    continue
+                match = re.fullmatch(r'([0-9a-f]{32})\.(png|jpg|gif|webp|webm|ogg|m4a|wav)', candidate.name)
+                if not match:
+                    continue
+                media_id, suffix = match.groups()
+                mime = voice_mimes.get('.' + suffix)
+                marker = self.media_root / ('.' + media_id + '.voice-pending')
+                if mime and marker.is_file() and not marker.is_symlink():
+                    if candidate.is_symlink():
+                        continue
+                    self.media_index[media_id] = {
+                        'id': media_id, 'filename': candidate.name, 'mime': mime,
+                        'kind': 'voice', 'name': 'voice', 'request_id': 'voice-' + media_id,
+                        'transcript': '',
+                        'transcription_error': '上次保存中断，录音已恢复；可以重试识别。'}
+                    recovered_voice = True
+                elif not mime:
+                    candidate.unlink(missing_ok=True)
+            if recovered_voice:
+                self._rewrite_media_index(index)
+            for marker in self.media_root.glob('.' + ('[0-9a-f]' * 32) + '.voice-pending'):
+                marker.unlink(missing_ok=True)
+            self.startup_media_ids = set(self.media_index)
+
+    def discard_unsent_voice(self, keep_ids):
+        """Delete recordings that were never sent in an earlier run; they are not replayed."""
+        with self.media_lock:
+            unsent = [row for row in self.media_index.values()
+                      if row.get('kind') == 'voice' and row['id'] in self.startup_media_ids
+                      and row['id'] not in keep_ids and not row.get('delivery_pending')
+                      and row.get('request_id') == 'voice-' + row['id']]
+            removed = []
+            for row in unsent:
+                try:
+                    (self.media_root / row['filename']).unlink(missing_ok=True)
+                except OSError:
+                    logger.warning('Unsent voice recording could not be deleted: %s', row['id'])
+                    continue
+                removed.append(row['id'])
+            if removed:
+                for media_id in removed:
+                    self.media_index.pop(media_id, None)
+                try:
+                    self._rewrite_media_index()
+                except OSError:
+                    logger.warning('Unsent voice index cleanup could not be persisted; it will be retried')
+
+    def tool_activity(self, limit=240):
+        """Project the append-only tool ledger into one current row per real call."""
+        chat = self.chat
+        if chat is None:
+            return []
+        # The desktop polls every 600 ms per window; only re-read the ledger when it changed.
+        try:
+            stat = (chat.store.root / f'{chat.cfg.id}/tools.jsonl').stat()
+            key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, limit)
+        except OSError:
+            key = None
+        cached = getattr(self, '_tool_activity_cache', None)
+        if key is not None and cached and cached[0] == key:
+            return cached[1]
+        rows = chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', 5000)
+        projected = {}
+        order = []
+        memory_names = {'hold', 'breath_search', 'trace', 'dream', 'letter_write', 'letter_read',
+                        'letter_lock_update', 'I', 'memory_history', 'memory_catalog', 'memory_read'}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict) or not isinstance(row.get('tool'), str):
+                continue
+            call_id = row.get('call_id')
+            if not isinstance(call_id, str) or not call_id:
+                call_id = 'legacy:' + ':'.join(str(row.get(key, '')) for key in
+                                               ('request_id', 'time', 'tool', 'path'))
+                if call_id == 'legacy::::':
+                    call_id += str(index)
+            if call_id not in projected:
+                projected[call_id] = {'call_id': call_id, 'started_at': row.get('time'),
+                                      'request_id': row.get('request_id')}
+                order.append(call_id)
+            item = projected[call_id]
+            item.update({key: row[key] for key in ('tool', 'path', 'state', 'result_state') if key in row})
+            if 'detail' in row:
+                item['detail'] = safe_tool_activity_detail(row['detail'])
+            if isinstance(row.get('tool_input'), str):
+                item['tool_input'] = safe_tool_activity_detail(row['tool_input'], limit=1000)
+            if row.get('tool_input_truncated') is True:
+                item['tool_input_truncated'] = True
+            if isinstance(row.get('canonical_tool'), str):
+                item['canonical_tool'] = row['canonical_tool']
+            item['source'] = ('瞄一眼' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
+                              '自主活动' if row.get('autonomy_run_id') else
+                              '委派任务' if row.get('category') == 'delegate' else
+                              '长期任务' if row['tool'].startswith('long_task_') else '聊天')
+            item['category'] = ('glance' if str(row.get('autonomy_run_id') or '').startswith('glance:') else
+                                'memory' if row['tool'] in memory_names else
+                                'long_task' if row['tool'].startswith('long_task_') else 'tool')
+            if row.get('autonomy_run_id'):
+                item['autonomy_run_id'] = row['autonomy_run_id']
+            lifecycle = row.get('screen_pop_event')
+            if (row.get('tool') == 'screen_pop' and
+                    lifecycle in ('shown', 'dismissed', 'finished')):
+                item['screen_pop_style'] = row.get('screen_pop_style')
+                item['screen_pop_total'] = row.get('screen_pop_total', 1)
+                item.setdefault('screen_pop_events', []).append({
+                    'event': lifecycle, 'time': row.get('time'),
+                    'item': row.get('screen_pop_item'),
+                })
+            if row.get('state') != '进行中':
+                item['finished_at'] = row.get('time')
+        for item in projected.values():
+            if item.get('tool') != 'screen_pop' or not item.get('screen_pop_events'):
+                continue
+            total = item.get('screen_pop_total', 1)
+            event_name = 'dismissed' if item.get('screen_pop_style') == 'popup' else 'finished'
+            completed = {entry.get('item') for entry in item['screen_pop_events']
+                         if entry.get('event') == event_name and isinstance(entry.get('item'), int)}
+            item['screen_pop_state'] = ('还开着' if item.get('screen_pop_style') == 'popup' else '弹幕播放中')
+            if len(completed) >= total:
+                item['screen_pop_state'] = ('已关闭' if item.get('screen_pop_style') == 'popup' else '弹幕结束')
+            labels = {'shown': 'shown', 'dismissed': 'dismissed', 'finished': 'finished'}
+            item['detail'] = '\n'.join(
+                f"{labels[event['event']]} at {event['time']}" +
+                (f" (item {event['item']})" if isinstance(event.get('item'), int) else '')
+                for event in item['screen_pop_events'] if event.get('time'))
+        result = [projected[call] for call in order[-limit:]]
+        if key is not None:
+            self._tool_activity_cache = (key, result)
+        return result
+
+    def live_context(self, tools, limit=10):
+        """Ticket 125: the newest context-log rows with their tool calls, plus short-term notes."""
+        chat = self.chat
+        if chat is None:
+            return {'turns': [], 'notes': None}
+        name = f'{chat.cfg.id}/context-log.jsonl'
+        try:
+            stat = (chat.store.root / name).stat()
+            key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, limit)
+        except OSError:
+            key = None
+        cached = getattr(self, '_context_log_cache', None)
+        if key is not None and cached and cached[0] == key:
+            rows = cached[1]
+        else:
+            try:
+                rows = chat.store.read_tail(name, limit) if key is not None else []
+            except (OSError, UserError, ValueError):
+                rows = []
+            if key is not None:
+                self._context_log_cache = (key, rows)
+        diagnostics = {}
+        try:
+            for item in chat.store.read_tail(f'{chat.cfg.id}/recall-diagnostics.jsonl', 40):
+                if isinstance(item, dict) and item.get('request_id'):
+                    diagnostics[item['request_id']] = {
+                        'ombre': list(item.get('ombre') or []),
+                        'hidden': list(item.get('hidden') or []),
+                        'vector': list(item.get('vector') or []),
+                        'judge': item.get('judge') if isinstance(item.get('judge'), dict) else {},
+                        'dropped': list(item.get('dropped') or []),
+                        'injected': list(item.get('injected') or []),
+                        'opening': list(item.get('opening') or []),
+                        'budget_dropped': list(item.get('budget_dropped') or []),
+                        'budget': item.get('budget') if isinstance(item.get('budget'), dict) else {},
+                        'items': list(item.get('items') or []),
+                        'reused': list(item.get('reused') or []),
+                        # Review: a follow-up carry is pasted this turn; only a block dropped because
+                        # the history already had it is "reused".
+                        'carried': list(item.get('carried') or []),
+                        # P6-S1: structured retrieval/degradation details (shared embedding,
+                        # model/dimension mismatch, judge reason/detail/timings). Kept as plain
+                        # dicts so the API stays additive for older desktop builds.
+                        'retrieval': item.get('retrieval')
+                        if isinstance(item.get('retrieval'), dict) else {},
+                        'degraded': item.get('degraded')
+                        if isinstance(item.get('degraded'), dict) else {},
+                        # Ticket 422: the three recall paths and the base that is carried every turn.
+                        'relationship_base': item.get('relationship_base')
+                        if isinstance(item.get('relationship_base'), dict) else {},
+                        'relevant_recall': list(item.get('relevant_recall') or []),
+                        'natural_association': list(item.get('natural_association') or []),
+                        'association': item.get('association')
+                        if isinstance(item.get('association'), dict) else {},
+                        'final_trim': item.get('final_trim') or '',
+                        'failure': item.get('failure') or '',
+                    }
+        except (OSError, UserError, ValueError):
+            diagnostics = {}
+        by_request = {}
+        for item in tools or []:
+            if item.get('request_id'):
+                by_request.setdefault(item['request_id'], []).append(
+                    {'tool': item.get('tool'), 'state': item.get('state')})
+        turns = []
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            background = row.get('background') if isinstance(row.get('background'), dict) else {}
+            notes = row.get('short_term_notes') if isinstance(row.get('short_term_notes'), dict) else {}
+            turns.append({
+                'time': row.get('time'), 'kind': row.get('kind'),
+                'history_rounds': row.get('history_rounds'),
+                'history_total_rounds': row.get('history_total_rounds'),
+                'history_dropped_rounds': row.get('history_dropped_rounds') or 0,
+                'history_dropped_since': row.get('history_dropped_since') or '',
+                'trim_note': row.get('trim_note') or '',
+                'memory_count': len(row.get('memory_ids') or []),
+                'background_count': len(background.get('paragraphs') or []) + len(background.get('core') or []),
+                'notes_count': notes.get('count', 0),
+                'estimated_input_tokens': row.get('estimated_input_tokens'),
+                'actual_input_tokens': row.get('actual_input_tokens'),
+                'completion_tokens': row.get('completion_tokens'),
+                'latency_seconds': row.get('latency_seconds'),
+                'usage_status': row.get('usage_status'),
+                'sent': row.get('sent'),
+                'tools': by_request.get(row.get('request_id'), []),
+                'recall': diagnostics.get(row.get('request_id')),
+            })
+        notes = None
+        short_term = getattr(chat, 'short_term_notes', None)
+        if short_term is not None:
+            try:
+                notes = short_term.snapshot()
+            except (OSError, UserError, ValueError, TypeError):
+                notes = None
+        voice_style = getattr(chat, 'voice_style', None)
+        checkpoint = getattr(chat, 'work_checkpoint', None)
+        try:
+            checkpoint_view = checkpoint.view() if checkpoint is not None else None
+        except UserError:
+            checkpoint_view = None
+        return {'turns': turns, 'notes': notes, 'tool_inventory': self.tool_inventory(key),
+                'voice_style': voice_style.status(with_text=True) if voice_style is not None else None,
+                'work_checkpoint': checkpoint_view}
+
+
+    # ---------- Ticket 394: Peter page ----------
+
+    @staticmethod
+    def _estimate_tokens(text):
+        if not isinstance(text, str) or not text:
+            return 0
+        ascii_chars = sum(1 for char in text if ord(char) < 128)
+        return int((ascii_chars + 3) // 4 + (len(text) - ascii_chars))
+
+    @staticmethod
+    def _page_versions(path):
+        try:
+            return [{'name': item.name,
+                     'time': item.stat().st_mtime}
+                    for item in persona_versions.list_versions(path)[:20]]
+        except OSError:
+            return []
+
+    def _page_error(self, operation, path, exc):
+        try:
+            path = Path(path)
+            log = self.chat.store.root / self.chat.cfg.id / 'peter-page-errors.jsonl'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            row = {'time': now(), 'operation': operation, 'path': str(path),
+                   'bytes': path.stat().st_size if path.exists() else 0,
+                   'error': type(exc).__name__, 'message': str(exc)}
+            with log.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+        except OSError:
+            pass
+
+    def _write_page_file(self, path, text):
+        path = Path(path)
+        if not isinstance(text, str):
+            raise UserError('内容必须是文字。')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        persona_versions.snapshot(path)
+        temporary = path.with_name(path.name + f'.{secrets.token_hex(4)}.tmp')
+        try:
+            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
+                handle.write(text.rstrip() + ('\n' if text.strip() else ''))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise UserError(f'写 {path.name} 失败：{exc}。修改没有保存；请重试。') from exc
+
+    def pending_approvals(self):
+        return self.chat.pending_approvals.list()
+
+    def decide_pending(self, body):
+        item_id, decision = body.get('id'), body.get('decision')
+        if not isinstance(item_id, str) or not item_id:
+            raise UserError('缺少请求 id。')
+        return self.chat.pending_approvals.decide(item_id, decision)
+
+    def instructions_page(self):
+        """Ticket 400: every registered instruction with the text that would reach the model."""
+        from veil.prompts import instructions
+        chat = self.chat
+        if chat is None:
+            return {'categories': [], 'generated_at': ''}
+        return instructions.page(chat)
+
+    def save_instruction(self, body):
+        """Ticket 401: replace one instruction's text whole, then return the refreshed page."""
+        from veil.prompts import instructions
+        if not isinstance(body, dict):
+            raise UserError('请求格式不对。')
+        entry_id, text = body.get('id'), body.get('text')
+        if not isinstance(entry_id, str) or not entry_id:
+            raise UserError('缺少条目编号。')
+        if not isinstance(text, str):
+            raise UserError('内容必须是文字。')
+        instructions.save(entry_id, text)
+        return {'page': instructions.page(self.chat)}
+
+    def peter_page(self):
+        chat = self.chat
+        persona_path = Path(chat.cfg.persona_path) if getattr(chat.cfg, 'persona_path', None) else None
+        background_path = Path(chat.cfg.background) if getattr(chat.cfg, 'background', None) else None
+        persona_text = chat.cfg.persona or ''
+        try:
+            background_text = background_path.read_text(encoding='utf-8-sig') if background_path else ''
+        except OSError as exc:
+            self._page_error('read_background', background_path, exc)
+            background_text = ''
+        user = chat.user_persona.status() if getattr(chat, 'user_persona', None) else None
+        learned = chat.profile.status(with_text=True) if getattr(chat, 'profile', None) and hasattr(chat.profile, 'status') else None
+        if learned is not None:
+            learned['versions'] = self._page_versions(chat.profile.versions)
+        return {
+            'persona': {'text': persona_text, 'chars': len(persona_text),
+                        'bytes': len(persona_text.encode('utf-8')),
+                        'tokens': self._estimate_tokens(persona_text),
+                        'mtime': persona_path.stat().st_mtime if persona_path and persona_path.exists() else 0,
+                        'path': str(persona_path) if persona_path else '',
+                        'versions': self._page_versions(persona_path) if persona_path else []},
+            'background': {'text': background_text, 'chars': len(background_text),
+                           'bytes': len(background_text.encode('utf-8')),
+                           'tokens': self._estimate_tokens(background_text),
+                           'mtime': background_path.stat().st_mtime if background_path and background_path.exists() else 0,
+                           'path': str(background_path) if background_path else '',
+                           'versions': self._page_versions(background_path) if background_path else []},
+            'user_persona': user,
+            'learned': learned,
+            'error_log': str(chat.store.root / chat.cfg.id / 'peter-page-errors.jsonl'),
+        }
+
+    def save_peter_page(self, body):
+        action = body.get('action')
+        chat = self.chat
+        if action == 'load':
+            return self.peter_page()
+        if action == 'save_persona':
+            text = body.get('text')
+            if not isinstance(text, str) or not text.strip():
+                raise UserError('人设不能为空。')
+            if not getattr(chat.cfg, 'persona_path', None):
+                raise UserError('这个角色没有本机人设文件。')
+            path = Path(chat.cfg.persona_path)
+            self._write_page_file(path, text)
+            chat.reload_persona()
+            return self.peter_page()
+        if action == 'save_background':
+            text = body.get('text')
+            if not isinstance(text, str):
+                raise UserError('背景资料必须是文字。')
+            path = Path(chat.cfg.background)
+            self._write_page_file(path, text)
+            return self.peter_page()
+        if action == 'save_user_persona':
+            if not getattr(chat, 'user_persona', None):
+                raise UserError('这个角色没有配置关于你（Lan 的人设）。')
+            chat.user_persona.save(body.get('text'))
+            return self.peter_page()
+        if action == 'save_learned':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_section'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            section = body.get('section')
+            chat.profile.save_section(section, body.get('text'),
+                                      expected_updated_at=body.get('expected_updated_at'),
+                                      force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'save_ongoing':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_ongoing'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            chat.profile.save_ongoing(body.get('items'),
+                                      expected_updated_at=body.get('expected_updated_at'),
+                                      force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'save_relationship':
+            # Ticket 422: Lan edits the stable relationship base herself; her text always wins.
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'save_relationship'):
+                raise UserError('这个角色没有启用已学习的上下文。')
+            chat.profile.save_relationship(body.get('items'),
+                                           expected_updated_at=body.get('expected_updated_at'),
+                                           force=body.get('force') is True)
+            return self.peter_page()
+        if action == 'restore':
+            section = body.get('section')
+            version = body.get('version')
+            if section not in ('persona', 'background', 'user_persona') or not isinstance(version, str):
+                raise UserError('只能恢复人设、背景或关于你的人设。')
+            target = Path(chat.cfg.persona_path) if section == 'persona' else (
+                Path(chat.cfg.background) if section == 'background' else chat.user_persona.path)
+            folder = persona_versions.versions_dir(target)
+            source = folder / Path(version).name
+            if not source.is_file() or not source.resolve().is_relative_to(folder.resolve()):
+                raise UserError('这个历史版本不存在。')
+            self._write_page_file(target, source.read_text(encoding='utf-8-sig'))
+            if section == 'persona':
+                chat.reload_persona()
+            return self.peter_page()
+        raise UserError('未知的保存操作。')
+
+    TOOL_USE_ROWS = 6000
+
+    def tool_inventory(self, key):
+        """Ticket 357: every tool definition with its size, where it sits, and how often it was used lately.
+
+        The list itself is built by the chat on its own thread (Chat.refresh_tool_inventory, once per
+        request). This runs on the polling thread, so it only reads that finished list and the tool log:
+        building it here would wait on the model-settings lock and could start MCP workers."""
+        chat = self.chat
+        listed = getattr(chat, 'tool_inventory_snapshot', None)
+        if not isinstance(listed, dict):
+            return None
+        cached = getattr(self, '_tool_inventory_cache', None)
+        if key is not None and cached and cached[0] == (key, id(listed)):
+            return cached[1]
+        result = {**listed, 'rows': [dict(row) for row in listed.get('rows', [])]}
+        counts, seen = {}, 0
+        try:
+            for row in chat.store.read_tail(f'{chat.cfg.id}/tools.jsonl', self.TOOL_USE_ROWS):
+                if isinstance(row, dict) and isinstance(row.get('tool'), str) and row.get('state') != '进行中':
+                    counts[row['tool']] = counts.get(row['tool'], 0) + 1
+                    seen += 1
+        except (OSError, UserError, ValueError):
+            counts, seen = {}, 0
+        for row in result['rows']:
+            row['recent_calls'] = counts.get(row['name'], 0) + (
+                counts.get(row['tool'], 0) if row['tool'] != row['name'] else 0)
+        result['recent_call_total'] = seen
+        if key is not None:
+            self._tool_inventory_cache = ((key, id(listed)), result)
+        return result
+
+    sticker_library = None  # ticket 222; set at startup
+
+    def media_info(self, media_id):
+        with self.media_lock:
+            row = self.media_index.get(media_id)
+            return dict(row) if row else None
+
+    def attachment_info(self, media_id):
+        row = self.media_info(media_id)
+        return row if valid_attachment_row(row) else None
+
+    def save_attachment(self, snapshot):
+        if self.media_root is None or not isinstance(snapshot, dict):
+            return None
+        raw = snapshot.get('data')
+        try:
+            metadata = inspect_attachment(snapshot.get('name'), raw)
+        except ValueError:
+            return None
+        if any(snapshot.get(key) != metadata[key] for key in ('name', 'mime', 'view', 'size')):
+            return None
+        media_id = secrets.token_hex(16)
+        filename = media_id + metadata['suffix']
+        row = {'id': media_id, 'filename': filename, 'mime': metadata['mime'],
+               'view': metadata['view'], 'kind': 'attachment', 'name': metadata['name'],
+               'size': metadata['size'], 'request_id': 'assistant-attachment-' + media_id}
+        target = self.media_root / filename
+        with self.media_lock:
+            if redirected_path(self.media_root) or not self.media_root.is_dir():
+                raise OSError('attachment directory redirected')
+            if media_id in self.media_index or target.exists() or target.is_symlink():
+                return None
+            created = False
+            try:
+                with target.open('xb', buffering=0) as handle:
+                    created = True
+                    if handle.write(raw) != len(raw):
+                        raise OSError('short attachment write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self.media_index[media_id] = row
+                created = True
+                self._rewrite_media_index()
+            except OSError:
+                if created:
+                    self.media_index.pop(media_id, None)
+                    target.unlink(missing_ok=True)
+                raise
+        return dict(row)
+
+    def read_attachment(self, media_id):
+        row = self.attachment_info(media_id)
+        if not row:
+            return None
+        path = self.media_root / row['filename']
+        try:
+            if (redirected_path(self.media_root) or redirected_path(path)
+                    or not path.is_file()):
+                return None
+            before = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != row['size']:
+                return None
+            fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+            with os.fdopen(fd, 'rb') as handle:
+                opened = os.fstat(handle.fileno())
+                identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != identity:
+                    return None
+                raw = handle.read(MAX_ATTACHMENT_BYTES + 1)
+                after_read = os.fstat(handle.fileno())
+            after = path.stat(follow_symlinks=False)
+            if (len(raw) != row['size'] or len(raw) > MAX_ATTACHMENT_BYTES or
+                    any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns) != identity
+                        for item in (after_read, after))):
+                return None
+            try:
+                metadata = inspect_attachment(row['name'], raw)
+            except ValueError:
+                return None
+            if any(row.get(key) != metadata[key] for key in ('name', 'mime', 'view', 'size')):
+                return None
+            return row, raw
+        except OSError:
+            return None
+
+    def register_voice_media(self, media):
+        if not isinstance(media, dict) or media.get('mime') != VOICE_MIME:
+            return None
+        media_id, filename = media.get('id'), media.get('filename')
+        if (not isinstance(media_id, str) or MEDIA_ID_PATTERN.fullmatch(media_id) is None
+                or filename != media_id + '.mp3'):
+            return None
+        row = {key: media[key] for key in ('id', 'filename', 'path', 'mime', 'name') if key in media}
+        row['request_id'] = 'assistant-voice-' + media_id
+        with self.media_lock:
+            self.media_index[media_id] = row
+        return dict(row)
+
+    def media_for_request(self, request_id):
+        with self.media_lock:
+            for row in reversed(list(self.media_index.values())):
+                if row.get('request_id') == request_id:
+                    return dict(row)
+        return None
+
+    def pending_media_info(self, media_id):
+        with self.media_lock:
+            row = self.pending_media.get(media_id)
+            return dict(row) if row else None
+
+    def save_media(self, mime, raw, original_name='image'):
+        if (self.media_root is None or mime not in MEDIA_TYPES or not isinstance(original_name, str)
+                or not raw or len(raw) > MAX_MEDIA_BYTES):
+            return None
+        suffix, signature = MEDIA_TYPES[mime]
+        if not raw.startswith(signature) or (mime == 'image/webp' and raw[8:12] != b'WEBP'):
+            return None
+        media_id = secrets.token_hex(16)
+        filename = media_id + suffix
+        row = {'id': media_id, 'filename': filename, 'mime': mime,
+               'name': Path(original_name).name[:120] or 'image'}
+        with self.media_lock:
+            cutoff = time.monotonic() - PENDING_MEDIA_TTL
+            expired = [media_id for media_id, created in self.pending_media_times.items()
+                       if created <= cutoff]
+            for expired_id in expired:
+                expired_row = self.pending_media.pop(expired_id, None)
+                self.pending_media_times.pop(expired_id, None)
+                if expired_row:
+                    (self.upload_root / expired_row['filename']).unlink(missing_ok=True)
+            if len(self.pending_media) >= MAX_PENDING_MEDIA:
+                return None
+            pending_path = self.upload_root / filename
+            try:
+                pending_path.write_bytes(raw)
+            except OSError:
+                pending_path.unlink(missing_ok=True)
+                raise
+            self.pending_media[media_id] = row
+            self.pending_media_times[media_id] = time.monotonic()
+        return dict(row)
+
+    def save_voice(self, mime, raw, original_name='voice'):
+        """Durably save a recording before transcription so failures can be retried."""
+        if (self.media_root is None or mime not in VOICE_TYPES or not isinstance(original_name, str)
+                or not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES):
+            return None
+        valid_container = ((mime == 'audio/webm' and raw.startswith(b'\x1a\x45\xdf\xa3'))
+                           or (mime == 'audio/ogg' and raw.startswith(b'OggS'))
+                           or (mime == 'audio/mp4' and len(raw) >= 12 and raw[4:8] == b'ftyp')
+                           or (mime == 'audio/wav' and raw.startswith(b'RIFF') and raw[8:12] == b'WAVE'))
+        if not valid_container:
+            return None
+        media_id = secrets.token_hex(16)
+        filename = media_id + VOICE_TYPES[mime]
+        row = {'id': media_id, 'filename': filename, 'mime': mime, 'kind': 'voice',
+               'name': Path(original_name).name[:120] or 'voice', 'request_id': 'voice-' + media_id,
+               'transcript': '', 'transcription_error': ''}
+        target = self.media_root / filename
+        index = self.media_root / 'index.jsonl'
+        marker = self.media_root / ('.' + media_id + '.voice-pending')
+        with self.media_lock:
+            try:
+                import os
+                with marker.open('xb', buffering=0) as handle:
+                    payload = json.dumps({'id': media_id, 'mime': mime, 'name': row['name']}).encode('utf-8')
+                    if handle.write(payload) != len(payload):
+                        raise OSError('short voice recovery marker write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                with target.open('wb', buffering=0) as handle:
+                    if handle.write(raw) != len(raw):
+                        raise OSError('short voice write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self.media_index[media_id] = row
+                self._rewrite_media_index(index)
+                marker.unlink(missing_ok=True)
+            except OSError:
+                self.media_index.pop(media_id, None)
+                target.unlink(missing_ok=True)
+                marker.unlink(missing_ok=True)
+                raise
+        return dict(row)
+
+    def _rewrite_media_index(self, index=None):
+        index = index or self.media_root / 'index.jsonl'
+        replacement = index.with_suffix('.tmp')
+        data = ''.join(json.dumps(row, ensure_ascii=False) + '\n'
+                       for row in self.media_index.values()).encode('utf-8')
+        try:
+            with replacement.open('wb', buffering=0) as handle:
+                if handle.write(data) != len(data):
+                    raise OSError('short media index write')
+                handle.flush()
+                os.fsync(handle.fileno())
+            replacement.replace(index)
+        except OSError:
+            replacement.unlink(missing_ok=True)
+            raise
+
+    def transcribe_voice(self, media_id):
+        with self.media_lock:
+            row = self.media_index.get(media_id)
+            if not row or row.get('kind') != 'voice':
+                return None, '录音不存在或已损坏。'
+            path = self.media_root / row['filename']
+            mime, name = row['mime'], row['filename']
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            error = '录音文件无法读取，录音已保留；可以重试识别。'
+            self._record_voice_result(media_id, '', error)
+            return None, error
+        transcript, error = self._transcribe_voice_bytes(raw, mime, name)
+        self._record_voice_result(media_id, transcript or '', error or '')
+        return transcript, error
+
+    def transcribe_voice_bytes(self, raw, mime, name='dictation'):
+        """Transcribe an in-memory dictation without retaining it as a voice message."""
+        return self._transcribe_voice_bytes(raw, mime, name)
+
+    def _transcribe_voice_bytes(self, raw, mime, name):
+        from dotenv import dotenv_values
+        key = (dotenv_values(Path(self.config_root) / '.env', interpolate=False, encoding='utf-8-sig')
+               .get('EMBED_API_KEY') or '').strip()
+        if not key:
+            return None, '语音识别密钥未配置。'
+        try:
+            started = time.monotonic()
+            boundary = '----veil-' + secrets.token_hex(12)
+            body = bytearray()
+            def field(label, value):
+                body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="{label}"\r\n\r\n{value}\r\n'.encode())
+            field('model', 'FunAudioLLM/SenseVoiceSmall')
+            body.extend(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: {mime}\r\n\r\n'.encode())
+            body.extend(raw)
+            body.extend(f'\r\n--{boundary}--\r\n'.encode())
+            request = Request('https://api.siliconflow.cn/v1/audio/transcriptions', data=bytes(body),
+                              headers={'Authorization': 'Bearer ' + key,
+                                       'Content-Type': 'multipart/form-data; boundary=' + boundary})
+            with urlopen(request, timeout=45) as response:
+                trace_id = getattr(response, 'headers', {}).get('x-siliconcloud-trace-id', '')
+                result = json.loads(response.read().decode('utf-8'))
+            transcript = result.get('text', '').strip() if isinstance(result, dict) else ''
+            transcript = clean_voice_transcript(transcript)
+            if not transcript:
+                logger.info('SenseVoice found no speech: audio_bytes=%d', len(raw))
+                return None, VOICE_NO_SPEECH_ERROR
+            logger.info('SenseVoice transcription complete: elapsed_seconds=%.2f audio_bytes=%d trace_id=%s',
+                        time.monotonic() - started, len(raw), trace_id or 'unavailable')
+        except HTTPError as exc:
+            logger.warning('SenseVoice HTTP failure: category=%s status=%s',
+                           'proxy' if exc.code == 407 else 'http', exc.code)
+            error = ('语音识别代理认证失败（HTTP 407），请检查代理设置。' if exc.code == 407 else
+                     f'语音识别服务返回 HTTP {exc.code}，请检查密钥或服务权限。'
+                     if exc.code in (401, 403) else f'语音识别服务返回 HTTP {exc.code}，请稍后重试。')
+            return None, error
+        except (URLError, TimeoutError, socket.timeout) as exc:
+            category, reason = voice_transport_category(exc)
+            logger.warning('SenseVoice transport failure: category=%s exception=%s errno=%s winerror=%s',
+                           category, type(reason).__name__, getattr(reason, 'errno', None),
+                           getattr(reason, 'winerror', None))
+            error = VOICE_TRANSPORT_ERRORS[category]
+            return None, error
+        except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            logger.warning('SenseVoice response failure: exception=%s', type(exc).__name__)
+            error = 'SenseVoice 返回内容无法解析或没有文字，录音已保留；可以重试识别。'
+            return None, error
+        return transcript, None
+
+    def start_voice_transcription(self, media_id):
+        """Start one background transcription and return its completion event."""
+        with self.voice_jobs_lock:
+            current = self.voice_jobs.get(media_id)
+            if current:
+                return current
+            media = self.media_info(media_id)
+            if media and media.get('transcript'):
+                finished = threading.Event()
+                finished.set()
+                return finished
+            if not self.voice_job_slots.acquire(blocking=False):
+                self._record_voice_result(media_id, '', '语音识别任务较多，录音已保留；可以稍后重试识别。')
+                return None
+            finished = threading.Event()
+            self.voice_jobs[media_id] = finished
+        def run():
+            try:
+                self.transcribe_voice(media_id)
+            finally:
+                finished.set()
+                with self.voice_jobs_lock:
+                    if self.voice_jobs.get(media_id) is finished:
+                        self.voice_jobs.pop(media_id, None)
+                self.voice_job_slots.release()
+        threading.Thread(target=run, name='voice-transcription', daemon=True).start()
+        return finished
+
+    def retry_voice_transcription(self, media_id, timeout=50):
+        """Reuse an active job, or start one retry, and return its durable result."""
+        finished = self.start_voice_transcription(media_id)
+        if not finished:
+            media = self.media_info(media_id)
+            return None, (media or {}).get('transcription_error') or '语音识别任务较多，请稍后重试。'
+        if not finished.wait(timeout):
+            return None, '语音识别仍在进行；录音已保留，请稍后再看。'
+        media = self.media_info(media_id)
+        if not media:
+            return None, '录音不存在或已损坏。'
+        transcript = (media.get('transcript') or '').strip()
+        return transcript or None, (None if transcript else media.get('transcription_error') or '没有识别出文字，录音已保留；可以重试识别。')
+
+    def _chat_input(self, queued):
+        if not isinstance(queued, tuple):
+            return ChatInput(str(queued), None)
+        text, media, complete = queued[0], queued[1], queued[2] if len(queued) > 2 else None
+        message_id = queued[3] if len(queued) > 3 else None
+        persisted = queued[4] if len(queued) > 4 else False
+        if isinstance(media, dict) and media.get('kind') == 'voice':
+            transcript = (media.get('transcript') or '').strip()
+            if not transcript:
+                with self.voice_jobs_lock:
+                    finished = self.voice_jobs.get(media.get('id'))
+                if not finished:
+                    finished = self.start_voice_transcription(media.get('id'))
+                if finished:
+                    with self.cond:
+                        self.transcribing_voice = True
+                    deadline = time.monotonic() + 55
+                    while not finished.wait(min(0.2, max(0, deadline - time.monotonic()))):
+                        if self.stopping or self.stopped:
+                            with self.cond:
+                                self.transcribing_voice = False
+                            if callable(complete):
+                                complete(False)
+                            raise EOFError
+                        if time.monotonic() >= deadline:
+                            with self.cond:
+                                self.transcribing_voice = False
+                            media = self.media_info(media.get('id')) or media
+                            media['transcription_error'] = '语音识别耗时较长，录音已保留；可以重试识别。'
+                            self.push('voice_status', '', media=media)
+                            if callable(complete):
+                                complete(False)
+                            with self.cond:
+                                self.busy = False
+                            return None
+                    with self.cond:
+                        self.transcribing_voice = False
+                media = self.media_info(media.get('id')) or media
+                transcript = (media.get('transcript') or '').strip()
+            if not transcript:
+                if callable(complete):
+                    complete(False)
+                with self.media_lock:
+                    row = self.media_index.get(media.get('id'))
+                    if row:
+                        row.pop('delivery_error', None)
+                        media = dict(row)
+                self.push('voice_status', '', media=media)
+                with self.cond:
+                    self.busy = False
+                return None
+            text = '[voice message] ' + transcript
+            self.push('voice_status', '', media=media)
+        if media:
+            with self.cond:
+                self.defer_outputs = True
+                self.deferred_outputs = []
+        return ChatInput(text, media, complete, message_id, persisted=persisted)
+
+    @staticmethod
+    def _is_command(item):
+        text = item[0] if isinstance(item, tuple) else item
+        return isinstance(text, str) and text.lstrip().startswith('/')
+
+    def _wait_while_lan_types(self):
+        # Ticket 150: while Lan is still typing her next line, Peter waits and reads the lines together.
+        # This follows her keystrokes, not a fixed window: no typing means he starts right away.
+        arrived = time.monotonic()
+        queued = None
+        with self.cond:
+            while not (self.stopping or self.stopped):
+                current = time.monotonic()
+                with self.inbox.mutex:
+                    if len(self.inbox.queue) != queued:
+                        queued, arrived = len(self.inbox.queue), current
+                    head = self.inbox.queue[0] if self.inbox.queue else None
+                if isinstance(head, ChatAction) or (head is not None and self._is_command(head)):
+                    return
+                typing = (self.user_typing and self.typed_at is not None
+                          and current - self.typed_at < TYPING_ACTIVE_SECONDS)
+                if current - arrived >= TYPING_GRACE_SECONDS and not typing:
+                    return
+                if current - arrived >= TYPING_MAX_WAIT_SECONDS:
+                    return
+                self.cond.wait(0.1)
+
+    def _chat_batch(self, first):
+        if isinstance(first, ChatAction):
+            return first
+        rows = [first]
+        while not self._is_command(first):
+            with self.inbox.mutex:
+                if (not self.inbox.queue or isinstance(self.inbox.queue[0], ChatAction)
+                        or self._is_command(self.inbox.queue[0])):
+                    break
+                item = self.inbox.queue.popleft()
+                self.inbox.not_full.notify()
+            rows.append(item)
+        converted = [self._chat_input(row) for row in rows]
+        converted = [row for row in converted if row is not None]
+        if not converted:
+            return None
+        if len(converted) == 1:
+            converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
+                                         'media': converted[0].media, 'persisted': converted[0].persisted}]
+            converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
+            return converted[0]
+        if any(row.media for row in converted):
+            with self.inbox.mutex:
+                for row in reversed(converted[1:]):
+                    self.inbox.queue.appendleft((str(row), row.media, row.complete, row.message_id, row.persisted))
+                    self.inbox.unfinished_tasks += 1
+                    self.inbox.not_empty.notify()
+            converted[0].user_events = [{'content': str(converted[0]), 'message_id': converted[0].message_id,
+                                         'media': converted[0].media, 'persisted': converted[0].persisted}]
+            converted[0].runtime_context = 'Lan is typing.' if self.user_typing else None
+            return converted[0]
+        text = '\n'.join(f'[Lan message {i + 1}] {row}' for i, row in enumerate(converted))
+        def complete(committed):
+            for row in converted:
+                row.complete(committed)
+        events = [{'content': str(row), 'message_id': row.message_id, 'persisted': row.persisted}
+                  for row in converted]
+        result = ChatInput(text, None, complete, converted[-1].message_id, events)
+        result.runtime_context = 'Lan is typing.' if self.user_typing else None
+        return result
+
+    def _record_voice_result(self, media_id, transcript, error):
+        with self.media_lock:
+            row = self.media_index.get(media_id)
+            if not row:
+                return
+            row['transcript'] = transcript
+            row['transcription_error'] = error
+            self._rewrite_media_index()
+
+    def mark_voice_unsent(self, media, error='语音没有交给 Peter；录音已保留，可以重试识别。'):
+        if not isinstance(media, dict) or media.get('kind') != 'voice':
+            return
+        with self.media_lock:
+            row = self.media_index.get(media.get('id'))
+            if not row:
+                return
+            row['request_id'] = 'voice-' + row['id']
+            row.pop('submission_digest', None)
+            row.pop('delivery_pending', None)
+            row['delivery_error'] = error
+            self.submissions.pop(media.get('request_id'), None)
+            self._rewrite_media_index()
+
+    def commit_media(self, media_id, request_id, submission_digest):
+        """Move one uploaded image into durable history, or return an existing commit."""
+        if media_id is None:
+            return None
+        with self.media_lock:
+            existing = self.media_index.get(media_id)
+            if existing:
+                if existing.get('request_id') == request_id:
+                    return dict(existing)
+                if existing.get('kind') == 'voice' and existing.get('request_id', '').startswith('voice-'):
+                    existing['request_id'] = request_id
+                    existing['submission_digest'] = submission_digest.hex()
+                    existing['delivery_pending'] = True
+                    existing.pop('delivery_error', None)
+                    self._rewrite_media_index()
+                    return dict(existing)
+                return None
+            pending = self.pending_media.get(media_id)
+            if not pending:
+                return None
+            row = {**pending, 'request_id': request_id,
+                   'submission_digest': submission_digest.hex()}
+            if row.get('kind') == 'voice':
+                row['delivery_pending'] = True
+            source = self.upload_root / row['filename']
+            target = self.media_root / row['filename']
+            index = self.media_root / 'index.jsonl'
+            replacement = index.with_suffix('.tmp')
+            moved = False
+            try:
+                import os
+                with source.open('rb+') as image_handle:
+                    os.fsync(image_handle.fileno())
+                source.replace(target)
+                moved = True
+                data = (json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8')
+                previous = index.read_bytes() if index.exists() else b''
+                with replacement.open('wb', buffering=0) as handle:
+                    combined = previous + data
+                    if handle.write(combined) != len(combined):
+                        raise OSError('short media index write')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                replacement.replace(index)
+            except OSError:
+                try:
+                    replacement.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if moved:
+                    try:
+                        target.replace(source)
+                    except OSError:
+                        pass
+                raise
+            self.pending_media.pop(media_id, None)
+            self.pending_media_times.pop(media_id, None)
+            self.media_index[media_id] = row
+            return dict(row)
+
+    def push(self, kind, text, **metadata):
+        with self.cond:
+            self.last_event_id += 1
+            event_id = self.last_event_id
+            self.events.append({'id': event_id, 'kind': kind, 'text': text,
+                                'time': now(), **metadata})
+            if len(self.events) > MAX_LIVE_EVENTS + EVENT_TRIM_SLACK:
+                # Old chat stays in the durable chat log; only the live replay window is bounded.
+                cut = len(self.events) - MAX_LIVE_EVENTS
+                # A card still waiting for an answer must survive a reload, so it is never trimmed.
+                waiting = [event for event in self.events[:cut]
+                           if event['kind'] == 'approval' and event['id'] == self.pending]
+                self.events[:cut] = waiting
+            return event_id
+
+    def _publish_output(self, text):
+        media = getattr(text, 'media', None)
+        attachments = getattr(text, 'attachments', None)
+        message_id = getattr(text, 'message_id', None)
+        request_id = getattr(text, 'request_id', None)
+        memory_refs = getattr(text, 'memory_refs', None)
+        is_error = getattr(text, 'is_error', False)
+        virtual_card = getattr(text, 'virtual_card', None)
+        virtual_card_event = getattr(text, 'virtual_card_event', None)
+        trace = getattr(text, 'trace', None)
+        elapsed = getattr(text, 'elapsed', None)
+        life_id = getattr(text, 'life_id', None)   # ticket 385: a notice about a calendar record
+        calendar_undo_id = getattr(text, 'calendar_undo_id', None)
+        calendar_can_remind = getattr(text, 'calendar_can_remind', False)
+        text = str(text)
+        prefix = f'{self.name}: '
+        if trace in ('thought', 'tool'):
+            # Ticket 226: tool lines and the model's reasoning are folded under the reply they belong to.
+            self.push('trace', text, trace=trace,
+                      **({'request_id': request_id} if isinstance(request_id, str) else {}),
+                      **({'elapsed': elapsed} if isinstance(elapsed, (int, float)) else {}))
+        elif text.startswith('新对话已开始；'):
+            self.push('reset', text)
+        elif text.startswith(prefix):
+            voice = self.register_voice_media(media)
+            safe_attachments = []
+            for item in attachments if isinstance(attachments, list) else []:
+                attachment = self.attachment_info(item.get('id')) if isinstance(item, dict) else None
+                if attachment:
+                    safe_attachments.append(attachment)
+            for bridge in self.away:
+                bridge.assistant_message(text[len(prefix):], safe_attachments)
+            self.push('assistant', text[len(prefix):],
+                      **({'media': voice} if voice else {}),
+                      **({'attachments': safe_attachments} if safe_attachments else {}),
+                      **({'message_id': message_id} if isinstance(message_id, str) else {}),
+                      **({'request_id': request_id} if isinstance(request_id, str) else {}),
+                      **({'memory_refs': memory_refs} if isinstance(memory_refs, list) and memory_refs else {}),
+                      **({'virtual_card': virtual_card} if isinstance(virtual_card, dict) else {}),
+                      **({'virtual_card_event': virtual_card_event} if isinstance(virtual_card_event, dict) else {}))
+        elif (is_error or text.startswith(('请求失败', '当前输入及必要上下文',
+                                            '这条输入加上人设和记忆太长', '工具说明和本轮上下文超过长度上限',
+                                            '模型返回空内容'))):
+            with self.cond:
+                if request_id and request_id in self.emitted_error_requests:
+                    return
+                if request_id:
+                    self.emitted_error_requests.add(request_id)
+            self.push('error', text, **({'request_id': request_id} if request_id else {}))
+        elif text.startswith('接上了'):
+            self.push('notice', text.split('。')[0] + '。')   # drop the terminal-only command hints
+        else:
+            self.push('notice', text, **({'life_id': life_id} if isinstance(life_id, str) else {}),
+                      **({'calendar_undo_id': calendar_undo_id} if isinstance(calendar_undo_id, str) else {}),
+                      **({'calendar_can_remind': True} if calendar_can_remind is True else {}))
+
+    def output(self, text):
+        with self.cond:
+            if self.defer_outputs:
+                self.deferred_outputs.append(text)
+                return
+        self._publish_output(text)
+
+    def finish_media_submission(self, committed, text, media, request_id):
+        if not committed:
+            self.mark_voice_unsent(media)
+            if self.chat is not None and request_id:
+                self.chat.fail_incoming([request_id], reason='submission_uncommitted')
+            with self.cond:
+                self.submissions.pop(request_id, None)
+        elif isinstance(media, dict) and media.get('kind') == 'voice':
+            with self.media_lock:
+                row = self.media_index.get(media.get('id'))
+                if row and row.get('delivery_pending'):
+                    row.pop('delivery_pending', None)
+                    try:
+                        self._rewrite_media_index()
+                    except OSError:
+                        row['delivery_pending'] = True
+                if row:
+                    media = dict(row)
+        with self.cond:
+            if committed and media:
+                self.push('user', text, media=media, request_id=request_id, message_id=request_id)
+            buffered = self.deferred_outputs
+            self.deferred_outputs = []
+            self.defer_outputs = False
+        for output in buffered:
+            self._publish_output(output)
+
+    def input_fn(self, _prompt=''):
+        for bridge in self.away:
+            bridge.turn_ended()
+        item = self._input_fn()
+        for bridge in self.away:
+            bridge.turn_started(item)
+        return item
+
+    def _input_fn(self):
+        with self.cond:
+            self.busy = False
+            self.ready = True
+        while True:
+            try:
+                text = self.inbox.get_nowait()
+            except queue.Empty:
+                text = None
+            if text is not None:
+                if isinstance(text, ChatAction):
+                    with self.cond:
+                        self.busy = True
+                    return text
+                self.last_interaction = time.monotonic()
+                if not self._is_command(text):
+                    self._wait_while_lan_types()
+                with self.cond:
+                    self.busy = True
+                item = self._chat_batch(text)
+                if item is not None:
+                    return item
+                continue
+            if self.stopping or self.stopped:
+                raise EOFError
+            if self.chat is not None and time.monotonic() >= self.next_calendar_poll:
+                self.next_calendar_poll = time.monotonic() + 5
+                try:
+                    due_daily = (self.chat.life_records.claim_daily_reminder()
+                                 if time.monotonic()-self.last_interaction>=1200 else None)
+                    due = self.chat.life_records.claim_due_reminder() if due_daily is None else None
+                except (OSError,ValueError,TypeError):
+                    due_daily = due = None
+                if due_daily is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('calendar_daily_due', due_daily)
+                if due is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('calendar_reminder_due', due)
+                due = self.chat.claim_due_reply_later()
+                if due is not None:
+                    with self.cond:
+                        self.busy = True
+                    return ChatAction('reply_later_due', due)
+            if self.codex_watch is not None and self.codex_watch.claim_due():
+                with self.cond:
+                    if (not self.stopping and not self.stopped and self.inbox.empty()
+                            and not self.submission_pending):
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return CODEX_WATCH_WAKE
+            if self.glance is not None and self.glance.due():
+                with self.cond:
+                    if (not self.stopping and not self.stopped and self.inbox.empty()
+                            and not self.submission_pending and self.glance.claim_due()):
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return GLANCE_WAKE
+            if self.autonomy is not None and self.autonomy.due():
+                with self.cond:
+                    if (not self.stopping and not self.stopped and self.activity.enabled()
+                            and self.inbox.empty() and not self.submission_pending
+                            and self.autonomy.claim_due()):
+                        self.autonomy_busy = True
+                        self.busy = True
+                        self.autonomy_interrupted.clear()
+                        return AUTONOMY_WAKE
+            try:
+                text = self.inbox.get(timeout=0.5)
+            except queue.Empty:
+                if self.stopping or self.stopped:
+                    raise EOFError
+                continue
+            if isinstance(text, ChatAction):
+                with self.cond:
+                    self.busy = True
+                return text
+            self.last_interaction = time.monotonic()
+            if not self._is_command(text):
+                self._wait_while_lan_types()
+            with self.cond:
+                self.busy = True
+            item = self._chat_batch(text)
+            if item is not None:
+                return item
+
+    def request_stop(self):
+        """Reject new work and ask the chat loop to finish its current step."""
+        with self.cond:
+            if self.stopped:
+                return 'stopped'
+            if self.stopping:
+                return 'stopping'
+            self.stopping = True
+            self.pending = None
+            self.autonomy_interrupted.set()
+            if self.chat is not None and self.busy and not self.autonomy_busy:
+                # Exit also abandons a model request Peter is still waiting on.
+                self.chat.user_stop.set()
+            self.cond.notify_all()
+            return 'accepted'
+
+    def stop(self):
+        """Publish completed service shutdown after chat resources have closed."""
+        with self.cond:
+            self.stopping = True
+            self.stopped = True
+            self.pending = None
+            self.autonomy_interrupted.set()
+            self.cond.notify_all()
+
+    def set_activity(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped:
+                return False
+            previous = self.activity.enabled()
+            if previous == enabled:
+                return True
+            if enabled and self.autonomy is not None:
+                self.autonomy.announce_autonomy()
+            self.activity_transition(enabled)
+            return True
+
+    def set_glance(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.glance is None:
+                return False
+            self.glance.set_enabled(enabled)
+            return True
+
+    def set_quiet_hours(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.autonomy is None:
+                return False
+            return self.autonomy.set_quiet_enabled(enabled)
+
+    def _sync_chat_model(self, before):
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        if models is None:
+            return
+        after = models.startup_choice('peter')
+        if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
+            self.chat.switch_model(after[1], after[2])
+
+    def refresh_models(self, reload=False):
+        """Ticket 134: rebuild the 模型 card's data; called at start and after every change."""
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        if models is None:
+            self.models_view = None
+            return None
+        if reload:
+            before = models.startup_choice('peter')
+            models.reload()
+            self._sync_chat_model(before)
+        view = models.public()
+        view['background_running'] = self.background_running
+        view['background_restart'] = (self.background_running is not None
+                                      and view['use']['background'] != self.background_running)
+        self.models_view = view
+        return view
+
+    def save_models(self, payload):
+        models = self.chat.cfg.models
+        before = None
+        try:
+            with models.env_lock, models.lock:
+                before = models.startup_choice('peter')
+                models.save(payload)
+                daily, monthly = models.limits()
+                if self.acceptance_limits:
+                    daily = min(daily, self.acceptance_limits[0])
+                    monthly = min(monthly, self.acceptance_limits[1])
+                self.chat.budget.daily, self.chat.budget.monthly = daily, monthly
+                after = models.startup_choice('peter')
+                if after is not None and (before is None or after[0] != before[0] or after[2] != before[2]):
+                    self.chat.switch_model(after[1], after[2])
+        except SettingsError as exc:
+            if '另一个进程' in str(exc):
+                models.reload()
+                self._sync_chat_model(before)
+                self.refresh_models()
+            raise
+        return self.refresh_models()
+
+    def use_model(self, role, model_id):
+        models = self.chat.cfg.models
+        before = models.startup_choice('peter')
+        try:
+            with models.env_lock, models.lock:
+                model_id, name, provider = models.use(role, model_id)
+                if role == 'peter':
+                    self.chat.switch_model(name, provider)
+        except SettingsError as exc:
+            if '另一个进程' in str(exc):
+                models.reload()
+                self._sync_chat_model(before)
+                self.refresh_models()
+            raise
+        return self.refresh_models()
+
+    def set_codex_watch(self, enabled):
+        with self.cond:
+            if self.stopping or self.stopped or self.codex_watch is None:
+                return False
+            self.codex_watch.set_enabled(enabled)
+            return True
+
+    def submit(self, text, request_id, media_id=None, *, allow_while_busy=True):
+        digest_input = text.encode('utf-8') + b'\0' + (media_id.encode() if isinstance(media_id, str) else b'')
+        text_digest = hashlib.sha256(digest_input).digest()
+        if media_id is not None and (
+                not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id)):
+            return 'media'
+        if media_id is not None and text.lstrip().startswith('/'):
+            return 'media_command'
+        # Check busy and register the accepted request atomically for all handlers.
+        with self.cond:
+            if request_id in self.submissions:
+                return 'duplicate' if self.submissions[request_id] == text_digest else 'conflict'
+            if self.stopping or self.stopped:
+                return 'stopped'
+            if self.submission_pending:
+                return 'busy'
+            if not allow_while_busy and (self.busy or self.autonomy_busy or not self.inbox.empty()):
+                return 'busy'
+            self.submission_pending = True
+        # Disk writes must not hold the event/approval condition. The reservation
+        # excludes concurrent submissions and new autonomy work until publication.
+        try:
+            try:
+                media = self.commit_media(media_id, request_id, text_digest)
+            except OSError:
+                with self.cond:
+                    self.submit_errors[request_id] = '图片或语音文件没能保存到本机。'
+                return 'media_storage'
+            if media_id is not None and not media:
+                return 'media'
+            persisted = False
+            if (self.chat is not None and not text.lstrip().startswith('/')
+                    and not (isinstance(media, dict) and media.get('kind') == 'voice')):
+                try:
+                    self.chat.persist_incoming(text, request_id, media)
+                    persisted = True
+                except (OSError, ValueError, UserError) as exc:
+                    # The real reason (for example a damaged ledger) must reach Lan; it is not a media fault.
+                    with self.cond:
+                        self.submit_errors[request_id] = (
+                            str(exc) if isinstance(exc, UserError) else '消息没能写入本机记录。')
+                        while len(self.submit_errors) > 50:
+                            self.submit_errors.pop(next(iter(self.submit_errors)))
+                    return 'media_storage' if media else 'storage'
+            with self.cond:
+                stopped = self.stopping or self.stopped
+                if not stopped:
+                    def complete(committed):
+                        self.finish_media_submission(committed, text, media, request_id)
+                    if not media:
+                        self.push('user', text, request_id=request_id, message_id=request_id)
+                    self.emitted_error_requests.discard(request_id)
+                    self.submissions[request_id] = text_digest
+                    if len(self.submissions) > MAX_SUBMISSIONS:
+                        self.submissions.popitem(last=False)
+                    self.inbox.put((text, media, complete, request_id, persisted))
+                    if self.autonomy_busy:
+                        self.autonomy_interrupted.set()
+                    else:
+                        self.busy = True
+            if stopped:
+                if persisted and self.chat is not None:
+                    try:
+                        self.chat.fail_incoming([request_id], reason='stopped')
+                    except OSError:
+                        return 'media_storage'
+                return 'stopped'
+            return 'accepted'
+        finally:
+            with self.cond:
+                self.submission_pending = False
+                self.cond.notify_all()
+
+    def message_action(self, action, message_id=None, *, message_ids=None, content=None, favorite=None, card=None):
+        card_actions = {
+            'create_transfer': 'transfer', 'create_gift': 'gift',
+            'card_receive': 'receive', 'card_accept': 'accept',
+            'card_decline': 'decline', 'card_return': 'return',
+        }
+        if action in card_actions:
+            from veil.life.virtual_cards import VirtualCardError, client_action_id
+            if self.chat is None:
+                return '当前聊天不可用。'
+            with self.cond:
+                if self.stopping or self.stopped:
+                    return 'Agent 服务已退出。'
+                if self.busy or self.submission_pending or self.autonomy_busy:
+                    return 'Peter 正在处理消息，请稍后再试。'
+                self.busy = True
+            try:
+                if action in ('create_transfer', 'create_gift'):
+                    if not isinstance(card, dict):
+                        raise UserError('卡片内容无效。')
+                    client_id = client_action_id(card.get('client_id'))
+                    fields = {key: card.get(key) for key in ('amount', 'note', 'icon', 'content') if key in card}
+                    row, created = self.chat.create_virtual_card(
+                        'user', card_actions[action], fields, client_action_id=client_id)
+                    if created:
+                        self.push('user', row['content'], message_id=row['message_id'],
+                                  virtual_card=row['virtual_card'])
+                    return '虚拟卡片已发送。'
+                if not isinstance(message_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', message_id):
+                    return '无效的消息操作。'
+                updated, event, content = self.chat.act_on_virtual_card('user', message_id, card_actions[action])
+                self.push('message_updated', content, message_id=message_id, virtual_card=updated)
+                self.push(event['role'], event['content'], message_id=event['message_id'],
+                          virtual_card_event=event['virtual_card_event'])
+                return '虚拟卡片状态已更新。'
+            except VirtualCardError as exc:
+                return exc.zh
+            except UserError as exc:
+                return str(exc)
+            except OSError:
+                return '虚拟卡片未能安全保存，请保留数据后重试。'
+            finally:
+                with self.cond:
+                    self.busy = False
+                    self.cond.notify_all()
+        allowed = ('delete', 'recall', 'regenerate', 'edit', 'favorite')
+        if action not in allowed or self.chat is None:
+            return '无效的消息操作。'
+        ids = message_ids if action == 'delete' and message_ids is not None else [message_id]
+        if (not isinstance(ids, list) or not ids or len(ids) > 100
+                or any(not isinstance(item, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', item) for item in ids)):
+            return '无效的消息操作。'
+        with self.cond:
+            if self.stopping or self.stopped:
+                return 'Agent 服务已退出。'
+            if self.busy or self.submission_pending or self.autonomy_busy:
+                return 'Peter 正在处理消息，请稍后再试。'
+            self.busy = True
+        queued = False
+        try:
+            if action == 'regenerate':
+                user, removed = self.chat.prepare_regeneration(message_id)
+                with self.cond:
+                    self.inbox.put(ChatAction('regenerate', {'user': user, 'remove_ids': removed}))
+                    queued = True
+                return '已开始重新生成。'
+            if action == 'delete':
+                rows = self.chat.delete_messages(ids)
+                publish_removed = getattr(self.chat, 'message_removed', None)
+                if callable(publish_removed):
+                    publish_removed(rows)
+                else:
+                    for row in rows:
+                        self.push('message_removed', '', message_id=row['message_id'])
+                        try:
+                            self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                        except (OSError, UserError):
+                            pass
+                return '已删除所选消息。' if len(rows) > 1 else '消息已删除。'
+            if action == 'edit':
+                row = self.chat.edit_message(message_id, content)
+                self.push('message_updated', row['content'], message_id=message_id, edited=True, favorite=row.get('favorite', False))
+                return '消息已更新。'
+            if action == 'favorite':
+                row = self.chat.favorite_message(message_id, favorite)
+                self.push('message_updated', '', message_id=message_id, favorite=row['favorite'])
+                return '已收藏消息。' if favorite else '已取消收藏。'
+            row = self.chat.recall_message(message_id)
+            publish_recalled = getattr(self.chat, 'message_recalled', None)
+            if callable(publish_recalled):
+                publish_recalled(row)
+            else:
+                self.push('message_recalled', '[Message recalled]', message_id=message_id)
+                try:
+                    self._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+                except (OSError, UserError):
+                    pass
+            return '消息已撤回。'
+        except UserError as exc:
+            return str(exc)
+        except OSError:
+            return '消息记录未能安全更新，请保留数据后重试。'
+        finally:
+            if not queued:
+                with self.cond:
+                    self.busy = False
+                    self.cond.notify_all()
+
+    def message_memory(self, message_id):
+        if self.chat is None or not isinstance(message_id, str):
+            raise UserError('无效的消息。')
+        _, row = self.chat.message_record(message_id)
+        if row.get('role') != 'assistant':
+            raise UserError('只有 Peter 的回复有记忆引用。')
+        refs = row.get('memory_refs', [])
+        if not isinstance(refs, list):
+            refs = []
+        return list(dict.fromkeys(ref for ref in refs
+                                  if isinstance(ref, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ref)))[:24]
+
+    MEMORY_KIND_LABELS = {'search': '搜索命中', 'feel': '情绪相关', 'context': '借上文命中',
+                          'opening': '开场', 'rotation': '轮换选出', 'random': '随机想起',
+                          'association': '自然浮现', 'relevant': '相关记忆', 'followup': '追问延续'}
+
+    def message_memory_kinds(self, message_id, items):
+        """Ticket 353: how each recalled memory was chosen, as a short Chinese label; may be empty."""
+        try:
+            _, row = self.chat.message_record(message_id)
+        except Exception:
+            return {}
+        kinds = row.get('memory_ref_kinds')
+        if not isinstance(kinds, dict):
+            return {}
+        return {key: self.MEMORY_KIND_LABELS[kinds[key]] for key in items
+                if isinstance(kinds.get(key), str) and kinds[key] in self.MEMORY_KIND_LABELS}
+
+    def _remove_unreferenced_media(self, media):
+        candidates = media if isinstance(media, list) else [media]
+        media_ids = {item.get('id') for item in candidates
+                     if isinstance(item, dict) and isinstance(item.get('id'), str)}
+        for media_id in media_ids:
+            if any(media_id in ({(row.get('media') or {}).get('id')} |
+                                {item.get('id') for item in (row.get('attachments') or [])
+                                 if isinstance(item, dict)})
+                   for row in self.chat.store.read(self.chat.path)):
+                continue
+            with self.media_lock:
+                row = self.media_index.pop(media_id, None)
+                if not row:
+                    continue
+                try:
+                    self._rewrite_media_index()
+                except OSError:
+                    self.media_index[media_id] = row
+                    raise
+            try:
+                (self.media_root / row['filename']).unlink(missing_ok=True)
+            except OSError:
+                # The chat ledger and media index no longer reference it. A locked
+                # file is harmless and can be reclaimed on a later startup.
+                pass
+
+    def approval(self, prompt):
+        # Same sentence the terminal shows; the page offers two buttons for y/N.
+        with self.cond:
+            while not self.answers.empty():
+                self.answers.get_nowait()
+            self.pending = self.push('approval', prompt)
+        for bridge in self.away:
+            # Ticket 114: a task Lan gave on QQ can be approved from QQ too.
+            bridge.approval_asked(prompt)
+        deadline = time.monotonic() + APPROVAL_WAIT_SECONDS
+        while True:
+            try:
+                answer = self.answers.get(timeout=0.5)
+            except queue.Empty:
+                if self.stopping or self.stopped:
+                    with self.cond:
+                        self.pending = None
+                    return 'cancel'
+                if time.monotonic() >= deadline:
+                    with self.cond:
+                        self.pending = None
+                        self.push('notice', '审批等待超时，操作没有执行。')
+                    return 'timeout'
+                continue
+            with self.cond:
+                self.pending = None
+                self.push('notice', '已同意。' if answer == 'y' else '已取消。' if answer == 'cancel' else '已拒绝。')
+            return answer
+
+    def answer(self, approval_id, answer):
+        # Only the approval currently being asked can be answered, once.
+        with self.cond:
+            if self.stopping or self.stopped or approval_id is None or approval_id != self.pending:
+                return False
+            self.pending = None
+            self.answers.put(answer)
+            return True
+
+    def stop_turn(self):
+        # Ticket 138: Lan's stop button. Peter's chat turn ends before its next model step.
+        with self.cond:
+            if not self.busy or self.autonomy_busy or self.chat is None:
+                return False
+            self.chat.user_stop.set()
+            if self.pending is not None:
+                self.answers.put('cancel')  # stopping is distinct from Lan clicking Reject
+            self.push('notice', '已叫停，等这一步说完就停。')
+            return True
+
+    def set_typing(self, typing):
+        with self.cond:
+            if self.stopping or self.stopped:
+                return False
+            self.user_typing = bool(typing)
+            self.typed_at = time.monotonic() if typing else None
+            self.cond.notify_all()
+            return True
+
+    def request_reply(self):
+        with self.cond:
+            if self.stopping or self.stopped:
+                return False
+            self.inbox.put(ChatAction('request_reply', {}))
+            if self.autonomy_busy:
+                self.autonomy_interrupted.set()
+            self.busy = True
+            return True
+
+    def steer_pending(self):
+        # Ticket 150: a cheap look, without taking anything, at whether Lan's words are waiting.
+        with self.inbox.mutex:
+            return bool(self.inbox.queue) and not self._is_command(self.inbox.queue[0])
+
+    def claim_steer(self):
+        with self.inbox.mutex:
+            if not self.inbox.queue:
+                return None
+            if self._is_command(self.inbox.queue[0]):
+                return None
+            first = self.inbox.queue.popleft()
+            self.inbox.not_full.notify()
+        if isinstance(first, ChatAction):
+            return first
+        return self._chat_batch(first)
+
+    def events_after(self, after):
+        """Events with id greater than `after`; a cursor older than the kept window gets the whole window."""
+        with self.cond:
+            return self.events[bisect.bisect_right(self.events, after, key=lambda event: event['id']):]
+
+    def snapshot(self, after):
+        tool_activity = self.tool_activity()
+        live_context = self.live_context(tool_activity)
+        models = getattr(getattr(self.chat, 'cfg', None), 'models', None)
+        lock = getattr(models, 'lock', None)
+        if lock is not None and not lock.acquire(blocking=False):
+            current_capabilities = getattr(self, '_current_capabilities_cache', None)
+        else:
+            try:
+                current_capabilities = self.current_capabilities()
+                self._current_capabilities_cache = current_capabilities
+            finally:
+                if lock is not None:
+                    lock.release()
+        capability_record = self.capability_record()
+        autonomy = self.autonomy.status() if self.autonomy else {}
+        glance = self.glance.status() if self.glance else {}
+        codex_watch = self.codex_watch.status() if self.codex_watch else {}
+        activity_enabled = self.activity.enabled()
+        runtime_status = self.runtime_status()
+        with self.cond:
+            return {'events': self.events_after(after), 'busy': self.busy and not self.autonomy_busy,
+                    'transcribing_voice': self.transcribing_voice,
+                    'user_typing': self.user_typing,
+                    'stopping': self.stopping and not self.stopped, 'stopped': self.stopped,
+                    'name': self.name, 'pending': self.pending, 'ready': self.ready,
+                    'activity_enabled': activity_enabled,
+                    'current_capabilities': current_capabilities,
+                    'capability_record': capability_record,
+                    'runtime_status': runtime_status,
+                    'tool_activity': tool_activity,
+                    'live_context': live_context,
+                    'memory_available': self.memory_tools is not None,
+                    'models': self.models_view, **autonomy, **glance, **codex_watch}
+
+
+def _get_desktop_icons_manager(hub):
+    if hasattr(hub, 'desktop_icons_manager') and hub.desktop_icons_manager:
+        return hub.desktop_icons_manager
+    if hub.chat:
+        tools = getattr(hub.chat, 'tools', None)
+        if tools:
+            mgr = getattr(getattr(tools, 'windows_interaction_tools', None), 'desktop_icons_manager', None)
+            if not mgr and hasattr(tools, 'files'):
+                mgr = getattr(getattr(tools.files, 'windows_interaction_tools', None), 'desktop_icons_manager', None)
+            if mgr:
+                return mgr
+    from veil.windows.desktop_icons import DesktopIconsManager, FakeDesktopIconsBackend, Win32DesktopIconsBackend
+    from veil.core.veil_agent import Store
+    backend = Win32DesktopIconsBackend() if os.name == 'nt' else FakeDesktopIconsBackend()
+    store = getattr(hub, 'store', None) or (getattr(hub.chat, 'store', None) if hub.chat else None)
+    if store is None:
+        store_root = getattr(hub, 'store_root', 'data')
+        store = Store(store_root)
+    char_id = getattr(hub, 'character_id', None) or getattr(getattr(hub, 'cfg', None), 'id', None) or getattr(hub, 'name', 'peter').lower()
+    mgr = DesktopIconsManager(store=store, character_id=char_id, backend=backend)
+    hub.desktop_icons_manager = mgr
+    return mgr
+
+
+def make_handler(hub, token):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass  # never log requests: URLs carry the token
+
+        def _send(self, code, body, ctype='application/json; charset=utf-8', extra_headers=None):
+            data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode('utf-8')
+            self.send_response(code)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _drain_body(self):
+            """Read and discard a bounded body so a rejected client cannot wedge this worker."""
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if 0 < length <= 10 * 1024 * 1024:
+                    self.connection.settimeout(2.0)
+                    try:
+                        self.rfile.read(length)
+                    finally:
+                        self.connection.settimeout(None)
+            except (OSError, ValueError):
+                # A client that promises a body and then stalls must not hold the thread.
+                self.close_connection = True
+
+        def _guard(self, supplied):
+            port = self.server.server_address[1]
+            allowed_hosts = {f'127.0.0.1:{port}', f'localhost:{port}'}
+            allowed_origins = {f'http://{h}' for h in allowed_hosts}
+            if self.headers.get('Host') not in allowed_hosts:
+                self._drain_body()
+                self._send(403, {'error': 'host'})
+                return False
+            origin = self.headers.get('Origin')
+            if origin is not None and origin not in allowed_origins:
+                self._drain_body()
+                self._send(403, {'error': 'origin'})
+                return False
+            if not hmac.compare_digest((supplied or '').encode(), token.encode()):
+                self._drain_body()
+                self._send(403, {'error': 'token'})
+                return False
+            return True
+
+        def _game_origin_guard(self, *, post=False):
+            port = self.server.server_address[1]
+            host = self.headers.get('Host')
+            if host != f'127.0.0.1:{port}':
+                self._drain_body()
+                self._send(403, {'error': 'host'})
+                return False
+            origin = self.headers.get('Origin')
+            if post and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
+                self._send(403, {'error': 'origin'})
+                return False
+            if origin is not None and origin != f'http://127.0.0.1:{port}':
+                self._drain_body()
+                self._send(403, {'error': 'origin'})
+                return False
+            if post and self.headers.get('Sec-Fetch-Site') not in (None, 'same-origin'):
+                self._drain_body()
+                self._send(403, {'error': 'source'})
+                return False
+            return True
+
+        def _get_game(self, url):
+            parts = url.path.split('/', 3)
+            if len(parts) != 4:
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            if not self._game_origin_guard():
+                return
+            from urllib.parse import unquote
+            try:
+                parts[3] = unquote(parts[3], errors='strict')
+            except UnicodeError:
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            manager = getattr(hub, 'game_manager', None)
+            if manager is None:
+                self._drain_body()
+                self._send(404, {'error': 'game unavailable'})
+                return
+            try:
+                if parts[3] == 'veil-score.js':
+                    from veil.life.lab_games import score_helper
+                    _folder, _entry, game_id = manager._entry(parts[2])
+                    body = score_helper(parts[2], game_id).encode('utf-8')
+                    mime = 'text/javascript; charset=utf-8'
+                else:
+                    body, mime = manager.resource(parts[2], parts[3])
+            except (OSError, ValueError):
+                self._send(404, {'error': 'game resource unavailable'})
+                return
+            from veil.life.lab_preview import _csp
+            self._send(200, body, mime, {
+                'Content-Security-Policy': _csp(),
+                'Cross-Origin-Resource-Policy': 'same-origin'})
+            return
+
+        def _get_memory_panel(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre memory is not available.'})
+                return
+            try:
+                panel = hub.memory_tools.panel_entries()
+                # Ticket 354: mark what the program wrote for Peter, and show the switch and its last result.
+                experience = getattr(hub.chat, 'experience', None)
+                if experience is not None:
+                    written = experience.entry_ids()
+                    for item in panel['items']:
+                        item['auto'] = item['memory_id'] in written
+                    panel['experience'] = experience.status()
+                # Ticket 382: the relevance judge's switch and its last result.
+                judge = getattr(getattr(hub.chat, 'memory', None), 'judge', None)
+                if judge is not None:
+                    panel['recall_judge'] = judge.status()
+                self._send(200, panel)
+            except Exception:
+                self._send(503, {'error': 'Ombre 记忆暂时无法读取。'})
+
+        def _get_memory(self, url, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre memory is not available.'})
+                return
+            if url.path == '/api/memory/events':
+                events = getattr(hub.memory_tools, 'events', None)
+                items = []
+                if events is not None:
+                    items = [{key: event.get(key) for key in
+                              ('event_id', 'title', 'status', 'first_at', 'last_at', 'stage_count', 'confidence',
+                               'story_pending', 'dirty', 'pending_review', 'story_source',
+                               'first_at_known', 'last_at_known')}
+                             for event in events.visible_events()]
+                self._send(200, {'items': items, 'count': len(items)})
+                return
+            if url.path == '/api/memory/event':
+                events = getattr(hub.memory_tools, 'events', None)
+                event_id = query.get('id', [''])[0]
+                detail = events.detail(event_id) if events is not None and event_id else None
+                if detail:
+                    mem_id = detail.get('memory_id')
+                    if mem_id and hasattr(hub.memory_tools, 'memory'):
+                        title = hub.memory_tools.memory.title_for(mem_id) or mem_id
+                        detail.setdefault('linked_memories', [{'memory_id': mem_id, 'title': title}])
+                self._send(200, detail) if detail else self._send(404, {'error': '没有这段经历。'})
+                return
+            if url.path == '/api/memory/catalog':
+                cursor = query.get('after', [''])[0]
+                rendered, state, _ = hub.memory_tools.invoke('memory_catalog', {'after': cursor})
+                if state != '成功':
+                    self._send(400 if state == '被拒绝' else 503, {'error': rendered})
+                else:
+                    try:
+                        self._send(200, json.loads(rendered))
+                    except (TypeError, ValueError):
+                        self._send(503, {'error': 'Ombre memory catalog is temporarily unavailable.'})
+            else:
+                memory_id = query.get('id', [''])[0]
+                try:
+                    offset = int(query.get('offset', ['0'])[0])
+                except (TypeError, ValueError):
+                    self._send(400, {'error': 'Invalid memory offset.'})
+                    return
+                args = {'memory_id': memory_id, 'offset': offset}
+                version = query.get('version', [None])[0]
+                if version is not None:
+                    args['version'] = version
+                rendered, state, _ = hub.memory_tools.invoke('memory_read', args)
+                if state != '成功':
+                    self._send(404 if state == '被拒绝' else 503, {'error': rendered})
+                else:
+                    try:
+                        self._send(200, json.loads(rendered))
+                    except (TypeError, ValueError):
+                        self._send(503, {'error': 'Ombre memory could not be read right now.'})
+
+        def _get_attachment(self, url, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            media_ids = query.get('id', [])
+            if len(query) != 1 or len(media_ids) != 1 or not MEDIA_ID_PATTERN.fullmatch(media_ids[0]):
+                self._send(400, {'error': 'invalid attachment'})
+                return
+            saved = hub.read_attachment(media_ids[0])
+            if not saved:
+                self._send(404, {'error': 'attachment not found'})
+                return
+            media, raw = saved
+            if url.path == '/api/attachment':
+                self._send(200, {'attachment': media})
+            elif media.get('view') != 'text':
+                self._send(415, {'error': 'attachment is not plain text'})
+            else:
+                try:
+                    self._send(200, {'text': raw.decode('utf-8')})
+                except UnicodeDecodeError:
+                    self._send(415, {'error': 'attachment is not UTF-8 text'})
+
+        def _get_events(self, query):
+            if self._guard(self.headers.get('X-Token')):
+                try:
+                    after = max(0, int((query.get('after') or ['0'])[0]))
+                except ValueError:
+                    after = 0
+                if after == 0:
+                    hub.models_reload_pending = True
+                if hub.models_reload_pending and not hub.busy:
+                    models = getattr(getattr(hub.chat, 'cfg', None), 'models', None)
+                    env_lock = getattr(models, 'env_lock', None)
+                    lock = getattr(models, 'lock', None)
+                    if env_lock is None or env_lock.acquire(blocking=False):
+                        try:
+                            if lock is None or lock.acquire(blocking=False):
+                                try:
+                                    hub.refresh_models(reload=True)
+                                    hub.models_reload_pending = False
+                                except SettingsError:
+                                    hub.models_reload_pending = False
+                                finally:
+                                    if lock is not None:
+                                        lock.release()
+                        finally:
+                            if env_lock is not None:
+                                env_lock.release()
+                self._send(200, hub.snapshot(after))
+
+        def _get_stickers(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            library = hub.sticker_library
+            if library is None:
+                self._send(503, {'error': '表情包暂不可用。'})
+                return
+            try:
+                self._send(200, library.snapshot())
+            except ValueError as exc:
+                self._send(500, {'error': str(exc)})
+
+        def _get_sticker_file(self, url, query):
+            if not self._guard((query.get('t') or [''])[0]):
+                return
+            read = hub.sticker_library.read_file(url.path.rsplit('/', 1)[-1]) if hub.sticker_library else None
+            if not read:
+                self._send(404, {'error': 'not found'})
+                return
+            data, mime = read
+            headers = {}
+            if mime == 'image/svg+xml':
+                headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            self._send(200, data, mime, headers)
+
+        def _post_stickers(self, body):
+            library = hub.sticker_library
+            if library is None:
+                self._send(503, {'error': '表情包暂不可用。'})
+                return
+            from veil.chat.stickers import StickerError, parse_sticker_text
+            action = body.get('action')
+            try:
+                if action == 'add_pack':
+                    pack = library.add_pack(body.get('name'))
+                    result = {'pack': {'id': pack['id'], 'name': pack['name']}}
+                elif action == 'rename_pack':
+                    library.rename_pack(body.get('id'), body.get('name'))
+                    result = {}
+                elif action == 'delete_pack':
+                    library.delete_pack(body.get('id'))
+                    result = {}
+                elif action == 'parse':
+                    rows, skipped = parse_sticker_text(body.get('text') if isinstance(body.get('text'), str) else '')
+                    result = {'rows': rows, 'skipped': skipped}
+                elif action == 'add_links':
+                    rows = body.get('rows')
+                    if not isinstance(rows, list):
+                        raise StickerError('没有可添加的链接。')
+                    added, failed = library.add_links(body.get('pack'), rows)
+                    result = {'added': added, 'failed': failed}
+                elif action == 'rename':
+                    result = {'name': library.rename_sticker(body.get('id'), body.get('name'))}
+                elif action == 'delete':
+                    library.delete_sticker(body.get('id'))
+                    result = {}
+                else:
+                    self._send(400, {'error': 'bad request'})
+                    return
+            except StickerError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '表情包没能保存到本机。'})
+                return
+            self._send(200, {'ok': True, **result, **library.snapshot()})
+
+        def _post_sticker_upload(self):
+            library = hub.sticker_library
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if library is None or not 0 < length <= 3_300_000:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                raw = base64.b64decode(body['data'], validate=True)
+                name, pack = body.get('name'), body.get('pack')
+                if not isinstance(name, str) or not isinstance(pack, str):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                self._send(400, {'error': 'bad request'})
+                return
+            from veil.chat.stickers import StickerError
+            try:
+                library.add_bytes(pack, name, raw, by='lan')
+            except StickerError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '表情包没能保存到本机。'})
+                return
+            self._send(200, {'ok': True, **library.snapshot()})
+
+        def _get_life(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.chat is None:
+                self._send(503, {'error': '服务尚未就绪，请稍后重试。'})
+                return
+            try:
+                from veil.life.life_records import effective, fold_completed
+                value = {'records': [effective(r) for r in hub.chat.life_records.read() if isinstance(r, dict) and r.get('kind') != 'diary']} if hub.chat is not None else {'records': []}
+                if not isinstance(value, dict) or not isinstance(value.get('records'), list):
+                    raise ValueError
+                rows = list(value['records'])
+                missed = hub.chat.life_records.missed_reminders()
+                rows = [{**row, 'reminder_missed': missed[(row.get('id'),row.get('updated_at'))]}
+                        if (row.get('id'),row.get('updated_at')) in missed else row for row in rows]
+                chat = hub.chat
+                if chat is not None:
+                    task = chat.long_tasks.read()
+                    if task:
+                        rows.append({'id': 'long-task:' + task['task_id'], 'kind': 'plan',
+                            'title': task['title'], 'content': task['goal'], 'owner': 'Peter',
+                            'date': task['created_at'][:10], 'state': task['status'],
+                            'created_by': 'Peter', 'created_at': task['created_at'],
+                            'updated_by': task.get('updated_by','Peter'), 'updated_at': task['updated_at'],
+                            'source': 'long_task_update', 'progress': task['progress'],
+                            'read_only': True})
+                    for old in chat.store.read(f'{chat.cfg.id}/long-task-history.jsonl'):
+                        if not isinstance(old,dict) or not isinstance(old.get('task_id'),str):
+                            continue
+                        if task and old['task_id'] == task['task_id']:
+                            continue
+                        rows.append({'id':'long-task:'+old['task_id'],'kind':'plan',
+                            'title':old.get('title',''),'content':old.get('goal',''),
+                            'owner':'Peter','date':old.get('created_at','')[:10],
+                            'state':'completed','completed_at':old.get('updated_at',''),
+                            'created_by':'Peter','created_at':old.get('created_at',''),
+                            'updated_by':'Peter','updated_at':old.get('updated_at',''),
+                            'source':'long_task_update','progress':old.get('progress',[]),
+                            'read_only':True})
+                rows, folded = fold_completed(rows)
+                # Ticket 385: the two daily moods and the daily to-do log travel with the records.
+                life = chat.life_records if chat is not None else None
+                self._send(200, {'records': rows, 'folded': folded,
+                                 'auto_record_enabled': life.auto_record_enabled(),
+                                 'moods': life.moods() if life is not None else {},
+                                 'daily_checks': life.daily_checks() if life is not None else {'started': None, 'days': {}}})
+            except (OSError, ValueError, UnicodeError, UserError):
+                self._send(500, {'error': '生活记录无法安全读取。'})
+
+        def _get_mcp(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if hub.chat is None or hub.stopping or hub.stopped:
+                self._send(409, {'error': 'Peter 尚未就绪。'})
+            else:
+                hub.chat.mcp_services.schemas(retry=query.get('retry') == ['1'])
+                self._send(200, hub.chat.mcp_services.view())
+
+        def _get_screen_pop_next(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if query:
+                self._send(400, {'error': 'query'})
+            else:
+                self._send(200, {'commands': hub.next_screen_pop()})
+
+        def _get_desktop_icon_snapshots(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            mgr = _get_desktop_icons_manager(hub)
+            snapshots = mgr.list_snapshots(limit=10)
+            self._send(200, {'snapshots': snapshots})
+
+        def _get_media(self, url, query):
+            if not self._guard((query.get('t') or [''])[0]):
+                return
+            media_id = url.path.rsplit('/', 1)[-1].split('.', 1)[0]
+            media = hub.media_info(media_id)
+            if not media:
+                self._send(404, {'error': 'not found'})
+                return
+            try:
+                path = hub.media_root / media['filename']
+                if media.get('kind') == 'attachment':
+                    saved = hub.read_attachment(media_id)
+                    if not saved:
+                        raise OSError('attachment unavailable')
+                    _, attachment_data = saved
+                    size = len(attachment_data)
+                else:
+                    attachment_data = None
+                limit = (MAX_GENERATED_VOICE_BYTES if media.get('mime') == VOICE_MIME else
+                         (MAX_VOICE_UPLOAD_BYTES if media.get('kind') == 'voice' else
+                          (MAX_ATTACHMENT_BYTES if media.get('kind') == 'attachment' else MAX_MEDIA_BYTES)))
+                if attachment_data is None:
+                    size = path.stat().st_size
+                if size > limit:
+                    raise OSError('media too large')
+                status = 200
+                start, end = 0, size - 1
+                range_header = self.headers.get('Range', '')
+                range_match = (re.fullmatch(r'bytes=(\d*)-(\d*)', range_header.strip())
+                               if len(range_header) <= 128 else None)
+                if range_match:
+                    first, last = range_match.groups()
+                    if first:
+                        start = int(first)
+                        end = int(last) if last else size - 1
+                    elif last:
+                        suffix_length = int(last)
+                        start = max(0, size - suffix_length)
+                        end = size - 1
+                    if start >= size or start > end or end < 0 or not first and not last:
+                        self._send(416, b'', media['mime'], {
+                            'Accept-Ranges': 'bytes', 'Content-Range': f'bytes */{size}'})
+                        return
+                    end = min(end, size - 1)
+                    status = 206
+                length = max(0, end - start + 1)
+                if attachment_data is not None:
+                    data = attachment_data[start:start + length]
+                else:
+                    with path.open('rb') as handle:
+                        handle.seek(start)
+                        data = handle.read(length)
+                if len(data) != length:
+                    raise OSError('media too large')
+            except OSError:
+                self._send(404, {'error': 'not found'})
+            else:
+                headers = {'Accept-Ranges': 'bytes'}
+                content_type = media['mime']
+                if media.get('kind') == 'attachment':
+                    if media.get('view') == 'html':
+                        content_type = 'application/octet-stream'
+                        headers['Content-Disposition'] = f'attachment; filename="{media["filename"]}"'
+                    elif media.get('view') == 'text':
+                        content_type = 'text/plain; charset=utf-8'
+                if status == 206:
+                    headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+                self._send(status, data, content_type, headers)
+
+        def _get_budget_summary(self, url):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if url.query:
+                self._send(400, {'error': '预算总览不接受查询参数。'})
+                return
+            budget = getattr(hub.chat, 'budget', None)
+            if budget is None:
+                self._send(503, {'error': '预算账本尚未就绪。'})
+                return
+            from veil.system.ledger_recovery import is_unverified
+            try:
+                with budget.mutex:
+                    stamp = budget.clock()
+                    day, month, pending = budget.totals(stamp)
+                    daily_cap, monthly_cap = budget.daily_limit(), budget.monthly_limit()
+                    categories = []
+                    caps = {'autonomy': budget.autonomy_daily, 'glance': budget.glance_daily}
+                    for key in ('autonomy', 'glance', 'short_term_notes', 'delegate',
+                                'experience_memory', 'recall_judge', 'calendar_agreements'):
+                        used, reserved = budget.category_totals(stamp=stamp, category=key)
+                        categories.append({'id': key, 'spent_cny': str(used), 'pending_cny': str(reserved),
+                                           'limit_cny': str(caps[key]) if key in caps else None})
+                    models = budget.model_display(stamp)
+                    unverified = is_unverified(budget.store.root)
+            except (UserError, OSError, UnicodeError):
+                self._send(503, {'error': '暂时无法核对费用账本。'})
+                return
+            self._send(200, {
+                'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
+                # limit_cny is the effective cap (base + today's approved raise); the form must
+                # edit base_limit_cny, otherwise saving it folds the raise into the base every day.
+                'daily': {'spent_cny': str(day), 'limit_cny': str(daily_cap),
+                          'base_limit_cny': str(budget.daily), 'raise_cny': str(daily_cap - budget.daily),
+                          'remaining_cny': str(daily_cap - day - pending)},
+                'monthly': {'spent_cny': str(month), 'limit_cny': str(monthly_cap),
+                            'base_limit_cny': str(budget.monthly), 'raise_cny': str(monthly_cap - budget.monthly),
+                            'remaining_cny': str(monthly_cap - month - pending)},
+                'pending_cny': str(pending), 'ledger_unverified': unverified,
+                'categories': categories, 'model_summary': models,
+            })
+
+        def _health_context(self):
+            chat = getattr(hub, 'chat', None)
+            cfg = getattr(chat, 'cfg', None)
+            store = getattr(chat, 'store', None)
+            if chat is None or cfg is None or store is None:
+                return None, None, None, None
+            data_root = getattr(hub, 'data_root', None) or Path(store.root)
+            memory = getattr(chat, 'memory', None)
+            auth = getattr(memory, 'brain_authority', None)
+            db_path = Path(auth.db_path) if auth is not None and getattr(auth, 'db_path', None) else Path(data_root) / cfg.id / 'brain.db'
+            return chat, data_root, cfg.id, db_path
+
+        def _get_brain_health(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from veil.brain.brain_health import load_health_settings, load_latest_report, load_snapshots
+            from_date = (query.get('from') or [''])[0]
+            to_date = (query.get('to') or [''])[0]
+            try:
+                settings = load_health_settings(data_root, role_id)
+                report = load_latest_report(data_root, role_id, from_date=from_date, to_date=to_date)
+                snapshots = load_snapshots(data_root, role_id, limit=30)
+            except ValueError:
+                self._send(400, {'error': '日期范围格式需为 YYYY-MM-DD。'})
+                return
+            self._send(200, {
+                'schema_version': 1,
+                'read_only': True,
+                'settings': settings,
+                'report': report,
+                'snapshots': snapshots,
+            })
+
+        def _get_brain_health_export(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from veil.brain.brain_health import export_report, load_latest_report
+            report = load_latest_report(data_root, role_id)
+            if report is None:
+                self._send(404, {'error': '尚未生成健康检查报告，请先执行一次只读检查。'})
+                return
+            fmt = 'json' if (query.get('format') or ['markdown'])[0] == 'json' else 'markdown'
+            self._send(200, {'schema_version': 1, 'format': fmt, 'text': export_report(report, fmt=fmt)})
+
+        def _post_brain_health_scan(self, body):
+            chat, data_root, role_id, db_path = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from veil.brain.brain_health import run_health_scan
+            from_date = str(body.get('from') or '')
+            to_date = str(body.get('to') or '')
+            experience = getattr(chat, 'experience', None)
+            judge = getattr(getattr(chat, 'memory', None), 'judge', None)
+            try:
+                report = run_health_scan(
+                    data_root, role_id, db_path,
+                    from_date=from_date, to_date=to_date,
+                    experience_status=experience.status() if experience else None,
+                    judge_status=judge.status() if judge else None,
+                )
+            except RuntimeError as exc:
+                if str(exc) == 'health_scan_in_progress':
+                    self._send(409, {'error': '只读健康检查正在进行中，请稍候。'})
+                    return
+                self._send(503, {'error': '健康检查执行失败。'})
+                return
+            except ValueError:
+                self._send(400, {'error': '日期参数无效，应为 YYYY-MM-DD。'})
+                return
+            except sqlite3.Error:
+                self._send(503, {'error': 'Brain 数据库暂时无法读取，健康巡检未完成。'})
+                return
+            except OSError:
+                self._send(500, {'error': '巡检完成但报告未能完整保存，请检查磁盘权限后重试。'})
+                return
+            self._send(200, {'schema_version': 1, 'read_only': True, 'report': report})
+
+        def _post_brain_health_settings(self, body):
+            chat, data_root, role_id, _db = self._health_context()
+            if chat is None:
+                self._send(503, {'error': '服务尚未就绪。'})
+                return
+            from veil.brain.brain_health import save_health_settings
+            try:
+                updated = save_health_settings(data_root, role_id, body)
+            except ValueError as exc:
+                self._send(400, {'error': str(exc)})
+                return
+            except OSError:
+                self._send(500, {'error': '巡检设置未能保存，请检查磁盘权限后重试。'})
+                return
+            self._send(200, {'schema_version': 1, 'settings': updated})
+
+        def do_GET(self):
+            url = urlparse(self.path)
+            query = parse_qs(url.query)
+            if url.path == '/api/health':
+                if self._guard(self.headers.get('X-Token')):
+                    self._send(200, {'name': hub.name, 'ready': hub.ready, 'stopped': hub.stopped})
+            elif url.path.startswith('/game/'):
+                self._get_game(url)
+            elif url.path == '/api/memory/panel':
+                self._get_memory_panel()
+            elif url.path == '/api/brain/overview':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': 'Brain 总览不接受查询参数。'})
+                    return
+                from veil.brain.brain_p4_api import overview as brain_overview
+                try:
+                    self._send(200, brain_overview(hub))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import growth_analysis
+                try:
+                    self._send(200, growth_analysis(
+                        hub,
+                        range_key=(query.get('range') or ['7d'])[0],
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                    ))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/day-changes':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import day_changes
+                try:
+                    self._send(200, day_changes(hub, (query.get('date') or [''])[0]))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import generate_growth_report
+                try:
+                    inc_content = (query.get('include_content') or ['1'])[0] not in ('0', 'false', 'False')
+                    inc_health = (query.get('include_health') or ['0'])[0] in ('1', 'true', 'True')
+                    self._send(200, generate_growth_report(
+                        hub,
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                        include_content=inc_content,
+                        include_health=inc_health,
+                        fmt=(query.get('format') or ['full'])[0],
+                    ))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/recall-turns':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turns
+                self._send(200, recall_turns(
+                    hub,
+                    page=int((query.get('page') or ['1'])[0] or 1),
+                    limit=int((query.get('limit') or ['20'])[0] or 20),
+                    date=(query.get('date') or [''])[0],
+                    purpose=(query.get('purpose') or [''])[0],
+                    model=(query.get('model') or [''])[0],
+                    status=(query.get('status') or [''])[0],
+                ))
+            elif url.path == '/api/brain/recall-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turn_report
+                self._send(200, recall_turn_report(hub, (query.get('request_id') or [''])[0]))
+            elif url.path == '/api/memory/library':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import library as brain_library
+                try:
+                    self._send(200, brain_library(hub, query))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/health':
+                self._get_brain_health(query)
+            elif url.path == '/api/brain/health/export':
+                self._get_brain_health_export(query)
+            elif url.path == '/api/peter-page/versions':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import learned_versions
+                self._send(200, {'items': learned_versions(hub)})
+            elif url.path in ('/api/memory/catalog', '/api/memory/read',
+                              '/api/memory/events', '/api/memory/event'):
+                # Ticket 425: the event timeline and one event's detail were handled by _get_memory
+                # but never routed here, so the memory page's 经历 tab always got a 404.
+                self._get_memory(url, query)
+            elif url.path in ('/api/attachment', '/api/attachment-text'):
+                self._get_attachment(url, query)
+            elif url.path == '/api/events':
+                self._get_events(query)
+            elif url.path == '/api/stickers':
+                self._get_stickers()
+            elif url.path.startswith('/sticker/'):
+                self._get_sticker_file(url, query)
+            elif url.path == '/api/life':
+                self._get_life()
+            elif url.path == '/api/mcp':
+                self._get_mcp(query)
+            elif url.path == '/api/config/overview':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': '配置总览不接受查询参数。'})
+                    return
+                cfg = getattr(hub.chat, 'cfg', None)
+                if not getattr(cfg, 'id', None):
+                    self._send(503, {'error': '角色配置尚未就绪。'})
+                    return
+                from veil.core.config_registry import model_config_overview
+                models = getattr(cfg, 'models', None)
+                try:
+                    settings = models.public() if models is not None else None
+                except SettingsError:
+                    settings = None
+                self._send(200, model_config_overview(
+                    role_id=cfg.id, settings=settings,
+                    background_model=hub.background_running,
+                ))
+            elif url.path == '/api/config/inventory':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                if url.query:
+                    self._send(400, {'error': '审计清单不接受查询参数。'})
+                    return
+                import csv
+                columns = ('id', 'domain', 'module', 'item', 'key', 'source', 'storage',
+                           'default', 'effective', 'range', 'modify', 'precedence', 'timing',
+                           'persistence', 'risk', 'category', 'page', 'effective_class', 'effective_check')
+                try:
+                    report = ROOT / 'docs' / 'reports' / 'config-audit' / 'config-inventory.csv'
+                    with report.open(encoding='utf-8-sig', newline='') as handle:
+                        reader = csv.DictReader(handle, strict=True)
+                        if reader.fieldnames != list(columns):
+                            raise ValueError('invalid audit header')
+                        rows = list(reader)
+                    if not rows or any(None in row or any(row[key] is None for key in columns) for row in rows):
+                        raise ValueError('invalid audit rows')
+                except (OSError, UnicodeError, csv.Error, ValueError):
+                    self._send(503, {'error': '当前后端缺少可用的 #446 审计清单。'})
+                    return
+                self._send(200, {'schema_version': 1, 'audit': '#446', 'rows': rows})
+            elif url.path == '/api/budget/summary':
+                self._get_budget_summary(url)
+            elif url.path == '/api/workbench':
+                self._get_workbench()
+            elif url.path == '/api/windows-apps':
+                self._get_windows_apps()
+            elif url.path == '/api/peter-page':
+                self._get_peter_page()
+            elif url.path == '/api/instructions':
+                self._get_instructions()
+            elif url.path == '/api/request-snapshots':
+                self._get_request_snapshots(query)
+            elif url.path == '/api/request-snapshot':
+                self._get_request_snapshot(query)
+            elif url.path == '/api/pending-approvals':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                try:
+                    self._send(200, hub.pending_approvals())
+                except UserError as exc:
+                    self._send(400, {'error': str(exc)})
+            elif url.path == '/api/diagnostics/overview':
+                self._get_diagnostics_overview()
+            elif url.path == '/api/diagnostics/issues':
+                self._get_diagnostics_issues(query)
+            elif url.path == '/api/diagnostics/trace':
+                self._get_diagnostics_trace(query)
+            elif url.path == '/api/diagnostics/report':
+                self._get_diagnostics_report(query)
+            elif url.path == '/api/diagnostics/links':
+                self._get_diagnostics_links()
+            elif url.path == '/api/screen-pop/next':
+                self._get_screen_pop_next(query)
+            elif url.path == '/api/desktop-icons/snapshots':
+                self._get_desktop_icon_snapshots()
+            elif url.path.startswith('/media/'):
+                self._get_media(url, query)
+            else:
+                self._send(404, {'error': 'not found'})
+
+        def _post_game_score(self, url):
+            parts = url.path.split('/')
+            if len(parts) != 4 or parts[3] != 'score':
+                self._drain_body()
+                self._send(404, {'error': 'game endpoint unavailable'})
+                return
+            if not self._game_origin_guard(post=True):
+                return
+            manager = getattr(hub, 'game_manager', None)
+            if manager is None:
+                self._send(404, {'error': 'game unavailable'})
+                return
+            try:
+                if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+                    raise ValueError('JSON is required.')
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 2048:
+                    raise ValueError('Score body exceeds the limit.')
+                result = manager.save(parts[2], self.rfile.read(length))
+            except ValueError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError:
+                self._send(500, {'error': 'Score could not be saved.'})
+            else:
+                self._send(200, result)
+            return
+
+        def _post_screen_pop(self, url):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 2048:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': 'invalid screen-pop request'})
+                return
+            if url.path == '/api/screen-pop/claim':
+                if set(body) != {'id'} or not isinstance(body.get('id'), str):
+                    self._send(400, {'error': 'invalid screen-pop id'})
+                    return
+                command = hub.claim_screen_pop(body['id'])
+                if command is None:
+                    self._send(409, {'error': 'screen-pop is no longer pending'})
+                else:
+                    self._send(200, {'command': command})
+                return
+            event = body.get('event')
+            expected = ({'id', 'event', 'style', 'total'} if event == 'shown'
+                        else {'id', 'event', 'item'})
+            if set(body) != expected:
+                self._send(409, {'error': 'screen-pop event was rejected'})
+                return
+            try:
+                accepted = hub.record_screen_pop_event(body)
+            except Exception:
+                self._send(500, {'error': 'screen-pop event could not be saved'})
+                return
+            self._send(200 if accepted else 409,
+                       {'ok': True} if accepted else {'error': 'screen-pop event was rejected'})
+            return
+
+        def _post_memory_change(self, url):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 64 * 1024:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or not isinstance(body.get('id'), str):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': '无效请求。'})
+                return
+            if hub.memory_tools is None:
+                self._send(404, {'error': 'Ombre 记忆暂不可用。'})
+                return
+            try:
+                tools = hub.memory_tools
+                extra = {}
+                if url.path == '/api/memory/edit':
+                    # Ticket 456 review: an edit without a concurrency token could silently
+                    # overwrite a background update, so the token is now mandatory.
+                    expected_sha = body.get('expected_sha256')
+                    if not isinstance(expected_sha, str) or not expected_sha:
+                        self._send(400, {'error': '缺少内容校验值，请刷新记忆页后重试。'})
+                        return
+                    from veil.brain.brain_p4_api import memory_sha256
+                    current_sha = memory_sha256(hub, body['id'])
+                    if not current_sha:
+                        self._send(409, {
+                            'error': '这条记忆当前读不到（可能已被删除），这次没有保存。',
+                            'conflict': True,
+                        })
+                        return
+                    if current_sha != expected_sha:
+                        self._send(409, {
+                            'error': '这段记忆在你编辑期间已被更新，请刷新核对后再保存（你的草稿仍保留）。',
+                            'conflict': True,
+                            'server_sha256': current_sha,
+                        })
+                        return
+                    ok, message = tools.panel_edit(body['id'], body.get('changes') or {}
+                                                   if isinstance(body.get('changes'), dict) else {},
+                                                   expected_sha256=expected_sha)
+                elif url.path == '/api/memory/delete':
+                    ok, message = tools.panel_delete(body['id'])
+                # Ticket 363: history, archive and lock on the memory page.
+                elif url.path == '/api/memory/versions':
+                    versions = tools.panel_versions(body['id'])
+                    if versions is not None:
+                        from veil.brain.brain_p4_api import compute_line_diff, memory_sha256
+                        cur_body = tools.memory.content_for(body['id']) or '' if hasattr(tools, 'memory') else ''
+                        for v in versions:
+                            v['diff'] = compute_line_diff(v.get('body', ''), cur_body)
+                        extra = {'versions': versions, 'current_sha256': memory_sha256(hub, body['id'])}
+                    else:
+                        extra = {'versions': []}
+                    ok, message = versions is not None, '这条记忆不存在或已经删除。'
+                elif url.path == '/api/memory/restore-version':
+                    index = body.get('index')
+                    ok, message = (tools.panel_restore_version(body['id'], index) if type(index) is int
+                                   else (False, '无效请求。'))
+                elif url.path == '/api/memory/archive':
+                    ok, message = tools.panel_archive(body['id'])
+                elif url.path == '/api/memory/archived':
+                    ok, message, extra = True, '', {'items': tools.panel_archived()}
+                elif url.path == '/api/memory/unarchive':
+                    ok, message = tools.panel_unarchive(body['id'])
+                elif url.path == '/api/memory/lock':
+                    ok, message = tools.panel_lock(body['id'], body.get('locked') is True)
+                elif url.path == '/api/memory/event/split':
+                    events = getattr(tools, 'events', None)
+                    stage_ids = body.get('stage_ids')
+                    new_id = (events.split_event(body['id'], stage_ids, body.get('title') or '')
+                              if events is not None and isinstance(stage_ids, list) else None)
+                    ok, message, extra = bool(new_id), ('没有可拆出的阶段。' if not new_id else ''), (
+                        {'event_id': new_id} if new_id else {})
+                elif url.path == '/api/memory/event/move':
+                    events = getattr(tools, 'events', None)
+                    moved = (events.move_stage(body['id'], body.get('to'))
+                             if events is not None and isinstance(body.get('to'), str) else False)
+                    ok, message = bool(moved), ('这段经历被 Lan 改过或锁定，不能移动。' if not moved else '')
+                else:
+                    ok, message = tools.panel_seen(body['id'])
+            except Exception:
+                ok, message, extra = False, 'Ombre 暂时没有响应，这次没有改动。', {}
+            self._send(200 if ok else 409, {'ok': True, 'message': message, **extra} if ok else {'error': message})
+            return
+
+        def _post_media(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_MEDIA_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                mime = body.get('mime')
+                encoded = body.get('data')
+                if not isinstance(mime, str) or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                media = hub.save_media(mime, raw, body.get('name', 'image'))
+                if not media:
+                    raise ValueError
+            except (ValueError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid image'})
+            except OSError:
+                self._send(500, {'error': 'image storage failed'})
+            else:
+                self._send(201, {'ok': True, 'media': media})
+            return
+
+        def _post_transcribe(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                mime, encoded = body.get('mime'), body.get('data')
+                if not isinstance(mime, str) or mime not in VOICE_TYPES or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                if not raw or len(raw) > MAX_VOICE_UPLOAD_BYTES:
+                    raise ValueError
+            except (ValueError, TypeError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid voice'})
+                return
+            transcript, error = hub.transcribe_voice_bytes(raw, mime, 'dictation' + VOICE_TYPES[mime])
+            self._send(200, {'ok': True, 'transcript': transcript or '',
+                             'transcription_error': error or ''})
+            return
+
+        def _post_voice(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_VOICE_UPLOAD_BYTES * 2:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                mime, encoded = body.get('mime'), body.get('data')
+                if not isinstance(mime, str) or not isinstance(encoded, str):
+                    raise ValueError
+                raw = base64.b64decode(encoded, validate=True)
+                media = hub.save_voice(mime, raw, body.get('name', 'voice'))
+                if not media:
+                    raise ValueError
+            except (ValueError, TypeError, base64.binascii.Error):
+                self._send(400, {'error': 'invalid voice'})
+                return
+            except OSError:
+                self._send(500, {'error': 'voice storage failed'})
+                return
+            if body.get('send_first') is True:
+                hub.start_voice_transcription(media['id'])
+                media = hub.media_info(media['id'])
+                self._send(202, {'ok': True, 'media': media})
+            else:
+                transcript, error = hub.transcribe_voice(media['id'])
+                media = hub.media_info(media['id'])
+                self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
+                                 'transcription_error': error})
+            return
+
+        def _post_message_action(self, body):
+            action, message_id = body.get('action'), body.get('message_id')
+            if action == 'memory':
+                try:
+                    items = hub.message_memory(message_id)
+                except UserError as exc:
+                    self._send(409, {'ok': False, 'message': str(exc)})
+                else:
+                    self._send(200, {'ok': True, 'items': items,
+                                     'kinds': hub.message_memory_kinds(message_id, items)})
+                return
+            result = hub.message_action(action, message_id, message_ids=body.get('message_ids'),
+                                        content=body.get('content'), favorite=body.get('favorite'),
+                                        card=body.get('card'))
+            accepted = result in ('已开始重新生成。', '消息已删除。', '已删除所选消息。', '消息已撤回。',
+                                  '消息已更新。', '已收藏消息。', '已取消收藏。', '虚拟卡片已发送。',
+                                  '虚拟卡片状态已更新。')
+            self._send(200 if accepted else 409,
+                       {'ok': accepted, 'message': result, 'action': action if accepted else None})
+            return
+
+        def _post_send(self, body):
+            text = body.get('text')
+            request_id = body.get('request_id')
+            if not isinstance(text, str) or not text.strip():
+                self._send(400, {'error': 'empty'})
+            elif not isinstance(request_id, str) or not request_id or len(request_id) > 100:
+                self._send(400, {'error': 'request_id'})
+            else:
+                text = text.strip()
+                supplied_media = body.get('media') if 'media' in body else None
+                if (supplied_media is not None and
+                        (not isinstance(supplied_media, dict) or supplied_media.get('id') is None)):
+                    result = 'media'
+                else:
+                    media_id = supplied_media.get('id') if supplied_media is not None else None
+                    result = hub.submit(text, request_id, media_id)
+                if result in ('accepted', 'duplicate'):
+                    if result == 'accepted' and text == '/quit':
+                        hub.push('notice', '正在保存并退出，稍等几秒，然后可以关掉这个页面。')
+                    self._send(200, {'ok': True, 'duplicate': result == 'duplicate'})
+                elif result == 'media':
+                    self._send(400, {'error': 'invalid media'})
+                elif result == 'media_command':
+                    self._send(400, {'error': 'media cannot be sent with a command'})
+                elif result == 'storage':
+                    self._send(500, {'error': 'storage', 'message': hub.submit_errors.pop(request_id, '')})
+                elif result == 'media_storage':
+                    response = {'error': 'media_storage', 'message': hub.submit_errors.pop(request_id, '')}
+                    if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                            and hub.media_info(media_id)
+                            and hub.media_info(media_id).get('kind') == 'voice'):
+                        response['media'] = hub.media_info(media_id)
+                    self._send(500, response)
+                else:
+                    response = {'error': result}
+                    if (isinstance(supplied_media, dict) and isinstance(media_id, str)
+                            and hub.media_info(media_id)
+                            and hub.media_info(media_id).get('kind') == 'voice'):
+                        hub.mark_voice_unsent(
+                            hub.media_info(media_id),
+                            'Peter 正在回复或暂时不可用；录音和识别文字已保留，可以重试发送。')
+                        response['media'] = hub.media_info(media_id)
+                    self._send(409, response)
+
+        def _post_voice_retry(self, body):
+            media_id = body.get('media_id')
+            if not isinstance(media_id, str) or not MEDIA_ID_PATTERN.fullmatch(media_id):
+                self._send(400, {'error': 'invalid voice'})
+            else:
+                transcript, error = hub.retry_voice_transcription(media_id)
+                media = hub.media_info(media_id)
+                if not media:
+                    self._send(404, {'error': 'invalid voice'})
+                else:
+                    self._send(200, {'ok': True, 'media': media, 'transcript': transcript,
+                                     'transcription_error': error})
+
+        def _post_approve(self, body):
+            answer = body.get('answer')
+            if answer not in ('y', 'n'):
+                self._send(400, {'error': 'answer'})
+            elif not hub.answer(body.get('id'), answer):
+                self._send(409, {'error': 'no such pending approval'})
+            else:
+                self._send(200, {'ok': True})
+
+        def _post_stop(self):
+            if hub.stop_turn():
+                self._send(200, {'ok': True})
+            else:
+                self._send(409, {'error': 'not replying'})
+
+        def _post_desktop_icons_restore(self, body):
+            mgr = _get_desktop_icons_manager(hub)
+            snap_id = body.get('snapshot_id') if isinstance(body, dict) else None
+            try:
+                res = mgr.restore_snapshot(snapshot_id=snap_id)
+                self._send(200, {'ok': True, 'result': res})
+            except Exception as exc:
+                self._send(400, {'error': str(exc)})
+
+        def _post_typing(self, body):
+            if not isinstance(body.get('typing'), bool):
+                self._send(400, {'error': 'typing'})
+            elif hub.set_typing(body['typing']):
+                self._send(200, {'ok': True})
+            else:
+                self._send(409, {'error': 'stopping'})
+
+        def _post_request_reply(self):
+            if hub.request_reply():
+                self._send(202, {'ok': True})
+            else:
+                self._send(409, {'error': 'stopping'})
+
+        def _post_activity(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_activity(enabled):
+                        self._send(409, {'error': 'stopping'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': enabled})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_glance(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_glance(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.glance.enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_models(self, url, body):
+            from veil.core.model_settings import SettingsError
+            try:
+                with hub.cond:
+                    if hub.stopping or hub.stopped or hub.chat is None or hub.chat.cfg.models is None:
+                        self._send(409, {'error': 'unavailable'})
+                        return
+                if url.path == '/api/models':
+                    view = hub.save_models(body)
+                else:
+                    view = hub.use_model(body.get('role'), body.get('model'))
+            except SettingsError as exc:
+                self._send(400, {'ok': False, 'message': str(exc)})
+            except OSError:
+                self._send(500, {'ok': False, 'message': '模型设置保存结果未确认，请检查磁盘权限，重启后核对再重试。'})
+            else:
+                self._send(200, {'ok': True, 'models': view})
+
+        def _post_mcp(self, body):
+            from veil.integrations.mcp_services import MCPConfigError, MCPConflict
+            if hub.chat is None or hub.stopping or hub.stopped:
+                self._send(409, {'error': 'Peter 尚未就绪。'})
+            else:
+                try:
+                    if not isinstance(body.get('revision'), int) or isinstance(body.get('revision'), bool):
+                        self._send(400, {'error': '缺少 MCP 配置版本，请刷新页面。'})
+                        return
+                    view = hub.chat.mcp_services.save(body, expected_revision=body['revision'])
+                    hub.chat.mcp_services.schemas()
+                    self._send(200, hub.chat.mcp_services.view())
+                except MCPConflict as exc:
+                    self._send(409, {'error': str(exc)})
+                except MCPConfigError as exc:
+                    self._send(400, {'error': str(exc)})
+                except OSError:
+                    self._send(500, {'error': 'MCP 配置保存失败。'})
+
+        def _windows_apps_path(self):
+            chat = hub.chat
+            tools = getattr(chat, 'tools', None) if chat else None
+            files = getattr(tools, 'files', None) or tools
+            interaction = getattr(files, 'windows_interaction_tools', None)
+            return getattr(interaction, 'approved_apps_path', None), interaction
+
+        def _windows_apps_view(self, path, interaction):
+            from veil.windows.windows_interaction import list_approved_apps
+            approved = list_approved_apps(path) if path else []
+            ids = {row['app_id'] for row in approved}
+            builtin, candidates = [], []
+            if interaction is not None:
+                builtin = [{'app_id': a, 'label': app['label']} for a, app in interaction.applications.items() if a not in ids]
+                candidates = interaction.list_candidates()
+            return {'apps': approved, 'builtin': builtin, 'candidates': candidates}
+
+        def _get_windows_apps(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            path, interaction = self._windows_apps_path()
+            self._send(200, self._windows_apps_view(path, interaction))
+
+        def _get_instructions(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            try:
+                self._send(200, hub.instructions_page())
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'读取指令清单失败：{exc}'})
+
+        def _get_request_snapshots(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            from veil.system import request_snapshots
+            chat = hub.chat
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            raw = (query.get('limit') or ['12'])[0]
+            limit = max(1, min(40, int(raw))) if str(raw).isdigit() else 12
+            self._send(200, {'items': request_snapshots.recent(chat.store.root, chat.cfg.id, limit)})
+
+        def _get_request_snapshot(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            from veil.system import request_snapshots
+            chat = hub.chat
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            request_id = (query.get('id') or [''])[0]
+            message_id = (query.get('message_id') or [''])[0]
+            if message_id and not request_id:
+                request_id = ''
+                try:
+                    rows = chat.store.read_tail(chat.path, 400)
+                except (OSError, UserError):
+                    rows = chat.store.read(chat.path)
+                for row in reversed(rows):
+                    if (isinstance(row, dict) and row.get('message_id') == message_id
+                            and isinstance(row.get('request_id'), str) and row['request_id']):
+                        request_id = row['request_id']
+                        break
+                if not request_id:
+                    self._send(404, {'error': '这条消息没有关联的请求快照。'})
+                    return
+            elif not request_id:
+                self._send(400, {'error': '缺少 id 或 message_id。'})
+                return
+            bundle = request_snapshots.for_request(chat.store.root, chat.cfg.id, request_id)
+            if not bundle:
+                self._send(404, {'error': '还没有这一轮的快照；更新后发一句话就会生成。'})
+                return
+            self._send(200, bundle)
+
+        # ---- ticket 432: read-only developer diagnostics ----
+
+        DIAGNOSTIC_HOURS = 72
+
+
+        def _diagnostic_context(self):
+            chat = hub.chat
+            if chat is None:
+                return None, None, None
+            try:
+                stat = (chat.store.root / f'{chat.cfg.id}/tools.jsonl').stat()
+                key = (chat.cfg.id, stat.st_size, stat.st_mtime_ns, 240)
+            except OSError:
+                key = None
+            return chat, chat.cfg.id, hub.tool_inventory(key)
+
+        @staticmethod
+        def _hours(query):
+            raw = (query.get('hours') or [''])[0]
+            return max(1, min(24 * 30, int(raw))) if str(raw).isdigit() else 72
+
+        def _get_diagnostics_overview(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            try:
+                data = diagnostics.overview(hub.data_root, role, hub=hub, inventory=inventory)
+                diagnostics.snapshot_if_stale(hub.data_root, role, data)
+            except Exception:
+                logger.exception('diagnostics overview failed')
+                self._send(503, {'error': '诊断数据暂时读不到。'})
+                return
+            self._send(200, data)
+
+        def _get_diagnostics_issues(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            module = (query.get('module') or [''])[0]
+            limit = (query.get('limit') or ['120'])[0]
+            limit = max(1, min(200, int(limit))) if str(limit).isdigit() else 120
+            try:
+                rows = diagnostics.recent_issues(hub.data_root, role, hours=self._hours(query))
+            except Exception:
+                logger.exception('diagnostics issues failed')
+                self._send(503, {'error': '诊断数据暂时读不到。'})
+                return
+            if module:
+                rows = [row for row in rows if row.get('module') == module]
+            self._send(200, {'items': rows[:limit], 'total': len(rows)})
+
+        def _get_diagnostics_trace(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            values = {}
+            for name in ('request_id', 'run_id', 'call_id'):
+                value = (query.get(name) or [''])[0]
+                if value and not diagnostics.valid_id(value):
+                    self._send(400, {'error': '参数不对。'})
+                    return
+                values[name] = value
+            if not any(values.values()):
+                self._send(400, {'error': '需要 request_id、run_id 或 call_id 之一。'})
+                return
+            try:
+                chain = diagnostics.trace(hub.data_root, role, **values)
+                # A wake id resolves to its own request ids; the snapshot list must
+                # come from the resolved turn, not from the (empty) parameter.
+                steps = diagnostics.snapshots(hub.data_root, role,
+                                              (chain or {}).get('request_id') or '')
+            except Exception:
+                logger.exception('diagnostics trace failed')
+                self._send(503, {'error': '这一轮的诊断暂时读不到。'})
+                return
+            self._send(200, {'chain': chain, 'snapshots': steps})
+
+        def _get_diagnostics_report(self, query):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            scope = (query.get('scope') or ['overview'])[0]
+            issue_id = (query.get('id') or [''])[0]
+            if issue_id and not diagnostics.valid_id(issue_id):
+                self._send(400, {'error': '参数不对。'})
+                return
+            try:
+                text = diagnostics.report_text(hub.data_root, role, hub=hub, inventory=inventory,
+                                               hours=self._hours(query),
+                                               issue_id=issue_id if scope == 'issue' else '')
+            except Exception:
+                logger.exception('diagnostics report failed')
+                self._send(503, {'error': '报告暂时生成不了。'})
+                return
+            self._send(200, {'text': text, 'characters': len(text)})
+
+        def _get_diagnostics_links(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            chat, role, _inventory = self._diagnostic_context()
+            if chat is None:
+                self._send(503, {'error': '服务还没准备好。'})
+                return
+            self._send(200, {'items': diagnostics.links(hub.data_root, role, chat.cfg)})
+
+        def _post_instructions(self, body):
+            try:
+                self._send(200, hub.save_instruction(body))
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'保存指令失败：{exc}'})
+
+        def _get_peter_page(self):
+            try:
+                data = hub.peter_page()
+                if isinstance(data, dict) and isinstance(data.get('learned'), dict):
+                    from veil.brain.brain_p4_api import _compute_cognition_budget
+                    data['learned']['budget'] = _compute_cognition_budget(data['learned'])
+                self._send(200, data)
+            except UserError as exc:
+                self._send(400, {'error': str(exc)})
+            except OSError as exc:
+                self._send(500, {'error': f'读取 Peter 页失败：{exc}'})
+
+        def _post_peter_page(self, body):
+            try:
+                self._send(200, hub.save_peter_page(body))
+            except UserError as exc:
+                text = str(exc)
+                self._send(409 if ('又改过' in text or '覆盖' in text) else 400, {'error': text})
+            except OSError as exc:
+                self._send(500, {'error': f'保存失败：{exc}'})
+
+        def _post_windows_apps(self, body):
+            """Lan adds an open app to Peter's list, or removes one she added (both take effect at once)."""
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            path, interaction = self._windows_apps_path()
+            body = body if isinstance(body, dict) else {}
+            from veil.windows.windows_interaction import remove_approved_app
+            if path is not None and isinstance(body.get('add'), str):
+                if interaction is None or not interaction.approve_open_app(body['add']):
+                    self._send(400, {'error': '没找到这个软件的窗口，请先把它打开再添加。'})
+                    return
+            elif path is not None and isinstance(body.get('remove'), str) and remove_approved_app(path, body['remove']):
+                interaction.applications.pop(body['remove'], None)
+            else:
+                self._send(400, {'error': 'remove'})
+                return
+            self._send(200, self._windows_apps_view(path, interaction))
+
+        def _get_workbench(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            try:
+                self._send(200, workbench_switch.status(ROOT))
+            except (OSError, ValueError) as exc:
+                self._send(500, {'error': str(exc)})
+
+        def _post_workbench(self, body):
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            try:
+                with workbench_lock:
+                    self._save_workbench(body)
+            except (OSError, ValueError) as exc:
+                self._send(500, {'error': str(exc)})
+
+        def _save_workbench(self, body):
+            state = workbench_switch.load_state(ROOT)
+            if 'enabled' in body:
+                if not isinstance(body['enabled'], bool):
+                    self._send(400, {'error': 'enabled'})
+                    return
+                state['enabled'] = body['enabled']
+            if 'add' in body:
+                ok, message = workbench_switch.add_folder(state, body['add'], ROOT) if isinstance(body['add'], str) else (False, 'add')
+                if not ok:
+                    self._send(400, {'error': message})
+                    return
+            if 'remove' in body:
+                if not isinstance(body['remove'], str) or not workbench_switch.remove_folder(state, body['remove']):
+                    self._send(400, {'error': 'remove'})
+                    return
+            if 'add_host' in body:
+                ok, message = workbench_switch.add_host(state, body['add_host']) if isinstance(body['add_host'], str) else (False, 'add_host')
+                if not ok:
+                    self._send(400, {'error': message})
+                    return
+            if 'remove_host' in body:
+                if not isinstance(body['remove_host'], str) or not workbench_switch.remove_host(state, body['remove_host']):
+                    self._send(400, {'error': 'remove_host'})
+                    return
+            workbench_switch.save_state(state, ROOT)
+            self._send(200, workbench_switch.status(ROOT))
+
+        def _post_quiet_hours(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_quiet_hours(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.autonomy.quiet_enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_experience_memory(self, body):
+            enabled = body.get('enabled')
+            experience = getattr(hub.chat, 'experience', None)
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            elif experience is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    experience.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'experience': experience.status()})
+                except (OSError, UserError) as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_recall_judge(self, body):
+            enabled = body.get('enabled')
+            judge = getattr(getattr(hub.chat, 'memory', None), 'judge', None)
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            elif judge is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    judge.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'recall_judge': judge.status()})
+                except (OSError, UserError) as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_work_checkpoint(self, body):
+            checkpoint = getattr(hub.chat, 'work_checkpoint', None)
+            checkpoint_id = body.get('id')
+            if checkpoint is None:
+                self._send(409, {'error': 'unavailable'})
+            elif body.get('action') != 'close' or not isinstance(checkpoint_id, str) or not checkpoint_id:
+                self._send(400, {'error': 'action'})
+            else:
+                try:
+                    checkpoint.close(checkpoint_id)
+                    self._send(200, {'ok': True, 'work_checkpoint': checkpoint.view()})
+                except UserError as exc:
+                    self._send(409, {'error': str(exc)})
+                except OSError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_voice_style(self, body):
+            # Ticket 355: Lan switches his "how I talk" reference on or off, or saves an edited text.
+            voice_style = getattr(hub.chat, 'voice_style', None)
+            enabled, text = body.get('enabled'), body.get('text')
+            if (enabled is None) == (text is None) or (enabled is not None and not isinstance(enabled, bool)) \
+                    or (text is not None and not isinstance(text, str)):
+                self._send(400, {'error': 'enabled or text'})
+            elif voice_style is None:
+                self._send(409, {'error': 'unavailable'})
+            else:
+                try:
+                    if text is not None:
+                        voice_style.save(text)
+                    else:
+                        voice_style.set_enabled(enabled)
+                    self._send(200, {'ok': True, 'voice_style': voice_style.status(with_text=True)})
+                except UserError as exc:
+                    self._send(400, {'error': str(exc)})
+                except OSError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_codex_watch(self, body):
+            enabled = body.get('enabled')
+            if not isinstance(enabled, bool):
+                self._send(400, {'error': 'enabled'})
+            else:
+                try:
+                    if not hub.set_codex_watch(enabled):
+                        self._send(409, {'error': 'unavailable'})
+                    else:
+                        self._send(200, {'ok': True, 'enabled': hub.codex_watch.enabled()})
+                except UserError as exc:
+                    self._send(500, {'error': str(exc)})
+
+        def _post_exit(self):
+            state = hub.request_stop()
+            if state == 'accepted':
+                self._send(202, {'ok': True, 'state': 'accepted'})
+            elif state == 'stopping':
+                self._send(202, {'ok': True, 'state': 'stopping'})
+            else:
+                self._send(200, {'ok': True, 'state': 'stopped'})
+
+        def _post_life(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= 20000:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                self._save_life(body)
+            except (ValueError, TypeError, UnicodeError):
+                self._send(400, {'error': 'invalid life record'})
+
+        def _save_life(self, body):
+            if hub.chat is None:
+                self._send(409, {'error':'Peter 尚未就绪。'})
+                return
+            if 'auto_record' in body:
+                try:
+                    if set(body)!={'auto_record'}: raise ValueError('invalid calendar setting')
+                    hub.chat.life_records.set_auto_record_enabled(body['auto_record'])
+                    self._send(200,{'auto_record_enabled':body['auto_record']})
+                except (OSError,ValueError,UnicodeError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
+            if 'undo_auto' in body:
+                try:
+                    if set(body)!={'undo_auto'}: raise ValueError('invalid undo request')
+                    restored=hub.chat.life_records.undo_auto(body['undo_auto'])
+                    self._send(200,{'ok':True,'record':restored})
+                except (ValueError,OSError,UnicodeError) as exc:
+                    self._send(409,{'error':str(exc)})
+                return
+            source_id=body.get('id')
+            if 'find' in body:
+                # Ticket 385: a notice names one record; it may be an old completed note folded out of the list.
+                key=body.get('find')
+                if set(body)!={'find'} or not isinstance(key,str) or not key:
+                    self._send(400, {'error':'invalid lookup'}); return
+                try:
+                    from veil.life.life_records import effective
+                    row=next((r for r in hub.chat.life_records.read() if isinstance(r,dict) and r.get('id')==key and r.get('kind')!='diary'),None)
+                except (OSError,ValueError,UnicodeError):
+                    self._send(500, {'error':'生活记录无法安全读取。'}); return
+                self._send(200, {'found':row is not None,'record':effective(row) if row else None})
+                return
+            if 'mood' in body:
+                # Ticket 385: Lan sets only her own slot; Peter sets his through his tool.
+                try:
+                    mood=body['mood']
+                    if set(body)!={'mood'} or not isinstance(mood,dict) or set(mood)-{'date','emoji'}:
+                        raise ValueError('invalid mood')
+                    emoji=mood.get('emoji') or ''
+                    if not isinstance(emoji,str): raise ValueError('invalid mood')
+                    slot=hub.chat.life_records.set_mood(mood.get('date'),'Lan',emoji.strip())
+                    self._send(200, {'ok':True,'date':mood.get('date'),'moods':slot})
+                except (OSError,UnicodeError):
+                    self._send(500, {'error':'心情没能安全保存。'})
+                except ValueError as exc:
+                    self._send(400, {'error':str(exc)})
+                return
+            if isinstance(source_id,str) and source_id.startswith('long-task:'):
+                task_id=source_id.split(':',1)[1]
+                try:
+                    if set(body)-{'id','title','content','state','progress_update'}:
+                        raise ValueError('invalid long task edit')
+                    if 'title' in body or 'content' in body:
+                        current=hub.chat.long_tasks.read()
+                        if not current or current['task_id']!=task_id:
+                            raise ValueError('long task is no longer editable')
+                        hub.chat.long_tasks.edit_from_desktop(task_id,body.get('title',current['title']),
+                                                              body.get('content',current['goal']))
+                    if 'state' in body:
+                        update={'action':'update','task_id':task_id,'status':body['state']}
+                        if 'progress_update' in body: update['progress_update']=body['progress_update']
+                        result,state,_=hub.chat.long_tasks._update(update,actor='Lan')
+                        if state!='成功': raise ValueError(result)
+                    current=hub.chat.long_tasks.read()
+                    self._send(200,{'ok':True,'record':{'id':source_id,'kind':'plan',
+                        'title':current['title'],'content':current['goal'],'owner':'Peter',
+                        'date':current['created_at'][:10],'state':current['status'],
+                        'created_by':'Peter','created_at':current['created_at'],
+                        'updated_by':current.get('updated_by','Peter'),'updated_at':current['updated_at'],
+                        'source':'long_task_update','progress':current['progress'],
+                        'read_only':current['status']=='completed'}})
+                except (ValueError,UserError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
+            if isinstance(source_id,str) and source_id.startswith('short-note:'):
+                try:
+                    if set(body)-{'id','content','state'} or body.get('state','active') not in ('active','completed'):
+                        raise ValueError('invalid short note edit')
+                    note_id=source_id.split(':',1)[1]
+                    notes=hub.chat.short_term_notes
+                    current=notes._latest_notes().get(note_id)
+                    if not current: raise ValueError('short note not found')
+                    note=notes.edit_from_desktop(note_id,body.get('content',current['text']),
+                                                 body.get('state')=='completed')
+                    self._send(200,{'ok':True,'record':{'id':source_id,'kind':'note','title':note['text'][:120],
+                        'content':note['text'],'owner':'Peter','date':str(note.get('occurred_at',''))[:10],
+                        'state':'completed' if note['status']=='已完成' else 'active','created_by':'Peter',
+                        'created_at':note['created_at'],'updated_by':'Lan','updated_at':note['time'],
+                        'source':'short_term_notes'}})
+                except (ValueError,AttributeError) as exc:
+                    self._send(400,{'error':str(exc)})
+                return
+            if body.get('delete') is True:
+                try:
+                    if set(body)!={'id','delete'} or not isinstance(source_id,str): raise ValueError('invalid delete')
+                    hub.chat.life_records.delete(source_id)
+                    self._send(200, {'ok':True,'deleted':source_id})
+                except (OSError,UnicodeError):
+                    self._send(500, {'error':'生活记录未能安全删除。'})
+                except ValueError as exc:
+                    self._send(400, {'error':str(exc)})
+                return
+            try:
+                row=hub.chat.life_records.write(body,'Lan')
+                self._send(200, {'ok':True,'record':row})
+            except (OSError,UnicodeError):
+                self._send(500, {'error':'生活记录未能安全保存。'})
+            except ValueError as exc:
+                self._send(400, {'error':str(exc)})
+
+        def do_POST(self):
+            url = urlparse(self.path)
+            if url.path.startswith('/game/'):
+                self._post_game_score(url)
+                return
+            if not self._guard(self.headers.get('X-Token')):
+                return
+            if url.path in ('/api/screen-pop/claim', '/api/screen-pop/event'):
+                self._post_screen_pop(url)
+                return
+            if url.path in MEMORY_CHANGE_PATHS:
+                self._post_memory_change(url)
+                return
+            if url.path == '/api/life':
+                self._post_life()
+                return
+            if url.path == '/api/stickers/upload':
+                self._post_sticker_upload()
+                return
+            if url.path == '/api/media':
+                self._post_media()
+                return
+            if url.path == '/api/transcribe':
+                self._post_transcribe()
+                return
+            if url.path == '/api/voice':
+                self._post_voice()
+                return
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+                if not 0 < length <= MAX_BODY:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                self._send(400, {'error': 'bad request'})
+                return
+            if url.path == '/api/life':
+                self._save_life(body)
+                return
+            if url.path == '/api/message/action':
+                self._post_message_action(body)
+                return
+            if url.path == '/api/stickers':
+                self._post_stickers(body)
+            elif url.path == '/api/send':
+                self._post_send(body)
+            elif url.path == '/api/voice/retry':
+                self._post_voice_retry(body)
+            elif url.path == '/api/approve':
+                self._post_approve(body)
+            elif url.path == '/api/stop':
+                self._post_stop()
+            elif url.path == '/api/desktop-icons/restore':
+                self._post_desktop_icons_restore(body)
+            elif url.path == '/api/typing':
+                self._post_typing(body)
+            elif url.path == '/api/request-reply':
+                self._post_request_reply()
+            elif url.path == '/api/activity':
+                self._post_activity(body)
+            elif url.path == '/api/glance':
+                self._post_glance(body)
+            elif url.path in ('/api/models', '/api/models/use'):
+                self._post_models(url, body)
+            elif url.path == '/api/mcp':
+                self._post_mcp(body)
+            elif url.path == '/api/quiet-hours':
+                self._post_quiet_hours(body)
+            elif url.path == '/api/experience-memory':
+                self._post_experience_memory(body)
+            elif url.path == '/api/recall-judge':
+                self._post_recall_judge(body)
+            elif url.path == '/api/work-checkpoint':
+                self._post_work_checkpoint(body)
+            elif url.path == '/api/voice-style':
+                self._post_voice_style(body)
+            elif url.path == '/api/instructions':
+                self._post_instructions(body)
+            elif url.path == '/api/workbench':
+                self._post_workbench(body)
+            elif url.path == '/api/windows-apps':
+                self._post_windows_apps(body)
+            elif url.path == '/api/peter-page':
+                self._post_peter_page(body)
+            elif url.path == '/api/brain/health/scan':
+                self._post_brain_health_scan(body)
+            elif url.path == '/api/brain/health/settings':
+                self._post_brain_health_settings(body)
+            elif url.path == '/api/brain/layer-toggle':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import toggle_layer
+                res = toggle_layer(hub, str(body.get('layer_id') or ''), bool(body.get('enabled')))
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
+            elif url.path == '/api/pending-approvals':
+                try:
+                    self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
+                except UserError as exc:
+                    self._send(409 if '已经' in str(exc) or '不在了' in str(exc) else 400, {'error': str(exc)})
+            elif url.path == '/api/codex-watch':
+                self._post_codex_watch(body)
+            elif url.path == '/api/exit':
+                self._post_exit()
+            else:
+                self._send(404, {'error': 'not found'})
+
+    return Handler
+
+
+def start_server(hub, token, port):
+    server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(hub, token))
+    hub.game_port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def serve_chat(chat, hub, channels=(), acceptance=False):
+    hub.chat = chat
+    if hasattr(chat, 'refresh_tool_inventory'):
+        chat.refresh_tool_inventory()  # before any poll; later refreshed by each request
+    chat.sticker_library = hub.sticker_library
+    chat.claim_steer = hub.claim_steer
+    chat.steer_pending = hub.steer_pending
+    if getattr(chat.cfg, 'models', None) is not None:
+        background = chat.cfg.models.startup_choice('background')
+        hub.background_running = background[0] if background else None
+        hub.refresh_models()
+    from veil.brain.brain_health import start_health_scheduler
+    start_health_scheduler(hub)
+    chat.screen_pop_handler = hub.request_screen_pop
+    files = getattr(chat.tools, 'files', None) if chat.tools else None
+    files = files or chat.tools
+    announce_stickers = getattr(files, 'announce_stickers', None)
+    if hub.sticker_library is not None and callable(announce_stickers):
+        announce_stickers()
+    announce_cards = getattr(files, 'announce_virtual_cards', None)
+    if callable(announce_cards) and announce_cards() and chat.tools is not None:
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+
+    def publish_virtual_card(message_id, card, content=''):
+        hub.push('message_updated', content or '', message_id=message_id, virtual_card=card)
+
+    chat.virtual_card_changed = publish_virtual_card
+    if getattr(files, 'lab', None) is not None:
+        from veil.life.lab_games import LabGames
+        hub.game_manager = LabGames(files.workspace, hub.game_port, files.lab.name)
+        files.attach_game_manager(hub.game_manager)
+    announce_free_reply = getattr(files, 'announce_free_reply', None)
+    if callable(announce_free_reply):
+        announce_free_reply()
+        announce_stay_silent = getattr(files, 'announce_stay_silent', None)
+        if callable(announce_stay_silent):
+            announce_stay_silent()
+        announce_typing_wait = getattr(files, 'announce_typing_wait', None)
+        if callable(announce_typing_wait):
+            announce_typing_wait()
+        announce_wake_freedom = getattr(files, 'announce_wake_freedom', None)
+        if callable(announce_wake_freedom):
+            announce_wake_freedom()
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    if (getattr(files, 'workspace', None) is not None and getattr(files, 'client', None) is not None and
+            callable(getattr(files, 'read_lab_attachment', None))):
+        chat.attachment_reader = files.read_lab_attachment
+        chat.attachment_saver = hub.save_attachment
+        chat.attachment_discarder = hub._remove_unreferenced_media
+        announce_attachments = getattr(files, 'announce_file_attachments', None)
+        if callable(announce_attachments):
+            if announce_attachments() is False:
+                hub.output('附件能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+            chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+            chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    def publish_recalled(row):
+        hub.push('message_recalled', '[Message recalled]', message_id=row['message_id'])
+        try:
+            hub._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+        except (OSError, UserError):
+            pass
+    chat.message_recalled = publish_recalled
+    def publish_removed(rows):
+        for row in rows:
+            hub.push('message_removed', '', message_id=row['message_id'])
+            try:
+                hub._remove_unreferenced_media([row.get('media'), *(row.get('attachments') or [])])
+            except (OSError, UserError):
+                pass
+    chat.message_removed = publish_removed
+    announce_desktop = getattr(files, 'announce_desktop_freedom', None)
+    if callable(announce_desktop):
+        if announce_desktop() is False:
+            hub.output('桌面能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    announce_photo = getattr(files, 'announce_photo_input', None)
+    if callable(announce_photo):
+        if announce_photo() is False:
+            hub.output('图片能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = chat.pending_capability_event
+    announce_voice_input = getattr(files, 'announce_voice_input', None)
+    if callable(announce_voice_input):
+        if announce_voice_input() is False:
+            hub.output('语音能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    announce_voice = getattr(files, 'announce_voice_output', None)
+    if chat.voice is not None and callable(announce_voice):
+        if announce_voice() is False:
+            hub.output('语音能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+        chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+        chat.pending_capability_event_model = chat.pending_capability_event
+    elif chat.voice is None:
+        suppress_voice = getattr(files, 'suppress_voice_output_notice', None)
+        if callable(suppress_voice):
+            suppress_voice()
+            chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+            chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    for message in chat.history_events:
+        media = message.get('media') or (hub.media_for_request(message.get('request_id'))
+                                         if message['role'] == 'user' else None)
+        if message['role'] == 'assistant' and isinstance(media, dict):
+            media = hub.register_voice_media(media)
+        attachments = [hub.attachment_info(item.get('id')) for item in message.get('attachments', [])
+                       if isinstance(item, dict)]
+        attachments = [item for item in attachments if item]
+        hub.push(message['role'], message['content'], time=message['time'], history=True,
+                 message_id=message['message_id'], request_id=message.get('request_id'),
+                 favorite=message.get('favorite') is True,
+                 memory_refs=message.get('memory_refs', []),
+                 **({'attachments': attachments} if attachments else {}),
+                 **({'media': media} if media else {}),
+                 **({'virtual_card': message['virtual_card']} if isinstance(message.get('virtual_card'), dict) else {}),
+                 **({'virtual_card_event': message['virtual_card_event']} if isinstance(message.get('virtual_card_event'), dict) else {}))
+    # The UI history is a bounded window; replay decisions must use the durable
+    # full chat log or an older successful voice send looks pending on restart.
+    completed_voice_ids = {
+        message.get('media', {}).get('id') for message in chat.store.read(chat.path)
+        if isinstance(message.get('media'), dict) and message['media'].get('kind') == 'voice'
+    }
+    hub.discard_unsent_voice(completed_voice_ids)
+    for media in hub.media_index.values():
+        if (media.get('kind') == 'voice' and media['id'] not in completed_voice_ids
+                and media.get('delivery_pending')):
+            hub.push('user', media.get('transcript') or '', time=now(), history=True, media=dict(media))
+    if hasattr(chat, 'recover_uncommitted_incoming'):
+        for row in chat.recover_uncommitted_incoming():
+            mid = row.get('message_id')
+            req_id = row.get('request_id') or mid
+            text = row.get('content') or ''
+            media = row.get('media')
+            def complete(committed, r_text=text, r_media=media, r_id=req_id):
+                hub.finish_media_submission(committed, r_text, r_media, r_id)
+            if not media:
+                hub.push('user', text, request_id=req_id, message_id=mid)
+            digest_input = text.encode('utf-8') + b'\0' + (media['id'].encode() if isinstance(media, dict) and isinstance(media.get('id'), str) else b'')
+            hub.submissions[req_id] = hashlib.sha256(digest_input).digest()
+            hub.inbox.put((text, media, complete, req_id, True))
+            hub.busy = True
+    if channels:
+        from veil.integrations.away_bridge import AwayBridge
+    for channel in channels:
+        bridge = AwayBridge(channel, hub)
+        hub.away.append(bridge)
+        chat.away_channels[channel.name] = bridge.requested
+        if channel.name == 'email':
+            chat.email_attachment_admission = bridge.can_add_reply_attachment
+        announce = getattr(files, 'announce_' + channel.name, None)
+        if callable(announce):
+            if announce() is False:
+                hub.output(f'{channel.label}能力通知暂时无法保存；聊天仍可使用，下次启动会重试。')
+            chat.pending_capability_event = getattr(chat.tools, 'capability_event', None)
+            chat.pending_capability_event_model = getattr(chat.tools, 'capability_event_model', None)
+    if acceptance:
+        hub.autonomy = hub.glance = hub.codex_watch = None
+    else:
+        hub.autonomy = AutonomyController(chat, hub)
+        hub.glance = GlanceController(chat, hub)
+        hub.autonomy.glance = hub.glance
+        hub.codex_watch = CodexWatchController(chat, hub, glance=hub.glance)
+        hub.autonomy.codex_watch = hub.codex_watch
+    hub.capability_record = lambda: chat.capability_history_record
+    hub.activity_transition = lambda enabled: chat.set_activity_enabled(hub.activity, enabled)
+    chat.activity_enabled = hub.activity.enabled
+    hub.current_capabilities = chat.current_capability_snapshot
+    if chat.runtime_monitor:
+        hub.runtime_status = lambda: chat.runtime_monitor.snapshot(chat.long_tasks, chat.tools)
+    for bridge in hub.away:
+        bridge.start()
+    try:
+        run_chat(chat, input_fn=hub.input_fn, output=hub.output, drop=lambda: False,
+                 activity=hub.activity, autonomy=None if acceptance else hub.autonomy,
+                 start_notes=not acceptance)
+    finally:
+        hub.request_stop()
+
+
+def save_endpoint(path, port, token):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    tmp.write_text(json.dumps({'port': port, 'token': token}), encoding='utf-8')
+    tmp.replace(path)
+
+
+def clear_endpoint(path, token):
+    try:
+        current = json.loads(path.read_text(encoding='utf-8'))
+        if hmac.compare_digest(str(current.get('token', '')).encode(), token.encode()):
+            path.unlink(missing_ok=True)
+    except (OSError, ValueError, UnicodeError, AttributeError):
+        pass
+
+
+def save_startup_error(path, message):
+    # The detached service has no console; the launcher shows this text instead.
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(message, encoding='utf-8')
+    except OSError:
+        pass
+
+
+def main(argv=None):
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
+    parser = argparse.ArgumentParser(description='VEIL 本机聊天服务（桌面版后端）')
+    parser.add_argument('--character', default='peter')
+    parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--no-browser', action='store_true', help=argparse.SUPPRESS)  # kept for older desktop builds
+    parser.add_argument('--config-root', default='',
+                        help=argparse.SUPPRESS)  # independent test instance: characters, persona and .env
+    parser.add_argument('--data-dir', default='',
+                        help=argparse.SUPPRESS)  # independent test instance: chat, memory, budget, endpoint
+    parser.add_argument('--acceptance', action='store_true',
+                        help=argparse.SUPPRESS)  # no autonomy, external channels or memory side effects
+    args = parser.parse_args(argv)
+    if args.acceptance and (not args.config_root or not args.data_dir):
+        parser.error('--acceptance requires --config-root and --data-dir')
+    hub = None
+    token = None
+    server = None
+    config_root = Path(args.config_root).resolve() if args.config_root else ROOT
+    data_dir = Path(args.data_dir).resolve() if args.data_dir else ROOT / 'data'
+    if args.acceptance and (config_root == ROOT or data_dir == (ROOT / 'data').resolve()):
+        parser.error('--acceptance must not use the formal config or data directory')
+    endpoint_path = data_dir / 'web_service.json'
+    error_path = data_dir / 'web_service_error.txt'
+    try:
+        store = Store(data_dir)
+        with store.lock():
+            budget = Budget(store)
+            cfg = load_character(config_root, args.character)
+            if args.acceptance:
+                from dataclasses import replace
+                cfg = replace(cfg, memory={}, voice=None, email=None, qq=None,
+                              windows_observation=None, windows_interaction=None,
+                              desktop_file_read=None, screen_pop=None, glance=None,
+                              executor={**(cfg.executor or {}), 'enabled': False})
+            budget.autonomy_daily = cfg.autonomy['daily_budget_cny']
+            if cfg.glance:
+                budget.glance_daily = cfg.glance['daily_budget_cny']
+            budget.daily, budget.monthly = cfg.models.limits()
+            acceptance_limits = None
+            if args.acceptance:
+                from decimal import Decimal
+                acceptance_limits = (Decimal('2'), Decimal('20'))
+                budget.daily = min(budget.daily, acceptance_limits[0])
+                budget.monthly = min(budget.monthly, acceptance_limits[1])
+            client, model = make_model(config_root, cfg)
+            background_client, background_model = make_model(config_root, cfg, provider=cfg.background_provider)
+            voice = make_voice(config_root, cfg, store, budget)
+            from veil.integrations.email_channel import EmailChannel
+            from veil.integrations.qq_channel import QQChannel
+            channels = [] if args.acceptance else [
+                channel for channel in (EmailChannel.from_env(config_root, cfg, store.root),
+                                        QQChannel.from_env(config_root, cfg, store.root)) if channel]
+            activity = ActivityState(store.root / cfg.id / 'resident-state.json')
+            from veil.system.runtime_monitor import RuntimeMonitor
+            runtime_monitor = RuntimeMonitor(store, cfg.id, activity)
+            use_memory = memory_available(cfg)
+            hub = Hub(cfg.name, activity, None, store.root / cfg.id / 'media',
+                      data_root=data_dir, config_root=config_root)
+            if cfg.memory and cfg.memory.get('enabled') and not use_memory:
+                hub.push('notice', '模型还没有选择，记忆后台暂未启动；请在设置里选择模型后重启。')
+            if acceptance_limits is not None:
+                hub.acceptance_limits = acceptance_limits
+            from veil.chat.stickers import StickerLibrary
+            hub.sticker_library = StickerLibrary(store.root / 'stickers')
+            token = secrets.token_urlsafe(24)
+            try:
+                server = start_server(hub, token, args.port)
+            except OSError:
+                raise UserError('网页服务未能启动；请稍后重试。')
+            port = server.server_address[1]
+            save_endpoint(endpoint_path, port, token)
+            failed = False
+            try:
+                with client, background_client:
+                    from veil.tools.tools_agent import FilesystemTools
+                    from veil.integrations.web_tools import WebTools
+                    with FilesystemTools(config_root, cfg, store, web_factory=lambda root, config: WebTools(
+                            root, config, budget=budget)) as tools:
+                        if use_memory:
+                            from veil.brain.memory_agent import Memory
+                            with Memory(cfg, store, budget, model,
+                                        runtime_monitor=runtime_monitor) as memory:
+                                # Ticket 382: Peter's background model judges which memories fit what she just said.
+                                memory.attach_recall_judge(background_cfg(cfg), background_model or model, warm=True)
+                                from veil.brain.memory_native import NativeMemoryTools, ToolSet
+                                tools = ToolSet(tools, NativeMemoryTools(
+                                    memory, cfg.tools['max_result_bytes'], model=model))
+                                hub.memory_tools = tools.native
+                                serve_chat(Chat(cfg, store, budget, model, memory, tools,
+                                                approval=hub.approval, output=hub.output,
+                                                voice=voice, runtime_monitor=runtime_monitor,
+                                                background_model=background_model), hub, channels,
+                                           acceptance=args.acceptance)
+                                for notice in memory.notices():
+                                    hub.output(notice)
+                        else:
+                            serve_chat(Chat(cfg, store, budget, model, tools=tools,
+                                            approval=hub.approval, output=hub.output,
+                                            voice=voice, runtime_monitor=runtime_monitor,
+                                            background_model=background_model), hub, channels,
+                                       acceptance=args.acceptance)
+            except UserError as exc:
+                hub.push('error', str(exc))
+                save_startup_error(error_path, str(exc))
+                failed = True
+            finally:
+                if hub.chat is not None:
+                    hub.chat.mcp_services.close()
+                hub.stop()
+                time.sleep(1.5)   # let an open page read the final state
+        return 1 if failed else 0
+    except UserError as exc:
+        if hub:
+            hub.push('error', str(exc))
+            time.sleep(1.5)
+        if token:
+            clear_endpoint(endpoint_path, token)
+        print(str(exc))
+        save_startup_error(error_path, str(exc))
+    except ImportError:
+        print('缺少运行依赖，请先按 README 完成安装。')
+        save_startup_error(error_path, '缺少运行依赖，请先按 README 完成安装。')
+    except (OSError, UnicodeError):
+        print('本机文件无法读写，已停止；请检查磁盘空间和文件权限。')
+        save_startup_error(error_path, '本机文件无法读写，已停止；请检查磁盘空间和文件权限。')
+    except (KeyboardInterrupt, EOFError):
+        if hub:
+            hub.stop()
+        return 0
+    except Exception as exc:
+        message = f'后台异常 {type(exc).__name__}: {str(exc)[:300]}'
+        logger.exception('VEIL desktop service stopped unexpectedly')
+        save_startup_error(error_path, message)
+    finally:
+        if server:
+            if hub:
+                hub.stop()
+            server.shutdown()
+            server.server_close()
+        if token:
+            clear_endpoint(endpoint_path, token)
+    return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
+
+
+

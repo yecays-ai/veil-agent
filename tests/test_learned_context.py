@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_types import UserError
-from learned_context import LearnedContext
+from veil.core.agent_types import UserError
+from veil.brain.learned_context import LearnedContext
 
 
 class LearnedContextTests(unittest.TestCase):

@@ -28,9 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import backup_restore
-import brain_writer
-import veil_brain
+from veil.system import backup_restore
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
 
 CONFIRM_WORD = 'P3-4-cleanup'
 CHILD_TABLES = ('vectors', 'versions', 'relations', 'sources', 'quotes',

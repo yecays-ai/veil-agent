@@ -2,7 +2,7 @@ import os
 import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
-from windows_discovery import (
+from veil.windows.windows_discovery import (
     WindowsAppDiscovery,
     WindowsAppDiscoveryBackend,
     _slugify,
@@ -216,7 +216,7 @@ class VendorFolderIdentityTests(unittest.TestCase):
     def test_launcher_in_install_root_covers_real_window_exe(self):
         import os
         from unittest.mock import patch
-        from windows_discovery import _vendor_dir_pattern, is_blocked_window_exe
+        from veil.windows.windows_discovery import _vendor_dir_pattern, is_blocked_window_exe
         env = {'ProgramFiles': 'C:\\Program Files', 'LOCALAPPDATA': 'C:\\Users\\lan\\AppData\\Local'}
         with patch.dict(os.environ, env, clear=False):
             pattern = _vendor_dir_pattern('C:\\Users\\lan\\AppData\\Local\\Kingsoft\\WPS Office\\ksolaunch.exe')

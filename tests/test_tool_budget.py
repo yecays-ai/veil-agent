@@ -8,19 +8,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import tool_groups
-from tool_groups import (ALWAYS_ON, BUDGET, GROUP_TOOL_NAMES, OVERSIZE_EXEMPT, SOCIAL_PARTS, effective_group,
+from veil.tools import tool_groups
+from veil.tools.tool_groups import (ALWAYS_ON, BUDGET, GROUP_TOOL_NAMES, OVERSIZE_EXEMPT, SOCIAL_PARTS, effective_group,
                          group_of, groups_named, inventory, regroup_text)
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 
 PETER_GROUPS = ('web', 'github', 'desktop_control', 'memory_admin', 'build', 'desktop_files', 'garden_forum',
                 'garden_play', 'garden_more', 'nowhere', 'xiaohongshu', 'other')
 # Modules whose tool definitions are plain values in the repository (MCP services define theirs at run time).
-SCHEMA_MODULES = ('veil_agent', 'memory_native', 'long_tasks', 'tools_agent', 'browser_tools', 'life_records',
-                  'desktop_files', 'xiaohongshu_tools', 'windows_interaction', 'windows_observer', 'thoughts',
-                  'chat_search', 'mcp_services', 'profile_notes', 'virtual_cards', 'maintenance',
-                  'executor_opencode', 'web_tools', 'github_readonly', 'screen_pop', 'lab_games', 'lab_preview',
-                  'lab_sandbox')
+SCHEMA_MODULES = ('veil.core.veil_agent', 'veil.brain.memory_native', 'veil.autonomy.long_tasks', 'veil.tools.tools_agent', 'veil.integrations.browser_tools', 'veil.life.life_records',
+                  'veil.tools.desktop_files', 'veil.integrations.xiaohongshu_tools', 'veil.windows.windows_interaction', 'veil.windows.windows_observer', 'veil.autonomy.thoughts',
+                  'veil.chat.chat_search', 'veil.integrations.mcp_services', 'veil.persona.profile_notes', 'veil.life.virtual_cards', 'veil.system.maintenance',
+                  'veil.tools.executor_opencode', 'veil.integrations.web_tools', 'veil.integrations.github_readonly', 'veil.windows.screen_pop', 'veil.life.lab_games', 'veil.life.lab_preview',
+                  'veil.life.lab_sandbox')
 
 
 def tool(name, text=''):
@@ -55,7 +55,7 @@ def repository_schemas():
 
 class RegistryTests(unittest.TestCase):
     def test_every_tool_the_program_defines_is_registered(self):
-        import tools_agent
+        from veil.tools import tools_agent
         known = (tools_agent.ALLOW | tools_agent.ASK | tools_agent.OWN_WORK | tools_agent.LAB_ONLY
                  | tools_agent.NATIVE | tools_agent.AUTONOMY_DIRECT | set(repository_schemas()))
         unregistered = sorted(name for name in known if group_of(name) == 'other')
@@ -195,7 +195,7 @@ tool_groups = [{groups}]
         self.assertIn('mcp__weather__today', self.names())
 
     def test_running_maintenance_stays_offered_while_build_is_closed(self):
-        from maintenance import TOOL_SCHEMA
+        from veil.system.maintenance import TOOL_SCHEMA
         self.assertEqual(group_of(TOOL_SCHEMA['function']['name']), 'build')
         self.chat.maintenance = Mock()
         self.chat.maintenance.active_summary.return_value = ''

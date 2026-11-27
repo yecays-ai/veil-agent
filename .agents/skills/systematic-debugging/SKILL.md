@@ -273,3 +273,9 @@ These techniques are part of systematic debugging and available in this director
 - **`root-cause-tracing.md`** - Trace bugs backward through call stack to find original trigger
 - **`defense-in-depth.md`** - Add validation at multiple layers after finding root cause
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
+
+## VEIL 对齐（项目补充，优先于本文其余表述）
+
+- **同一个问题修了两次还坏：停下来报告，不修第三次。** 先判断是不是架构或接入设计问题（见 `integration-complete`）。
+- **一次只改一件事**：改完立刻验证，不通过立刻回滚；不把多个未验证的改动堆在一起。
+- **区分「原有故障」和「本次操作引入的故障」**，汇报时明确标注；修复引入的副作用与修复本身一起交付。

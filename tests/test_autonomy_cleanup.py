@@ -8,12 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from agent_types import NOT_ASKED_TEXT, not_asked
-from autonomy import AutonomyController
-from desktop_files import DesktopFileTools
-from tools_agent import ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools
-from veil_agent import ActivityState, Budget, Chat, Store, load_character, parse_quiet_hours, self_facts
-from web_agent import Hub
+from veil.core.agent_types import NOT_ASKED_TEXT, not_asked
+from veil.autonomy.autonomy import AutonomyController
+from veil.tools.desktop_files import DesktopFileTools
+from veil.tools.tools_agent import ALLOW, ASK, DENY, LAB_ONLY, FilesystemTools
+from veil.core.veil_agent import ActivityState, Budget, Chat, Store, load_character, parse_quiet_hours, self_facts
+from veil.server.web_agent import Hub
 
 
 CONFIG = '''name = "Test"
@@ -177,8 +177,8 @@ class HonestApprovalTests(unittest.TestCase):
             worker = SimpleNamespace(tools=[SimpleNamespace(name=name, description=name, inputSchema={})
                                             for name in ALLOW | ASK | DENY | LAB_ONLY],
                                      call=Mock(), close=Mock())
-            with patch('tools_agent.shutil.which', return_value='fake-node'), \
-                    patch('tools_agent._McpWorker', return_value=worker):
+            with patch('veil.tools.tools_agent.shutil.which', return_value='fake-node'), \
+                    patch('veil.tools.tools_agent._McpWorker', return_value=worker):
                 tools = FilesystemTools(root, cfg, store)
             result, state, _ = tools.invoke('write_file', {'path': 'growth-journal.md', 'content': 'x'}, not_asked)
             self.assertEqual((result, state), (NOT_ASKED_TEXT, '被拒绝'))

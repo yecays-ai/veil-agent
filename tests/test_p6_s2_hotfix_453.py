@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 
-from event_memory import EventMemory
-from memory_sidecar import Sidecar
+from veil.brain.event_memory import EventMemory
+from veil.brain.memory_sidecar import Sidecar
 from test_p6_s2_review_fixes import _brain_memory
 from test_p6_s2_write_and_recovery import _init_db, _seed_event, _seed_memory
 

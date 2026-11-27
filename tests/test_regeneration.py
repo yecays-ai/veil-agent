@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from veil_agent import Budget, Chat, Store, UserError, load_character
+from veil.core.veil_agent import Budget, Chat, Store, UserError, load_character
 
 TOML = '''name = "Test"
 provider = "fake"
