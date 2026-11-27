@@ -201,13 +201,13 @@
 
 ### B-7 P6-S5 检索、判官与情境自然联想（工单 460 · PR #461）
 
-- **状态**：已完成 PR #461 独立复审 F1–F8 集中修复、DeepSeek 隔离实验（¥2.54/¥10）与 S3+S5 隔离合流回归，**待独立复审与 Lan 三路盲评验收**（`ticket/460-p6-s5-retrieval-judge-association`，未合并、未部署）
+- **状态**：已完成 PR #461 二次复审收口（18 轮真实 `Chat.send()` 完整生产链路验证 + DeepSeek 实验 ¥2.71/¥10 + S3 `de2cc06` 隔离合流回归），**待独立复审与 Lan 盲评验收**（`ticket/460-p6-s5-retrieval-judge-association`，未合并、未部署）；`association_contextual_enabled` 未通过 0 干扰门禁，标记为**待验证候选（默认关闭）**，不计为体验目标完成
 - **验什么**：
-  1. 审阅 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](reports/p6-s5-retrieval-judge-association-20261127.md)：确认最终默认配置为 `stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官（因联合实测停用词+S5 判官存在负交互，停用词保持默认关闭）；
-  2. 完成本机 `.local-tmp/s5/lan-blind-review-s5.md` 的 6 组**完整生产上下文组装**三路自然联想匿名盲评，结合 `work_trap_intrusions=2` 实测决定 `association_contextual_enabled` 保持关闭或后续调优；
-  3. 在隔离预览中验证：长篇生活交流、隐含情绪、工作引发的情绪交流、带情绪的明确技术任务、突然切换话题释放旧承接，以及 Brain「召回诊断」页各项标签与送达/回滚状态。
-- [ ] 最终默认配置与复审报告已确认
-- [ ] 三路完整生产上下文盲评完成
+  1. 审阅 [`docs/reports/p6-s5-retrieval-judge-association-20261127.md`](reports/p6-s5-retrieval-judge-association-20261127.md)：确认最终默认配置 `stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官，并核对 A/B/C/D 四层验证范围及 `contextual_s5` 两条 `trap` 误触根因分析；
+  2. 完成本机 `.local-tmp/s5/lan-blind-review-s5.md` 的 6 组**真实 `Chat.send()` 完整生产链路组装**三路自然联想匿名盲评；
+  3. 在隔离预览中验证：长篇生活交流、隐含情绪、工作引发的情绪交流、带情绪的明确技术任务、突然切换话题释放旧承接，以及 Brain「召回诊断」页各项标签与送达/回滚状态；待 S3 最终 HEAD 合流后再完成一次合流联合回归。
+- [ ] 最终默认配置与二次复审报告已确认
+- [ ] 三路真实 `Chat.send()` 盲评完成（`contextual_s5` 保持待验证候选关闭）
 - [ ] 隔离预览体验通过
 
 ---

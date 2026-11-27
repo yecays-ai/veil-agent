@@ -3,7 +3,18 @@
 > **基线提交**：`main = 2a264a7`（已合并 PR #458 目录结构重整）  
 > **施工分支 / 工单**：`ticket/460-p6-s5-retrieval-judge-association`（工单 460 · PR #461，与 S3 工单 459 并行）  
 > **实验环境**：隔离只读副本（`.local-tmp/s4-prep/isolated/brain.db` + `learned-context.json` + `eval-v2.jsonl` 73 条样本，零正式数据写入、零正式 Peter 启停）  
-> **模型与费用控制**：使用官方 DeepSeek API（`https://api.deepseek.com`，`deepseek-chat`），经 `BudgetLedger` 硬限 ¥10.00；累计总花费 **¥2.54 / ¥10.00（25.4%）**（Embedding 100% 复用 S4 本地缓存，¥0）。
+> **模型与费用控制**：使用官方 DeepSeek API（`https://api.deepseek.com`，`deepseek-chat`），经 `BudgetLedger` 硬限 ¥10.00；累计总花费 **¥2.71 / ¥10.00（27.1%）**（Embedding 100% 复用 S4 本地缓存，¥0）。
+
+---
+
+## 零、验证范围严格分层（结论与证据一一对应）
+
+| 层级 | 验证方式 | 覆盖内容 | 对应证据文件 |
+|---|---|---|---|
+| **A. 生产组件回放** | 真实 `BrainIndex` + `Memory.context/finish_recall/confirm_delivery` 在隔离 `brain.db` 上回放 | 全量 73 条样本三路自然联想覆盖、预算裁剪、工作 trap 干扰统计；36 样本四组检索×K 及最终候选联合判官对照 | `research/recall-lab/results/p6_s5_eval.json` |
+| **B. 离线校准 / 模拟** | 复用 S4 缓存分数离线扫描 + 合成数据单测 | `Qwen3-Reranker-0.6B` 前置分数门控阈值扫描（¥0）；首次联想回滚、`request_id` 错配拦截、话题切换释放、权限隔离单测 | `p6_s5_eval.json#reranker_score_gate_calibration`、`tests/test_p6_s5_retrieval_judge_association.py` |
+| **C. 真实模型回复** | 隔离调用官方 DeepSeek API 生成真实 `persona/peter.md` 回复 | 6 组三路自然联想匿名盲评回复对照（隐藏配置名与 AI 评价，随机排列 A/B/C） | 本机 `.local-tmp/s5/lan-blind-review-s5.md`（不入库） |
+| **D. 完整生产 `Chat.send()` 请求验收** | 隔离工作区实例化真实 `veil_agent.Chat` + `BrainAuthority` + 事件账本/故事 + `LearnedContext` + `relationship_base` + 全局 `recall_budget` + 真实 `RecallJudge` + `request_snapshots` | 6 条已验证判官子集样本 × 3 路（18 轮完整 `Chat.send()`），验证 `stopwords=False, K=8` + S5 情境判官、关系底座、快照落盘、送达确认及三路联想真实差异 | `research/recall-lab/results/p6_s5_prod_verify.json` |
 
 ---
 
@@ -14,7 +25,7 @@
 | **S5 情境感知判官（近期对话 + 工作/情感分流，`sw=off, K=8`）** | **通过门禁** | **主链路启用** | 维持 4s 超时/300 字卡片/保守底盘；空查询 FPR `0.5455→0.3636 (-18.2pp)`、工作 trap FPR `1.0000→0.6667 (-33.3pp)`，最终注入召回基本无损（`0.5933→0.5867`），0 超时/0 解析失败/0 降级 |
 | **可审计中文停用词（`stopwords_enabled`）** | **单变量正收益，联合 S5 判官存在负交互 → 未通过联合门禁** | **保持默认 `False`** | 旧判官单变量下 K=8 指标略优，但与 S5 情境判官联合（`s5_final_candidate_sw_on_k8`）时，空查询 FPR 反弹回 `0.5455`、`trap_fpr` 反弹回 `1.0000`；按门禁保持默认关闭 |
 | **混合候选池 `candidate_k = 12`** | **未通过门禁** | **维持默认 `8`** | 离线 Recall@K 虽升 `+2.0pp`，但最终判官精确率下跌 `-3.3pp~-12.3pp`、Token 增 `+21.6%` 且 `trap_fpr` 反弹至 `1.0000` |
-| **带情境约束自然联想（`association_contextual_enabled`）** | **覆盖提升 5.5×，但工作干扰 `2 > 0` 未过 0 干扰门禁** | **保持默认 `False`** | 真实生产 `Memory` 链路回放：唯一送达覆盖 `2→11` 条（长尾 9 + 近期 5 + 普通生活 2，预算淘汰 3 条保护正常召回）；移除硬长度截断后，2 条隐式自然语言 `trap` 穿透门控（`work_trap_intrusions = 2`），不作弊加黑名单，保持默认关闭，已交付完整生产上下文三路匿名盲评供 Lan 体验 |
+| **带情境约束自然联想（`association_contextual_enabled`）** | **待验证候选（未通过 0 干扰门禁，不标记为体验目标完成）** | **保持默认 `False`** | Tier A 生产组件回放唯一送达覆盖 `2→11` 条（长尾 9 + 近期 5 + 普通生活 2，预算淘汰 3 条），但移除长度截断后 2 条隐式自然语言 `trap` 穿透（`work_trap_intrusions = 2`）；Tier D 完整 `Chat.send()` 验证了 6 组三路真实差异并生成匿名盲评 |
 | **Qwen3-Reranker-0.6B 本地/深度回忆** | **安装依赖阻断** | **保持默认 `False`** | 本机虽有 RTX 5060 (8GB) + 31.8GB RAM，但正式 `.venv` 无 `torch/onnxruntime/llama-server`，遵循不擅自改安装与启动流程原则；已交付前置门控校准（`threshold=0.25` 拦截 `39.3%` 空查询）及异步防过期契约 `reranker_contract.py` |
 
 ---
@@ -47,9 +58,19 @@
 | `legacy_breath8` | 9 / 73 | 0 | 2 | 2 | 1 | 0 | **0** | `not_applicable: 27`, `nothing_suitable: 21`, `mood: 16` |
 | `contextual_s5`（候选，默认关） | **11 / 73** | **3** | **11 (5.5×)** | **9** | **5** | **2** | **2（未过 0 干扰门禁）** | `not_applicable: 27`, `low_relevance: 13`, `low_context_signal: 11`, `work_task_suppressed: 8` |
 
-**完整生产上下文三路匿名盲评（F1 已修复）**：
-- 本机路径：`.local-tmp/s5/lan-blind-review-s5.md`（不入库）及密钥 `.local-tmp/s5/lan-blind-map-s5.json`；
-- 6 组代表性场景均使用**完整生产请求组装**（真实 `persona/peter.md` + `LearnedContext` `facts`/`growth` + `relationship_base.build()` + 近期对话 + 生产 `Memory.finish_recall()` 正常判官召回 + `ongoing` + 当前消息），三组之间**唯一变量仅为自然联想机制**，随机排列 A/B/C，隐藏 AI 评价与机制名称。
+**完整生产 `Chat.send()` 请求验收（Tier D，6 组 × 3 路 = 18 轮，`p6_s5_prod_verify.json`）**：
+- 全部 6 条代表性样本均选自 36 条已验证判官子集，直接执行真实 `veil_agent.Chat.send()`（含真实 `BrainAuthority`、事件账本/故事、`LearnedContext`、`relationship_base`、全局 `recall_budget`、真实 `RecallJudge` 及 `request_snapshots`）：
+  - **18/18 轮** `has_relationship_base = True`、`request_snapshots_written = 2`、`lifecycle_delivered = True`、`retrieval_stopwords = False`、`retrieval_k = 8`、`config_entries_count = 8`；
+  - 判官表现覆盖 `chosen`（`S2-001/S2-002/S1-001/S5-001`）、`normal_empty`（`S4-001`）与超时优雅降级（`S3-001`）；
+  - 三路自然联想真实差异：`S2-001`/`S2-002` 共情场景三路分别呈现不同背景（`off=[]` / `legacy=['aaf587207e3f']` / `contextual_s5=['76aa0b1db68b']`）；`S4-001` 短噪声场景 `legacy` 仍硬插旧事而 `contextual_s5` 正确抑制；`S5-001` 工作 trap 场景 `contextual_s5` 正确抑制；
+  - 新版完整 `Chat.send()` 三路匿名盲评已落盘本机 `.local-tmp/s5/lan-blind-review-s5.md`（不入库）。
+
+**`contextual_s5` 两条工作 `trap` 误触根因分析与后续修复可行性评估**：
+- **实际原因**：12 条 `trap` 样本中，8 条被 `context_signal` 准确识别为 `technical_task`/`explicit_past` 拦截；剩余 4 条（`S5-002`/`S5-009`/`S5-011`/`S5-012`）为不含典型技术命令词的自然语言工作/系统陷阱，其中 2 条因与库中记忆共享表层话题词，在 `bge-m3` 双塔余弦相似度上达到 `0.547–0.632`（超过 `0.52` 门控），穿透了纯规则+双塔向量门控。
+- **修复可行性评估**：
+  1. 调高纯余弦阈值至 `>=0.65`：**不可行**，会同步误杀大部分合法情感/生活长尾联想（多数合法相似度集中在 `0.52–0.62`）；
+  2. **复用现有 `RecallJudge` 二阶段审核（可行，推荐后续迭代验证）**：将通过余弦门控的最多 1 条联想候选并入同轮已有 `RecallJudge`（仅增 1 张 300 字卡片，约 +100 input tokens、~¥0.0002/轮、0 新增常驻模型/0 额外往返），由判官结合近期对话语义过滤表层同词工作陷阱。
+- **当前交付定性**：`association_contextual_enabled` **未达到 0 干扰启用门禁，严格保持默认关闭，记录为「待验证候选」，不标记为体验目标完成**。
 
 ---
 
@@ -71,4 +92,4 @@
 | **F5** | `_eval_retrieval_and_judge_arm()` 分别统计 `normal_rejected`、`judge_timeouts`、`judge_errors`、`parse_failures`、`degraded_fallbacks` 及降级后最终注入结果，异常绝不计为空召回成功 | 全部臂次 0 超时/0 错误/0 解析失败 |
 | **F6** | `memory_agent._association_pool()` 改为轻量元数据缓存（不缓存全库正文），按选定 ID 批量取正文，均衡覆盖长尾 `imp>=7` + 近期 + 普通生活；`s5_eval.py` 改为真实生产 `Memory` 回放 | 单测验证缓存不含 `body`；回放覆盖长尾/近期/普通三层 |
 | **F7** | `finish_recall`/`bind_recall_request`/`confirm_delivery`/`rollback_recall` 补齐 `request_id` 归属核验与 `_has_association_rollback` 显式标记，修复首次联想旧状态为 `None` 时的回滚遗漏 | 单测验证首次联想回滚及 `req-A`/`req-B` 错配拦截 |
-| **F8** | 以 S3 最新提交 `de2cc06` + S5 代码执行隔离 `git worktree` 真实合流演练：`veil_agent.py`、`brain_p4_api.py`、`workspace-brain.js` **0 冲突**自动合并 | S3+S5 联合 40 项测试 + 前端语法检查全部通过，演练目录已清理 |
+| **F8** | 以 S3 最新已提交 HEAD `de2cc06` + S5 代码执行隔离 `git worktree` 真实合流演练：`veil_agent.py`、`brain_p4_api.py`、`workspace-brain.js` **0 冲突**自动合并（注：检查时 S3 工作区正处于自身合并/修复中，待 S3 最终 HEAD 确定并合流后须再执行一次最终联合回归） | S3(`de2cc06`)+S5 联合 40 项测试 + 前端语法检查全部通过，演练目录已清理 |

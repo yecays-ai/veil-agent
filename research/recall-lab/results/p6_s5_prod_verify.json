@@ -1,0 +1,605 @@
+{
+  "generated_at": "2026-11-27T15:54:39+08:00",
+  "verification_tier": "D_full_production_chat_assembly",
+  "default_config_verified": {
+    "stopwords_enabled": false,
+    "candidate_k": 8,
+    "judge": "s5_context_judge"
+  },
+  "samples_verified": 6,
+  "total_chat_cost_cny": 0.075836,
+  "budget_snapshot": {
+    "tier": 0,
+    "paid_calls": 0,
+    "tokens": 0,
+    "tier_spent_cny": 0.0,
+    "total_spent_cny": 2.714366
+  },
+  "scenarios": [
+    {
+      "sample_id": "S2-001",
+      "category": "empathy",
+      "arms": {
+        "off": {
+          "cost_cny": 0.01030808,
+          "latency_ms": 2180.86,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "relevant_recall": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "disabled",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.0077084,
+          "latency_ms": 1572.14,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "relevant_recall": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "natural_association": [
+            "aaf587207e3f"
+          ],
+          "association_mode": "legacy",
+          "association_reason": "",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.00659288,
+          "latency_ms": 1062.27,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "relevant_recall": [
+            "V32",
+            "535c57d51183",
+            "caa05c9b6bfc",
+            "2734e06d842c"
+          ],
+          "natural_association": [
+            "76aa0b1db68b"
+          ],
+          "association_mode": "contextual",
+          "association_reason": "",
+          "association_similarity": 0.5212,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    },
+    {
+      "sample_id": "S2-002",
+      "category": "empathy",
+      "arms": {
+        "off": {
+          "cost_cny": 0.00228744,
+          "latency_ms": 1605.39,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "relevant_recall": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "disabled",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.0028432,
+          "latency_ms": 1366.18,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "relevant_recall": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "natural_association": [
+            "aaf587207e3f"
+          ],
+          "association_mode": "legacy",
+          "association_reason": "",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.00296032,
+          "latency_ms": 1752.41,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "emotional_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "relevant_recall": [
+            "caa05c9b6bfc",
+            "543eb0fd43e1"
+          ],
+          "natural_association": [
+            "76aa0b1db68b"
+          ],
+          "association_mode": "contextual",
+          "association_reason": "",
+          "association_similarity": 0.5478,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    },
+    {
+      "sample_id": "S1-001",
+      "category": "explicit_recall",
+      "arms": {
+        "off": {
+          "cost_cny": 0.00362344,
+          "latency_ms": 2541.06,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "explicit_past",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "relevant_recall": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "natural_association": [],
+          "association_mode": "",
+          "association_reason": "not_applicable",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.00187016,
+          "latency_ms": 1708.38,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "explicit_past",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "relevant_recall": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "natural_association": [],
+          "association_mode": "",
+          "association_reason": "not_applicable",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.00187816,
+          "latency_ms": 1590.71,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "explicit_past",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "relevant_recall": [
+            "8e292411bf07",
+            "V08",
+            "3b3abb50cd01"
+          ],
+          "natural_association": [],
+          "association_mode": "",
+          "association_reason": "not_applicable",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    },
+    {
+      "sample_id": "S3-001",
+      "category": "cross_event",
+      "arms": {
+        "off": {
+          "cost_cny": 0.0062152,
+          "latency_ms": 3563.27,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "casual_chat",
+          "judge_status": "failed",
+          "judge_outcome": "",
+          "judge_picked": [],
+          "relevant_recall": [
+            "bc72c550abb4",
+            "4525f6dc0f5c",
+            "4114e53ae96c",
+            "8c498db9ef76",
+            "ea335877dc4b",
+            "1bcbb7d32052",
+            "3c320f95a223",
+            "aaf587207e3f"
+          ],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "disabled",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.01101064,
+          "latency_ms": 5675.51,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "casual_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "V29",
+            "eecfdf4cf494",
+            "fa1420e78d59",
+            "9af228e1769b",
+            "V68",
+            "aaf587207e3f",
+            "fe1c65cb7bd4",
+            "ea335877dc4b"
+          ],
+          "relevant_recall": [
+            "V29",
+            "eecfdf4cf494",
+            "fa1420e78d59",
+            "9af228e1769b",
+            "V68",
+            "aaf587207e3f",
+            "fe1c65cb7bd4",
+            "ea335877dc4b"
+          ],
+          "natural_association": [
+            "76aa0b1db68b"
+          ],
+          "association_mode": "legacy",
+          "association_reason": "",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.0073512,
+          "latency_ms": 2819.05,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "casual_chat",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "V29",
+            "eecfdf4cf494",
+            "fa1420e78d59",
+            "9af228e1769b",
+            "V68",
+            "aaf587207e3f",
+            "fe1c65cb7bd4",
+            "ea335877dc4b"
+          ],
+          "relevant_recall": [
+            "V29",
+            "eecfdf4cf494",
+            "fa1420e78d59",
+            "9af228e1769b",
+            "V68",
+            "aaf587207e3f",
+            "fe1c65cb7bd4",
+            "ea335877dc4b"
+          ],
+          "natural_association": [],
+          "association_mode": "contextual",
+          "association_reason": "low_relevance",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    },
+    {
+      "sample_id": "S5-001",
+      "category": "trap",
+      "arms": {
+        "off": {
+          "cost_cny": 0.00270408,
+          "latency_ms": 1194.94,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "technical_task",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "relevant_recall": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "disabled",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.0018708,
+          "latency_ms": 2528.41,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "technical_task",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "relevant_recall": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "mood",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.0017428,
+          "latency_ms": 2649.73,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "technical_task",
+          "judge_status": "chosen",
+          "judge_outcome": "chosen",
+          "judge_picked": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "relevant_recall": [
+            "f590df09f999",
+            "72dbd7d6b356",
+            "cd2bff217a3d"
+          ],
+          "natural_association": [],
+          "association_mode": "contextual",
+          "association_reason": "work_task_suppressed",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    },
+    {
+      "sample_id": "S4-001",
+      "category": "noise",
+      "arms": {
+        "off": {
+          "cost_cny": 0.00111344,
+          "latency_ms": 1284.2,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "short_ack",
+          "judge_status": "empty",
+          "judge_outcome": "normal_empty",
+          "judge_picked": [],
+          "relevant_recall": [],
+          "natural_association": [],
+          "association_mode": "legacy",
+          "association_reason": "disabled",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "legacy_breath8": {
+          "cost_cny": 0.0021492,
+          "latency_ms": 1685.86,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "short_ack",
+          "judge_status": "empty",
+          "judge_outcome": "normal_empty",
+          "judge_picked": [],
+          "relevant_recall": [],
+          "natural_association": [
+            "aaf587207e3f"
+          ],
+          "association_mode": "legacy",
+          "association_reason": "",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        },
+        "contextual_s5": {
+          "cost_cny": 0.00160656,
+          "latency_ms": 1602.17,
+          "sent_message_count": 9,
+          "has_relationship_base": true,
+          "request_snapshots_written": 2,
+          "context_mode": "short_ack",
+          "judge_status": "empty",
+          "judge_outcome": "normal_empty",
+          "judge_picked": [],
+          "relevant_recall": [],
+          "natural_association": [],
+          "association_mode": "contextual",
+          "association_reason": "low_context_signal",
+          "association_similarity": null,
+          "story_replaced_count": 0,
+          "lifecycle_delivered": true,
+          "lifecycle_rolled_back": false,
+          "retrieval_stopwords": false,
+          "retrieval_k": 8,
+          "config_entries_count": 8
+        }
+      }
+    }
+  ]
+}

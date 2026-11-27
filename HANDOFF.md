@@ -1,16 +1,14 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T15:42:00+08:00 · 基线 `main` = `2a264a7`（PR #458 已合并）· 当前分支 `ticket/460-p6-s5-retrieval-judge-association`（工单 460 · PR #461 已完成独立复审 F1–F8 集中修复、完整生产上下文三路盲评重生成与 S3+S5 隔离合流回归，待独立复审；未合并、未部署正式目录）
+> 更新时间：2026-11-27T15:56:00+08:00 · 基线 `main` = `2a264a7`（PR #458 已合并）· 当前分支 `ticket/460-p6-s5-retrieval-judge-association`（工单 460 · PR #461 二次复审收口完成：补齐 18 轮真实 `Chat.send()` 完整生产链路验证、验证范围四层区分及 `contextual_s5` 两条 `trap` 误触根因评估，待独立复审；未合并、未部署正式目录）
 
 ## 当前停点
 
-- **本单（工单 460 · PR #461 · P6-S5 独立复审 F1–F8 修复完成）**：
-  - **F1 / F6（完整生产链路回放与三路盲评）**：`s5_eval.py` 改用真实生产 `Memory.context()` + `finish_recall(space=4000)` + `confirm_delivery()` 回放，三路盲评使用完整生产请求组装（真实人设 + Learned Context + `relationship_base` + 近期历史 + 正常判官召回 + Ongoing），仅自然联想变化；`memory_agent._association_pool()` 改为轻量元数据缓存（不缓存全库正文），三层均衡覆盖长尾 `imp>=7` + 近期 + 普通生活。
-  - **F2 / F3（任务意图与话题切换释放）**：`context_signal.py` 移除 `len > 70` 硬截断，明确技术任务与情绪并存时仍判 `technical_task`（抑制无关联想、保留情绪标记）；`memory_agent.context()` 先独立判定任务意图再判定 `followup`，修复话题切换释放逻辑。
-  - **F4 / F5（最终联合对照与分项异常统计）**：补跑 `s5_final_candidate_sw_on_k8`（停用词开 + K=8 + S5 判官），实测与 S5 判官存在负交互（FPR 反弹回 `0.5455`），故停用词与 `K=12` 均保持默认关闭/`K=8`；单独统计正常拒绝/超时/报错/解析失败与降级注入（全臂次 0 异常/0 降级）。
-  - **F7（首次联想回滚与请求归属核验）**：新增 `bind_recall_request()` 与 `_has_association_rollback`，修复首次联想旧状态为 `None` 的回滚遗漏，并拒绝不匹配 `request_id` 的确认/回滚。
-  - **F8（S3+S5 合流验证）**：隔离合流 `de2cc06`（S3）+ S5，三个公共代码文件（`veil_agent.py`、`brain_p4_api.py`、`workspace-brain.js`）0 冲突自动合并，40 项联合测试 + 前端语法检查全绿。
-  - **门禁状态**：S5 情境判官（`sw=off, K=8`）通过门禁；停用词、`K=12`、情境自然联想（生产回放 `work_trap_intrusions=2 > 0`）与 Qwen3-Reranker 均严格保持默认关闭；DeepSeek 实验累计花费 `¥2.54 / ¥10.00`。
+- **本单（工单 460 · PR #461 · P6-S5 二次复审收口完成）**：
+  - **Tier D 真实 `Chat.send()` 完整生产链路验证**：新增 `research/recall-lab/recall_lab/s5_prod_verify.py` 与结果 `p6_s5_prod_verify.json`，在隔离副本实例化真实 `Chat`、`BrainAuthority`、事件账本/故事、`LearnedContext`、`relationship_base`、全局 `recall_budget`、真实 `RecallJudge` 与 `request_snapshots`，对 6 条已验证判官子集样本 × 3 路跑完 18 轮完整 `Chat.send()`（18/18 关系底座/快照/送达确认通过，`stopwords=False, K=8`）；重生成本机 `.local-tmp/s5/lan-blind-review-s5.md`（不入库）。
+  - **自然联想交付定性**：`association_contextual_enabled` 因生产组件回放中 2 条自然语言隐式 `trap` 穿透双塔余弦门控（`work_trap_intrusions=2 > 0`），**未通过 0 干扰门禁，严格保持默认关闭，记录为「待验证候选」，不标记为体验目标完成**；后续可行方向为复用同轮 `RecallJudge` 做二阶段审核。
+  - **最终默认配置**：`stopwords_enabled=False`、`candidate_k=8` + S5 情境感知判官（空查询 FPR `-18.2pp`，工作 trap FPR `-33.3pp`）；DeepSeek 实验累计花费 `¥2.71 / ¥10.00`。
+  - **S3/S5 合流状态**：基于 S3 已提交 HEAD `de2cc06` 的隔离合流 0 代码冲突、40 项联合回归通过；S3 工作区当前正处于自身合并/修复中，待 S3 最终 HEAD 确定且合并后，再做一次合流后最终联合回归。
 
 ## 下一个窗口第一步
 
