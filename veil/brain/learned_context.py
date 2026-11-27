@@ -1068,10 +1068,8 @@ class LearnedContext:
                 any_unavailable |= resolved['unavailable']
                 origins = resolved['origins']
                 resolved_infos.update(resolved.get('infos') or {})
-                if (not resolved['unavailable'] and not resolved['missing_origin']
-                        and (not resolved['exists'] or not origins)):
-                    missing_refs.append(source)
-                elif resolved['missing_origin'] and not resolved['unavailable']:
+                if not resolved['unavailable'] and (not resolved['exists']
+                                                     or resolved['missing_origin']):
                     missing_refs.append(source)
             else:
                 kept_refs.append(source)  # long_task is for traceability only.

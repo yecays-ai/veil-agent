@@ -591,12 +591,84 @@ def overview(hub):
         },
     ]
 
+    mem = getattr(chat, 'memory', None)
+    if mem is not None and hasattr(mem, 'association_status'):
+        assoc_status = mem.association_status()
+    else:
+        from veil.brain.recall.recall_rotation import settings as load_rot_settings
+        rot_base = load_rot_settings(getattr(cfg, 'memory', None) if cfg is not None else {})
+        a_on = bool(saved_switches.get('association', rot_base.get('association_enabled', True)))
+        a_ctx = bool(saved_switches.get('association_contextual', rot_base.get('association_contextual_enabled', False)))
+        assoc_status = {
+            'available': True,
+            'enabled': a_on,
+            'contextual_enabled': a_ctx,
+            'effective_mode': 'disabled' if not a_on else ('contextual' if a_ctx else 'legacy'),
+            'min_similarity': float(rot_base.get('association_min_similarity', 0.52)),
+            'pool_size': int(rot_base.get('association_pool_size', 32)),
+        }
+    assoc_mode_label = {
+        'disabled': '已关闭',
+        'legacy': '已启用 · 现行联想机制',
+        'contextual': '已启用 · 情境相关机制',
+    }.get(assoc_status['effective_mode'], '已启用')
+    ctx_status_text = (
+        '已启用 · 下一轮生效' if (assoc_status['enabled'] and assoc_status['contextual_enabled'])
+        else ('已保存开启（受总开关关闭抑制）' if assoc_status['contextual_enabled']
+              else '已关闭 · 恢复现行联想机制')
+    )
+    assoc_status = {
+        **assoc_status,
+        'status_text': assoc_mode_label,
+        'contextual_status_text': ctx_status_text,
+        'controls': [
+            {
+                'id': 'association',
+                'name': '自然联想总开关',
+                'enabled': bool(assoc_status['enabled']),
+                'tone': 'good' if assoc_status['enabled'] else '',
+                'status_text': assoc_mode_label,
+                'detail': f"当前生效：{assoc_mode_label} · 修改后下一轮聊天生效并持久化",
+                'toggle_key': 'association',
+                'effective_mode': assoc_status['effective_mode'],
+            },
+            {
+                'id': 'association_contextual',
+                'name': '情境相关自然联想',
+                'enabled': bool(assoc_status['contextual_enabled']),
+                'tone': 'good' if (assoc_status['enabled'] and assoc_status['contextual_enabled']) else ('warn' if assoc_status['contextual_enabled'] else ''),
+                'status_text': ctx_status_text,
+                'detail': f"候选机制（默认关闭）· 关闭后恢复现行联想机制",
+                'toggle_key': 'association_contextual',
+                'effective_mode': assoc_status['effective_mode'],
+            },
+        ],
+    }
+
     latest_health = None
     snapshots = []
     data_root = getattr(hub, 'data_root', None) or (getattr(store, 'root', None) if store is not None else None)
     if data_root is not None and cfg is not None:
         latest_health = load_latest_report(data_root, cfg.id)
         snapshots = load_snapshots(data_root, cfg.id, limit=14)
+
+    recall_config = None
+    if cfg is not None:
+        try:
+            from veil.core.config_registry import recall_config_overview
+            recall_eff = (mem.effective_recall_settings()
+                          if mem is not None and hasattr(mem, 'effective_recall_settings')
+                          else getattr(mem, 'recall_settings', None))
+            recall_config = recall_config_overview(
+                role_id=cfg.id,
+                memory_cfg=getattr(cfg, 'memory', None),
+                retrieval_runtime=getattr(mem, 'retrieval_settings', None),
+                recall_runtime=recall_eff,
+                judge_enabled=judge.enabled() if judge is not None else None,
+                judge_timeout=judge.settings.get('timeout_seconds') if judge is not None else None,
+            )
+        except Exception:
+            recall_config = None
 
     return {
         'schema_version': 1,
@@ -607,6 +679,8 @@ def overview(hub):
         'activities': activities,
         'experience': exp_status,
         'recall_judge': judge_status,
+        'recall_association': assoc_status,
+        'recall_config': recall_config,
         'health_summary': latest_health.get('summary') if latest_health else None,
         'health_scanned_at': latest_health.get('scanned_at') if latest_health else None,
         'health_snapshots': snapshots,
@@ -752,6 +826,28 @@ def toggle_layer(hub, layer_id, enabled):
                 if live_notes is not None and hasattr(live_notes, 'stop'):
                     live_notes.stop()
             actual = bool(_load_layer_switches(store, cfg).get('short_notes', enabled))
+            return {'ok': True, 'layer_id': layer_id, 'enabled': actual, 'persisted': True, 'persistence_path': rel}
+
+        if layer_id in ('association', 'association_contextual'):
+            mem = getattr(chat, 'memory', None)
+            if mem is not None and hasattr(mem, 'set_association_enabled') and hasattr(mem, 'set_association_contextual_enabled'):
+                status = (mem.set_association_enabled(enabled)
+                          if layer_id == 'association'
+                          else mem.set_association_contextual_enabled(enabled))
+                actual = bool(status['enabled'] if layer_id == 'association' else status['contextual_enabled'])
+                return {
+                    'ok': True,
+                    'layer_id': layer_id,
+                    'enabled': actual,
+                    'effective_mode': status['effective_mode'],
+                    'recall_association': status,
+                    'persisted': True,
+                    'persistence_path': status.get('persistence_path', ''),
+                }
+            persisted, rel = _save_layer_switch(store, cfg, layer_id, enabled)
+            if not persisted:
+                return {'ok': False, 'error': '自然联想开关无法持久化到磁盘，未修改配置', 'status_code': 503}
+            actual = bool(_load_layer_switches(store, cfg).get(layer_id, enabled))
             return {'ok': True, 'layer_id': layer_id, 'enabled': actual, 'persisted': True, 'persistence_path': rel}
 
         return {'ok': False, 'error': f'未知的记忆层: {layer_id}', 'status_code': 404}

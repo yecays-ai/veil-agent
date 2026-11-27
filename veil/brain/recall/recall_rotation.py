@@ -37,6 +37,10 @@ DEFAULTS = {
     'association_min_importance': 4,
     'association_cooldown_turns': 8,
     'association_light_chars': 40,
+    # P6-S5: independent candidate switch for context-aware natural association (default off).
+    'association_contextual_enabled': False,
+    'association_min_similarity': 0.52,
+    'association_pool_size': 32,
 }
 EVENT_LINKS = frozenset({'same_event', 'continuation_of', 'continues'})   # everything that joins an experience
 REPEAT_LINKS = frozenset({'same_event'})                                # the same thing twice: shown once
@@ -78,9 +82,15 @@ def settings(memory_cfg):
             result[key] = float(value)
     if type(raw.get('association_enabled')) is bool:
         result['association_enabled'] = raw['association_enabled']
+    if type(raw.get('association_contextual_enabled')) is bool:
+        result['association_contextual_enabled'] = raw['association_contextual_enabled']
+    sim = raw.get('association_min_similarity')
+    if type(sim) in (int, float) and 0.05 <= float(sim) <= 0.95:
+        result['association_min_similarity'] = float(sim)
     for key, low, high in (('association_min_importance', 0, 10),
                            ('association_cooldown_turns', 0, 200),
-                           ('association_light_chars', 8, 400)):
+                           ('association_light_chars', 8, 400),
+                           ('association_pool_size', 8, 128)):
         value = raw.get(key)
         if type(value) is int and low <= value <= high:
             result[key] = value

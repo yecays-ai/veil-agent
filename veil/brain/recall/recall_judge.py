@@ -48,7 +48,7 @@ def load_settings(raw):
     value = raw.get('timeout_seconds')
     if type(value) in (int, float) and 0.5 <= value <= 10:
         settings['timeout_seconds'] = float(value)
-    for key, low, high in (('ombre_candidates', 0, 16), ('vector_candidates', 0, 16), ('breaker_failures', 1, 20),
+    for key, low, high in (('ombre_candidates', 0, 24), ('vector_candidates', 0, 16), ('breaker_failures', 1, 20),
                            ('breaker_seconds', 5, 3600)):
         value = raw.get(key)
         if type(value) is int and low <= value <= high:
@@ -392,10 +392,17 @@ class RecallJudge:
                           accounting=COST_ACCOUNTING, category=COST_CATEGORY)
         except Exception:
             budget.settle_estimate((reservation, amount), accounting=f'{COST_ACCOUNTING}-usage-invalid')
+        self._last_usage = {
+            'prompt_tokens': int(prompt_tokens or 0) if type(prompt_tokens) is int else 0,
+            'completion_tokens': int(completion_tokens or 0) if type(completion_tokens) is int else 0,
+            'cached_tokens': int(cached_tokens or 0) if type(cached_tokens) is int else 0,
+        }
         return output
 
-    def choose(self, query, pool, prefetched, *, wake=False, max_picks=None, candidate_limit=None):
+    def choose(self, query, pool, prefetched, *, wake=False, max_picks=None, candidate_limit=None,
+               recent=None, context_signal=None):
         """(key, body) pairs the judge picked, best first; [] when it says none. Raises JudgeFailed on a technical failure."""
+        from veil.brain.recall.context_signal import analyze as analyze_context, format_recent_context
         started = self.clock()
         # P6-S1 G-A12: the embedding request and the judge model request are separate calls with
         # separate failure modes; one shared deadline let a slow embedding consume the model's whole
@@ -404,7 +411,15 @@ class RecallJudge:
         embed_deadline = started + self.settings['timeout_seconds'] + 0.5
         timings = {'embedding_seconds': 0.0, 'model_seconds': 0.0}
         candidates, picked = [], []
-        self.last_choice = {'status': 'running', 'candidates': 0, 'picked': [], 'vector': [], **timings}
+        self._last_usage = {}
+        signal = context_signal if isinstance(context_signal, dict) else (
+            None if wake else analyze_context(query, recent))
+        self.last_choice = {'status': 'running', 'candidates': 0, 'picked': [], 'vector': [],
+                            'context_mode': (signal or {}).get('mode', 'wake' if wake else ''),
+                            'hybrid_limit': (self.settings['ombre_candidates']
+                                             if candidate_limit is None else candidate_limit),
+                            'vector_limit': self.settings['vector_candidates'],
+                            **timings}
         try:
             self._files = self._scan()
             pool = list(pool)[:self.settings['ombre_candidates'] if candidate_limit is None else candidate_limit]
@@ -426,11 +441,13 @@ class RecallJudge:
                 raise JudgeFailed('vectors_unreadable', type(exc).__name__) from exc
             candidates = pool + extra
             vector_keys = [key for key, _ in extra]
-            self.last_choice.update({'candidates': len(candidates), 'vector': vector_keys,
+            self.last_choice.update({'candidates': len(candidates),
+                                     'hybrid_candidates': len(pool),
+                                     'vector': vector_keys,
                                      'vector_note': dict(getattr(self, '_vector_note', {}) or {})})
             if not candidates:
-                self.last_choice.update({'status': 'empty', **timings})
-                self._record('empty', started, candidates=0, picked=0, **timings)
+                self.last_choice.update({'status': 'empty', 'outcome': 'no_candidates', **timings})
+                self._record('empty', started, candidates=0, picked=0, outcome='no_candidates', **timings)
                 return []
             order = sorted(candidates, key=lambda item: hashlib.md5((query + item[0]).encode()).hexdigest())
             letters = {label: key for label, (key, _) in zip(labels_for(len(order)), order)}
@@ -439,9 +456,20 @@ class RecallJudge:
                 lines.append(f'{letter}) {card_text(self._raw(key) or self.memory.raw_content_for(key))}')
             prompt = prompts.text('memory.judge.wake') if wake else prompts.text('memory.judge.prompt')
             context_label = 'Autonomous activity context' if wake else 'Lan just said'
+            recent_block = '' if wake else format_recent_context(recent)
+            user_parts = []
+            if recent_block:
+                user_parts.append('Recent conversation (context only; judge relevance to the latest message):\n'
+                                  + recent_block)
+            user_parts.append('%s: "%s"' % (context_label, query[:QUERY_CHARS]))
+            if not wake and isinstance(signal, dict) and signal.get('mode') in ('technical_task', 'work_emotion'):
+                cue = ('Current turn looks like a pure technical/work task.'
+                       if signal['mode'] == 'technical_task'
+                       else 'Current turn is emotional/relational sharing triggered by work.')
+                user_parts.append('Context note: ' + cue)
+            user_parts.append('Saved memories:\n' + '\n'.join(lines))
             messages = [{'role': 'system', 'content': prompt},
-                        {'role': 'user', 'content': '%s: "%s"\n\nSaved memories:\n%s' % (
-                            context_label, query[:QUERY_CHARS], '\n'.join(lines))}]
+                        {'role': 'user', 'content': '\n\n'.join(user_parts)}]
             future = self._pool.submit(self._ask, messages)
             model_started = self.clock()
             model_deadline = model_started + self.settings['timeout_seconds'] + 0.5
@@ -458,7 +486,10 @@ class RecallJudge:
             keys = parse_choice(text, letters, max_picks=max_picks)
             bodies = dict(candidates)
             picked = [(key, bodies[key]) for key in keys]
-            self.last_choice.update({'status': 'chosen' if picked else 'empty', **timings,
+            usage = dict(getattr(self, '_last_usage', {}) or {})
+            outcome = 'chosen' if picked else 'normal_empty'
+            self.last_choice.update({'status': 'chosen' if picked else 'empty', 'outcome': outcome,
+                                     'usage': usage, **timings,
                                      'candidates': len(candidates), 'picked': list(keys), 'vector': vector_keys})
         except JudgeFailed as failure:
             self._failed(failure.reason, started, len(candidates), failure.detail, **timings)
@@ -466,7 +497,8 @@ class RecallJudge:
         with self._lock:
             self.failures = 0
         self._record('ok' if picked else 'empty', started, candidates=len(candidates),
-                     picked=len(picked), **timings)
+                     picked=len(picked), outcome='chosen' if picked else 'normal_empty',
+                     usage=dict(getattr(self, '_last_usage', {}) or {}), **timings)
         return picked
 
     # --- bookkeeping --------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # 工单 461 · 测试与隔离运行证据
 
-> 基线 `f979ca2`（PR #460 已合并）· worktree `worktrees/461-p5-s6-gates` · 2026-11-27 +08:00
+> 基线 `f979ca2`（PR #460 已合并）→ 合流 PR #461 后 `504c0a7` · worktree `worktrees/461-p5-s6-gates` · 2026-11-27 +08:00
 > 所有测试使用临时目录或 VEIL Lab 合成数据，未写正式 `data/peter`，未启停正式 Peter。
 
 ## 1. 定向回归（全通过）
@@ -15,6 +15,14 @@
 | `python -m unittest tests.test_relationship_422 tests.test_p6_s3_relationship_governance tests.test_pr460_sovereignty -v` | 通过（实际请求注入、四区预算、用户主权、否决防复活） |
 | `node --test desktop/tests/health-period.test.cjs desktop/tests/ui.test.cjs desktop/tests/workspace-budget.test.cjs` | 通过（健康页期间卡片、既有桌面 UI 回归） |
 
+## 1.1 合流 PR #461（S5）后的联合回归
+
+PR #461（工单 460 / P6-S5）于 2026-11-27 12:59 UTC 合并为 `504c0a7`。本单分支已合流该提交（共享的 `desktop/workspace-brain.js`、`veil/brain/brain_p4_api.py`、三份状态文档按区域合并，S5 检索/判官/联想逻辑未改）。
+
+- 联合定向回归（126 项）：`tests.test_p5_health_period_orphans` + 461 三个 S6 测试 + `test_relationship_422` + `test_p6_s3_relationship_governance` + `test_pr460_sovereignty` + `test_relationship_semantic_worker` + `test_p6_s5_retrieval_judge_association` 全部通过。
+- 桌面 Node：`node --test desktop/tests/*.test.cjs`，58/58 通过（S5 双开关 + 本单健康期间卡片同文件）。
+- 合流后完整 Python 套件：2469 项，18 失败 + 3 错误 + 29 跳过，失败集合与下文基线逐项相同。
+
 ## 2. 完整 Python 套件
 
 命令（与 CI 一致）：
@@ -23,7 +31,7 @@
 python -m unittest discover -s tests
 ```
 
-本单 worktree 结果：**2457 项，18 失败 + 3 错误 + 29 跳过**，耗时约 423s。
+本单 worktree 结果：合流前 **2457 项，18 失败 + 3 错误 + 29 跳过**，耗时约 423s；合流 PR #461 后 **2469 项，18 失败 + 3 错误 + 29 跳过**，失败集合相同。
 
 在 `origin/main` `f979ca2` 的独立基线 worktree 重跑同一批失败模块：
 

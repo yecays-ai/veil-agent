@@ -16,12 +16,34 @@ DEFAULTS = {
     'backend': 'brain',
     'weight_vector': 0.65,
     'weight_keyword': 0.35,
+    # P6-S5: auditable Chinese stopword filtering for BM25 only (off by default until verified).
+    'stopwords_enabled': False,
+    # P6-S5: explicit hybrid retrieval candidate count K (also bounds judge's hybrid pool).
+    'candidate_k': 8,
 }
 VISIBLE_BUCKETS = ('dynamic', 'permanent')
 HIDDEN_TYPES = ('archived', 'letter', 'plan', 'i', 'feel')
 ID_BLOCK = '=== ombre:result-ids ==='
 WORD = re.compile(r'[\u4e00-\u9fffA-Za-z0-9_]')
 DATE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
+
+# P6-S5 auditable Chinese stopword list (BM25 lexical channel only; never alters raw query or
+# embedding input). Deliberately excludes dates/time anchors (今天/昨天/明天/现在/刚才/以前/上次),
+# negations (不/没/没有/别/不是), promises/agreements (约定/说好/答应), people/nicknames/pronouns
+# carrying relational subject, and meaningful Chinese/English colloquialisms.
+CHINESE_STOPWORDS = frozenset("""
+的 了 是 在 这 那 这个 那个 这些 那些 一个 一种 什么 怎么 怎样 为什么
+吗 呢 啊 吧 呀 哦 嗯 哈 嘛 啦 就 都 也 还 又 很 太 更 最 有 会 能 可以 要 想 觉得 知道
+已经 一直 还是 但是 因为 所以 如果 然后 而且 只是 就是 真的 有点 一些 事情 时候 感觉 自己 一样
+""".split())
+
+# Protected terms that must never be added to CHINESE_STOPWORDS (checked by unit tests).
+PROTECTED_TERMS = frozenset("""
+今天 昨天 明天 现在 刚才 以前 上次 那天 那晚 去年 前年
+不 没 没有 别 不要 不能 不是
+约定 说好 答应 保证 记得 纪念日
+我 你 她 他 我们 你们 他们 peter lan
+""".split())
 
 
 def created_date(value):
@@ -54,28 +76,42 @@ def load_settings(raw):
     else:
         settings['weight_vector'] /= total
         settings['weight_keyword'] /= total
+    if type(raw.get('stopwords_enabled')) is bool:
+        settings['stopwords_enabled'] = raw['stopwords_enabled']
+    candidate_k = raw.get('candidate_k')
+    if type(candidate_k) is int and 1 <= candidate_k <= 32:
+        settings['candidate_k'] = candidate_k
     return settings
 
 
-def tokenize(text):
-    """jieba words, lower-cased; punctuation and whitespace tokens are dropped."""
+def tokenize(text, *, stopwords_enabled=False):
+    """jieba words, lower-cased; punctuation and whitespace tokens are dropped.
+
+    When ``stopwords_enabled`` is True, removes only auditable function words in
+    ``CHINESE_STOPWORDS`` for BM25 scoring. Raw query and embedding input are untouched.
+    """
     import jieba
     jieba.setLogLevel(60)
+    stopwords = CHINESE_STOPWORDS if stopwords_enabled else None
     tokens = []
     for piece in jieba.lcut(text or ''):
         piece = piece.strip().lower()
-        if piece and WORD.search(piece):
-            tokens.append(piece)
+        if not piece or not WORD.search(piece):
+            continue
+        if stopwords is not None and piece in stopwords:
+            continue
+        tokens.append(piece)
     return tokens
 
 
 class BrainIndex:
     """Read-only index over brain.db. Rebuilt when the file changes; never writes to it."""
 
-    def __init__(self, db_path, *, weight_vector=0.65, weight_keyword=0.35):
+    def __init__(self, db_path, *, weight_vector=0.65, weight_keyword=0.35, stopwords_enabled=False):
         self.db_path = Path(db_path)
         self.weight_vector = weight_vector
         self.weight_keyword = weight_keyword
+        self.stopwords_enabled = bool(stopwords_enabled)
         self.lock = threading.RLock()
         self.signature = None
         self.rows = []
@@ -128,7 +164,8 @@ class BrainIndex:
             except sqlite3.OperationalError:
                 embedding_model = ''
             from rank_bm25 import BM25Okapi
-            tokenized = [tokenize((row[1] or '') + '\n' + (row[2] or '')) for row in visible]
+            tokenized = [tokenize((row[1] or '') + '\n' + (row[2] or ''),
+                                  stopwords_enabled=self.stopwords_enabled) for row in visible]
             bm25 = BM25Okapi(tokenized) if tokenized else None
         finally:
             connection.close()
@@ -164,11 +201,25 @@ class BrainIndex:
     def _keyword_scores(self, bm25, rows, query):
         if bm25 is None:
             return {}
-        tokens = tokenize(query)
+        tokens = tokenize(query, stopwords_enabled=self.stopwords_enabled)
         if not tokens:
             return {}
         raw = bm25.get_scores(tokens)
         return {rows[index][0]: float(score) for index, score in enumerate(raw)}
+
+    def vector_similarities(self, query_vector, memory_ids, *, model=''):
+        """Reuse loaded vectors to compute cosine similarity for a bounded set of candidate IDs."""
+        if not query_vector or not memory_ids:
+            return {}
+        self.refresh()
+        with self.lock:
+            embedding_model = self.embedding_model
+            if model and embedding_model and str(model).strip() != embedding_model:
+                return {}
+            expected = len(query_vector)
+            usable = [mid for mid in memory_ids
+                      if mid in self.vectors and len(self.vectors[mid]) == expected]
+            return self._vector_scores(query_vector, usable)
 
     def search(self, query, limit=8, embedder=None, *, query_vector=None,
                model='', date_from='', date_to='', diagnostics=None):
@@ -268,7 +319,8 @@ class BrainIndex:
         result = [{'id': memory_id, 'title': row[1] or '', 'body': row[2] or '',
                    'created': row[3] or '', 'importance': row[4], 'score': round(score, 6)}
                   for score, memory_id, row in scored[:limit]]
-        diag.update({'count': len(result), 'keyword_only': bool(query_vector is None)})
+        diag.update({'count': len(result), 'keyword_only': bool(query_vector is None),
+                     'stopwords_enabled': self.stopwords_enabled, 'candidate_k': int(limit)})
         return result
 
 
@@ -277,12 +329,15 @@ _INDEX_LOCK = threading.Lock()
 
 
 def get_index(db_path, settings):
-    key = str(Path(db_path).resolve()) + '|' + str(settings['weight_vector']) + '|' + str(settings['weight_keyword'])
+    stopwords = bool(settings.get('stopwords_enabled', False))
+    key = (str(Path(db_path).resolve()) + '|' + str(settings['weight_vector']) + '|'
+           + str(settings['weight_keyword']) + '|' + str(int(stopwords)))
     with _INDEX_LOCK:
         index = _INDICES.get(key)
         if index is None:
             index = BrainIndex(db_path, weight_vector=settings['weight_vector'],
-                               weight_keyword=settings['weight_keyword'])
+                               weight_keyword=settings['weight_keyword'],
+                               stopwords_enabled=stopwords)
             _INDICES[key] = index
     return index
 

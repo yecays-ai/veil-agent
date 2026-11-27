@@ -37,7 +37,8 @@
 ## 当前状态
 
 - 开发与隔离验证完成，待独立审核 / CI / Lan 体验；未合并、未部署，未改正式 `data/peter`。
-- 基线 `main = f979ca2`（PR #460 已合并）；分支 `ticket/461-p5-s6-gates`，worktree `worktrees/461-p5-s6-gates`。
+- 基线 `main = f979ca2`（PR #460 已合并）；PR #461（P6-S5）随后合并为 `504c0a7`，本单已合流并完成联合回归（126 项定向 + 58 项桌面 + 2469 项完整套件，失败集合与基线一致）。
+- 分支 `ticket/461-p5-s6-gates`，worktree `worktrees/461-p5-s6-gates`。
 - 与 PR #461（P6-S5）共享 `desktop/workspace-brain.js`、`veil/brain/brain_p4_api.py`、`veil/core/veil_agent.py`、三份状态文档；本单只改健康页/健康 API/证据链，未改 S5 的检索、判官、联想逻辑。
 
 ## 交付位置
@@ -69,7 +70,7 @@
 
 - `docs/reports/461-cross-language-live-20261127.md`：VEIL Lab 合成 run `461-sem-synthetic-20261127T210905`，DeepSeek 真实调用 2 次，本 run ¥0.00236848，累计本单语义探针 ¥0.0509（≤¥2）。翻译候选 contradicted 不注入；无关正例 supported 并注入。
 - `docs/reports/461-chat-index-benchmark-20261127.json`：5 万条 / 6.68MB 合成聊天，首建 0.256s、重复调用 0.435ms、追加一条 0.824ms；旧证据按需查询 1–11ms；LRU 上限 400。
-- 完整 Python 套件：2457 项中 18 失败 + 3 错误，全部与本单无关；在 `origin/main` 基线 worktree 重跑同一批模块得到完全相同的 18+3，详见 `docs/reports/461-test-evidence-20261127.md`。
+- 合流后：126 项联合定向回归通过，桌面 58/58 通过，完整 Python 套件 2469 项中 18 失败 + 3 错误，失败集合与 `origin/main` 基线完全相同；详见 `docs/reports/461-test-evidence-20261127.md`。
 
 ## 剩余能力边界
 
@@ -85,10 +86,10 @@
 ```
 python -m unittest tests.test_p5_health_period_orphans tests.test_p6_s6_chat_evidence_budget \
   tests.test_p6_s6_idempotent_writes tests.test_p6_s6_cross_language_veto -v   # 29 项通过
-python -m unittest tests.test_learned_context tests.test_pr460_evidence \
-  tests.test_relationship_semantic_state tests.test_relationship_422 \
-  tests.test_p6_s3_relationship_governance tests.test_pr460_sovereignty        # 通过
-node --test desktop/tests/health-period.test.cjs                              # 通过
+python -m unittest tests.test_relationship_422 tests.test_p6_s3_relationship_governance \
+  tests.test_pr460_sovereignty tests.test_relationship_semantic_worker \
+  tests.test_p6_s5_retrieval_judge_association                                 # 合流后联合 126 项通过
+node --test desktop/tests/*.test.cjs                                          # 58/58 通过
 ```
 
 ## 验收步骤
