@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 更新：2026-11-27 +08:00 · 基线 `main = 504c0a7`（PR #460、PR #461 均已合并）· 当前分支 `ticket/461-p5-s6-gates`（已合流最新 `main` 并完成联合回归；待独立审核/CI/Lan 体验；未合并、未部署）
+> 更新：2026-11-27 +08:00 · 基线 `main = 504c0a7`（PR #460、PR #461 均已合并）· 当前 PR #462 / 分支 `ticket/461-p5-s6-gates`（已合流最新 `main` 并完成联合回归；待独立审核/CI/Lan 体验；未合并、未部署）
 
 ## 当前停点
 
@@ -27,7 +27,7 @@
 
 ## 下一个窗口第一步
 
-1. 核对本单 PR（待开）的 CI 与独立审核；重点看 `learned_context.py` 的证据预算/幂等回执、健康页期间卡片，以及合流 S5 后的健康页与记忆监控页是否互相覆盖。
+1. 核对本单 PR #462 的 CI 与独立审核；重点看 `learned_context.py` 的证据预算/幂等回执、健康页期间卡片，以及合流 S5 后的健康页与记忆监控页是否互相覆盖。
 2. 合流结果已在 `504c0a7` 上重跑定向与完整套件；若后续 `main` 再变，重跑：
    - `python -m unittest tests.test_p5_health_period_orphans tests.test_p6_s6_chat_evidence_budget tests.test_p6_s6_idempotent_writes tests.test_p6_s6_cross_language_veto`
    - `python -m unittest tests.test_relationship_422 tests.test_p6_s3_relationship_governance tests.test_pr460_sovereignty tests.test_relationship_semantic_worker tests.test_p6_s5_retrieval_judge_association`

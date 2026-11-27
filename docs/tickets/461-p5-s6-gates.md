@@ -36,7 +36,7 @@
 
 ## 当前状态
 
-- 开发与隔离验证完成，待独立审核 / CI / Lan 体验；未合并、未部署，未改正式 `data/peter`。
+- 开发与隔离验证完成（PR #462），待独立审核 / CI / Lan 体验；未合并、未部署，未改正式 `data/peter`。
 - 基线 `main = f979ca2`（PR #460 已合并）；PR #461（P6-S5）随后合并为 `504c0a7`，本单已合流并完成联合回归（126 项定向 + 58 项桌面 + 2469 项完整套件，失败集合与基线一致）。
 - 分支 `ticket/461-p5-s6-gates`，worktree `worktrees/461-p5-s6-gates`。
 - 与 PR #461（P6-S5）共享 `desktop/workspace-brain.js`、`veil/brain/brain_p4_api.py`、`veil/core/veil_agent.py`、三份状态文档；本单只改健康页/健康 API/证据链，未改 S5 的检索、判官、联想逻辑。
