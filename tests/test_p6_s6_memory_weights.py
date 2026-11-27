@@ -829,6 +829,20 @@ class IntegrityAndRecoveryTests(_Base):
         self.assertFalse(out['ok'])
         self.assertEqual(out['error'], 'importance_changed_since_apply')
 
+    def test_cold_important_memory_stays_retrievable_under_activation_ranking(self):
+        w = self.make([
+            {'id': 'hot', 'title': '常聊的日常', 'body': '今天吃什么', 'importance': 5},
+            {'id': 'cold', 'title': '冷门但重要', 'body': '冷门但重要的共同经历', 'importance': 8},
+        ])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['hot']})
+        settings = {'weight_vector': 0.65, 'weight_keyword': 0.35, 'candidate_k': 8,
+                    'stopwords_enabled': False, 'activation_ranking_enabled': True,
+                    'activation_weight': 0.2, 'activation_half_life_days': 30,
+                    'activation_decay_enabled': True}
+        index = brain_retrieval.get_index(self.db, settings)
+        results = index.search('冷门但重要的共同经历', limit=8, query_vector=[])
+        self.assertIn('cold', [item['id'] for item in results])
+
 class ApiSurfaceTests(_Base):
     def _hub(self, weights):
         from types import SimpleNamespace as NS
