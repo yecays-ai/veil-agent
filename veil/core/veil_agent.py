@@ -3994,42 +3994,121 @@ class Chat:
             self.cfg.provider.update(provider)
             self.cfg.provider_name = name
 
+    def _finalize_recall_delivery(self, autonomy: bool):
+        """Finalize recall delivery or rollback while still inside the serialized send lock."""
+        self._recall_delivery_finalized = True
+        delivered = bool(
+            self.sent_messages
+            or getattr(self, 'reply_row_saved', False)
+            or (autonomy and getattr(self, 'autonomy_reply_delivered', False))
+        )
+        req_id = getattr(self, '_turn_recall_request_id', '') or ''
+        if self.memory is not None:
+            if delivered:
+                confirm = getattr(self.memory, 'confirm_delivery', None)
+                if callable(confirm):
+                    confirm(req_id)
+            elif (getattr(self.memory, 'last_recall_marks', None)
+                  or getattr(self.memory, 'last_association_marks', None)
+                  or getattr(self.memory, '_has_association_rollback', False)):
+                self._rollback_undelivered_recall(req_id)
+
+    def _rollback_undelivered_recall(self, req_id):
+        """Roll back this turn's recall. Check the signature first so an internal TypeError is not retried."""
+        rollback = self.memory.rollback_recall
+        import inspect
+        try:
+            params = inspect.signature(rollback).parameters
+            kinds = {item.kind for item in params.values()}
+            accepts_id = (
+                inspect.Parameter.VAR_POSITIONAL in kinds
+                or inspect.Parameter.VAR_KEYWORD in kinds
+                or 'request_id' in params
+                or any(item.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                ) for item in params.values())
+            )
+        except (TypeError, ValueError):
+            accepts_id = False
+        if accepts_id:
+            rollback(req_id)
+        else:
+            rollback()
+
+    def _capture_autonomy_snapshot(self):
+        """Capture per-run tool summaries and recall diagnostics before releasing the send lock."""
+        run_id = getattr(self, 'autonomy_run_id', None)
+        if not run_id:
+            return
+        snaps = getattr(self, '_autonomy_snapshots', None)
+        if not isinstance(snaps, dict):
+            snaps = {}
+            self._autonomy_snapshots = snaps
+        mem_debug = getattr(getattr(self, 'memory', None), 'last_recall_debug', None)
+        la_copy = None
+        if isinstance(mem_debug, dict) and isinstance(mem_debug.get('leisure_association'), dict):
+            la = mem_debug['leisure_association']
+            la_copy = {
+                'effective': bool(la.get('effective', False)),
+                'wake_mode': str((la.get('wake_gate') or {}).get('mode') or la.get('context_mode') or ''),
+                'is_leisure': bool((la.get('wake_gate') or {}).get('is_leisure', False)),
+                'picked': list(la.get('picked') or []),
+                'reason': str(la.get('reason') or ''),
+                'similarity': la.get('similarity'),
+                'meaning_bonus': la.get('meaning_bonus', 0.0),
+                'budget_dropped': bool(la.get('budget_dropped', False)),
+            }
+        snaps[run_id] = {
+            'tools': [dict(item) for item in (getattr(self, 'last_tool_summaries', None) or ())
+                      if isinstance(item, dict)],
+            'leisure_association': la_copy,
+        }
+        while len(snaps) > 8:
+            snaps.pop(next(iter(snaps)))
+
     def send(self, text, *, autonomy=False, **kwargs):
-        # Ticket 379: automatic recall marks memories as shown (cooldown). A turn that delivers nothing, by
-        # error, stop or an empty answer, gives those marks back, so retrying or regenerating it still recalls.
+        # Ticket 379: a turn that delivers nothing gives recall marks back.
+        # The inner path finalizes while it still holds the model lock (P6-S6-2), so a
+        # concurrent send cannot clobber this turn. This outer finally only covers a
+        # replaced _send_under_model_lock; it does not finalize a second time.
+        self._recall_delivery_finalized = False
+        try:
+            return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
+        finally:
+            if not self._recall_delivery_finalized:
+                self._finalize_recall_delivery(autonomy)
+
+    def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
+        models = getattr(self.cfg, 'models', None)
+        if models is not None:
+            with models.env_lock, models.lock:
+                self._turn_recall_request_id = ''
+                if self.memory is not None:
+                    self.memory.last_recall_marks = None
+                    self.memory.last_association_marks = None
+                    self.memory._has_association_rollback = False
+                try:
+                    try:
+                        models.chosen('peter')
+                    except SettingsError as exc:
+                        raise RequestNotSent(str(exc)) from None
+                    return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+                finally:
+                    self._finalize_recall_delivery(autonomy)
+                    if autonomy:
+                        self._capture_autonomy_snapshot()
         self._turn_recall_request_id = ''
         if self.memory is not None:
             self.memory.last_recall_marks = None
             self.memory.last_association_marks = None
             self.memory._has_association_rollback = False
         try:
-            return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
+            return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
         finally:
-            delivered = bool(self.sent_messages or getattr(self, 'reply_row_saved', False))
-            req_id = getattr(self, '_turn_recall_request_id', '') or ''
-            if self.memory is not None:
-                if delivered:
-                    confirm = getattr(self.memory, 'confirm_delivery', None)
-                    if callable(confirm):
-                        confirm(req_id)
-                elif (getattr(self.memory, 'last_recall_marks', None)
-                      or getattr(self.memory, 'last_association_marks', None)
-                      or getattr(self.memory, '_has_association_rollback', False)):
-                    try:
-                        self.memory.rollback_recall(req_id)
-                    except TypeError:
-                        self.memory.rollback_recall()
-
-    def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
-        models = getattr(self.cfg, 'models', None)
-        if models is not None:
-            with models.env_lock, models.lock:
-                try:
-                    models.chosen('peter')
-                except SettingsError as exc:
-                    raise RequestNotSent(str(exc)) from None
-                return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
-        return self._send_with_stable_model(text, autonomy=autonomy, **kwargs)
+            self._finalize_recall_delivery(autonomy)
+            if autonomy:
+                self._capture_autonomy_snapshot()
 
     def _activity_model(self, role):
         """(provider name, provider) when an activity has a separate model from chat."""
@@ -4082,7 +4161,7 @@ class Chat:
 
     def _send(self, text, *, autonomy=False, extra_context=None, media=None, message_id=None,
               persist_user=True, regeneration_parent_message_id=None, force_reply=False,
-              reply_later_batch=None, user_events=None, memory_query=None):
+              reply_later_batch=None, user_events=None, memory_query=None, wake_context=None):
         # Per-call durability fact used by UI adapters when failures can occur
         # both before and after the user row is appended.
         self.last_send_persisted = False
@@ -4120,6 +4199,7 @@ class Chat:
         self.last_reply_message_id = None
         self.last_reply_request_id = None
         self.reply_row_saved = False
+        self.autonomy_reply_delivered = False
         self.regeneration_parent_message_id = (regeneration_parent_message_id
                                                if isinstance(regeneration_parent_message_id, str)
                                                else None)
@@ -4148,9 +4228,23 @@ class Chat:
         defer_recall = bool(self.memory and not skip_recall
                             and getattr(self.memory, 'budgets_recall', None) is True)
         recall_context_kwargs = {'defer': True} if defer_recall else {}
-        recalled = (self.memory.context(recall_query, include_opening=opening_turn,
-                                        recent=self.history[-8:], **recall_context_kwargs, **recall_mode)
-                    if self.memory and not skip_recall else [])
+        if self.memory and not skip_recall:
+            if autonomy and isinstance(wake_context, dict):
+                import inspect
+                try:
+                    sig = inspect.signature(self.memory.context)
+                    accepts_wake_ctx = (
+                        'wake_context' in sig.parameters
+                        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                    )
+                except (TypeError, ValueError):
+                    accepts_wake_ctx = False
+                if accepts_wake_ctx:
+                    recall_context_kwargs['wake_context'] = wake_context
+            recalled = self.memory.context(recall_query, include_opening=opening_turn,
+                                           recent=self.history[-8:], **recall_context_kwargs, **recall_mode)
+        else:
+            recalled = []
         memory_refs = getattr(self.memory, 'last_context_refs', []) if self.memory and not skip_recall else []
         self.turn_memory_refs = list(memory_refs) if isinstance(memory_refs, list) else []
         memory_kinds = getattr(self.memory, 'last_context_kinds', {}) if self.memory and not skip_recall else {}
@@ -4746,6 +4840,8 @@ class Chat:
                 else:
                     raise EmptyReplyError('接口没有返回文字回复；本次保留预留费用。')
             self.last_tool_summaries = tool_summaries
+            if autonomy and isinstance(reply, str) and reply.strip():
+                self.autonomy_reply_delivered = True
             if not autonomy and not self.reply_displayed:
                 self.last_reply_message_id = uuid.uuid4().hex
                 self.last_reply_request_id = request_id

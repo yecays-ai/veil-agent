@@ -51,6 +51,29 @@ class MemoryToolError(RuntimeError):
         super().__init__(messages[code])
 
 
+class _QueryVectorCapture:
+    """Proxy that keeps ``embedder.embed()`` and records the query vector.
+
+    Brain retrieval calls ``.embed()`` on a provider object. A bare function wrapper is not
+    an embedder: retrieval raises TypeError before the real embedding runs, so leisure
+    association never sees the vector and the keyword fallback records the wrong error.
+    """
+
+    def __init__(self, inner, remember):
+        self._inner = inner
+        self._remember = remember
+
+    def embed(self, text):
+        method = getattr(self._inner, 'embed', None)
+        vector = method(text) if callable(method) else self._inner(text)
+        if vector is not None:
+            self._remember(vector)
+        return vector
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 # The exact line Ombre appends to a search result when the vector query was unavailable or failed.
 DEGRADED_NOTICE = '[检索降级：语义索引暂不可用'
 
@@ -976,6 +999,8 @@ class Memory:
                 out['association_enabled'] = data['association_enabled']
             if type(data.get('association_contextual_enabled')) is bool:
                 out['association_contextual_enabled'] = data['association_contextual_enabled']
+            if type(data.get('leisure_association_enabled')) is bool:
+                out['leisure_association_enabled'] = data['leisure_association_enabled']
             return out
         except (OSError, ValueError):
             return {}
@@ -990,16 +1015,28 @@ class Memory:
 
     def association_status(self):
         eff = self.effective_recall_settings()
-        enabled = bool(eff.get('association_enabled', True))
+        mem_cfg = getattr(getattr(self, 'cfg', None), 'memory', None) or {}
+        raw_recall = mem_cfg.get('recall') if isinstance(mem_cfg.get('recall'), dict) else {}
+        recall_enabled = bool(mem_cfg.get('enabled', True)) and raw_recall.get('enabled') is not False and eff.get('enabled') is not False
+        enabled = bool(recall_enabled and eff.get('association_enabled', True))
         contextual = bool(eff.get('association_contextual_enabled', False))
+        leisure = bool(eff.get('leisure_association_enabled', False))
         mode = 'disabled' if not enabled else ('contextual' if contextual else 'legacy')
+        leisure_effective = bool(recall_enabled and enabled and leisure)
         return {
             'available': True,
-            'enabled': enabled,
+            'recall_enabled': recall_enabled,
+            'enabled': bool(eff.get('association_enabled', True)),
             'contextual_enabled': contextual,
+            'leisure_enabled': leisure,
+            'leisure_effective': leisure_effective,
             'effective_mode': mode,
             'min_similarity': float(eff.get('association_min_similarity', 0.52)),
             'pool_size': int(eff.get('association_pool_size', 32)),
+            'leisure_min_similarity': float(eff.get('leisure_association_min_similarity', 0.38)),
+            'leisure_min_importance': int(eff.get('leisure_association_min_importance', 5)),
+            'leisure_cooldown_turns': int(eff.get('leisure_association_cooldown_turns', 12)),
+            'leisure_pool_size': int(eff.get('leisure_association_pool_size', 36)),
             'persistence_path': self._association_switch_path(),
         }
 
@@ -1007,7 +1044,9 @@ class Memory:
         with self.mutex:
             current = self._load_association_switches()
             for key, value in updates.items():
-                if key in ('association_enabled', 'association_contextual_enabled') and type(value) is bool:
+                if (key in ('association_enabled', 'association_contextual_enabled',
+                            'leisure_association_enabled')
+                        and type(value) is bool):
                     current[key] = value
             self.store.replace(self._association_switch_path(), current)
             if isinstance(getattr(self, 'recall_settings', None), dict):
@@ -1019,6 +1058,9 @@ class Memory:
 
     def set_association_contextual_enabled(self, enabled):
         return self._save_association_switches(association_contextual_enabled=bool(enabled))
+
+    def set_leisure_association_enabled(self, enabled):
+        return self._save_association_switches(leisure_association_enabled=bool(enabled))
 
     def bind_recall_request(self, request_id):
         """P6-S5: bind the active turn's pending delivery/rollback state to an explicit request_id."""
@@ -1196,6 +1238,11 @@ class Memory:
                             'embedding_wait_ms': embedding_wait_ms, **meta}
                         return text
                 embedder = self.embedder()
+                # P6-S6-2: keep the query vector from the non-prefetched Brain search path
+                # so leisure association can reuse it when the judge is off or breaker-open,
+                # without a second embedding call. The proxy must still look like an embedder.
+                capturing = _QueryVectorCapture(
+                    embedder, lambda vector: setattr(self, '_turn_query_vector', vector))
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
                 if getattr(self, 'budget', None) is not None:
@@ -1204,9 +1251,9 @@ class Memory:
                     settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
                 try:
                     text, meta = brain_retrieval_search(
-                        brain_db, query, limit=asked, embedder=embedder,
+                        brain_db, query, limit=asked, embedder=capturing,
                         settings=settings, model=model)
-                    reported = getattr(embedder, 'usage_tokens', None)
+                    reported = getattr(capturing, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
                         amount = Decimal(reported) * rate / Decimal(1_000_000)
                         if reservation is not None and amount <= reservation[1]:
@@ -1344,6 +1391,10 @@ class Memory:
                             'created': row['created'] or '', 'type': row['type'] or '',
                             'importance': row['importance'],
                             'pinned': 'true' if row['pinned'] else '',
+                            'why_remembered': row.get('why_remembered') or '',
+                            'last_active': row.get('last_active') or '',
+                            'effective_importance': row.get('effective_importance'),
+                            'dynamic_importance': row.get('dynamic_importance'),
                             'body': row['body'] or '', 'links': []}
             except Exception:
                 return {}
@@ -1470,10 +1521,20 @@ class Memory:
                     lifecycle['delivered'] = False
                     lifecycle['rolled_back'] = True
             restored_assoc = False
-            if (has_assoc_rollback or association is not None) and hasattr(self.rotation, 'restore_association'):
-                # The association never reached her (error, stop, empty answer), so its cooldown
-                # streak must not grow as if it had been shown — even on the very first association.
-                self.rotation.restore_association(association if isinstance(association, dict) else {})
+            assoc_is_leisure = bool(
+                pending_entry.get('association_is_leisure', False)
+                if isinstance(pending_entry, dict)
+                else getattr(self, '_last_association_is_leisure', False)
+            )
+            if has_assoc_rollback or association is not None:
+                if assoc_is_leisure and hasattr(self.rotation, 'restore_leisure_association'):
+                    self.rotation.restore_leisure_association(association if isinstance(association, dict) else {})
+                    restored_assoc = True
+                elif hasattr(self.rotation, 'restore_association'):
+                    # The association never reached her (error, stop, empty answer), so its cooldown
+                    # streak must not grow as if it had been shown — even on the very first association.
+                    self.rotation.restore_association(association if isinstance(association, dict) else {})
+                    restored_assoc = True
                 restored_assoc = True
             self.last_injected_refs = prev_injected
             if marks:
@@ -1546,6 +1607,7 @@ class Memory:
                 'relevant_ids': list(pending.get('relevant_ids') or []),
                 'association_ids': list(pending.get('association_ids') or []),
                 'carried_ids': list(pending.get('carried_ids') or []),
+                'wake_mode': str(pending.get('wake_mode') or ''),
                 'delivered': True,
                 'effective_used': None,
             }
@@ -1584,7 +1646,11 @@ class Memory:
                         'long_tail': 0, 'recent': 0, 'ordinary': 0}
         try:
             stat = brain_db.stat()
-            sig = (stat.st_mtime_ns, stat.st_size)
+            wal_path = Path(str(brain_db) + '-wal')
+            shm_path = Path(str(brain_db) + '-shm')
+            wal_sig = (wal_path.stat().st_mtime_ns, wal_path.stat().st_size) if wal_path.is_file() else (0, 0)
+            shm_sig = (shm_path.stat().st_mtime_ns, shm_path.stat().st_size) if shm_path.is_file() else (0, 0)
+            sig = (stat.st_mtime_ns, stat.st_size, wal_sig, shm_sig)
         except OSError:
             return [], {'source': 'unavailable', 'refreshed': False,
                         'long_tail': 0, 'recent': 0, 'ordinary': 0}
@@ -1877,7 +1943,8 @@ class Memory:
                 self.retrieval_failure('experience_directory', exc)
         return lines
 
-    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False, defer=False):
+    def context(self, query, *, include_opening=True, recent=None, rotate=False, wake=False,
+                wake_context=None, defer=False):
         """This turn's automatic memories. `wake` selects related context for an autonomous activity.
 
         Ticket 419: retrieval, dedup and cooldown run here; how many memories are sent and how much
@@ -1914,7 +1981,9 @@ class Memory:
             'relationship_base': {}, 'relevant_recall': [], 'natural_association': [],
             'association': {}, 'carried': [], 'retrieval': {}, 'degraded': '',
             # P6-S5: situational classification and explicit lifecycle separation for S6.
-            'context_signal': {}, 'lifecycle': {}, 'followup_released_reason': ''}
+            'context_signal': {}, 'lifecycle': {}, 'followup_released_reason': '',
+            # P6-S6-2: autonomous leisure association diagnostics (IDs/reasons only).
+            'leisure_association': {}, 'wake_mode': ''}
         recall_cfg = self.effective_recall_settings()
         ret_cfg = getattr(self, 'retrieval_settings', None) or {}
         explicit = asks_about_past(query) and not (rotate or wake)
@@ -1994,14 +2063,26 @@ class Memory:
                 judge_limit = (max(3, recall_cfg['rotation_candidates']) if wake
                                else max(int(ret_cfg.get('candidate_k', 8) or 8),
                                         int(judge.settings.get('ombre_candidates', 8))))
+                # Choose kwargs from the callable's signature. Catching TypeError and retrying
+                # can run the judge twice after it has already spent the embedding or mutated state.
+                import inspect
+                legacy_limit = max(3, recall_cfg['rotation_candidates']) if wake else None
                 try:
-                    normal = judge.choose(query, pool, prefetched, wake=wake,
-                                          candidate_limit=judge_limit,
-                                          recent=recent, context_signal=signal)
-                except TypeError:
-                    # Compatibility with minimal test fake judges that only accept the legacy signature.
-                    normal = judge.choose(query, pool, prefetched, wake=wake,
-                                          candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
+                    params = inspect.signature(judge.choose).parameters
+                    var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                except (TypeError, ValueError):
+                    params, var_kw = {}, False
+                choose_kwargs = {'wake': wake}
+                modern = var_kw or 'recent' in params or 'context_signal' in params
+                if var_kw or 'candidate_limit' in params:
+                    choose_kwargs['candidate_limit'] = judge_limit if modern else legacy_limit
+                if modern and (var_kw or 'recent' in params):
+                    choose_kwargs['recent'] = recent
+                if modern and (var_kw or 'context_signal' in params):
+                    choose_kwargs['context_signal'] = signal
+                if not var_kw and not params:
+                    choose_kwargs['candidate_limit'] = legacy_limit
+                normal = judge.choose(query, pool, prefetched, **choose_kwargs)
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self._merge_embedding_wait(self.last_recall_debug, judge)
@@ -2161,6 +2242,7 @@ class Memory:
             elif widen:
                 kinds[key] = 'rotation'
         pending_association_key = ''
+        pending_association_is_leisure = False
         if not wake and not widen and not explicit and not followup:
             # Ticket 422 + P6-S5: natural association. When association_contextual_enabled is False
             # (default), preserves the Ticket 422 baseline over breath_blocks. When enabled, draws
@@ -2244,6 +2326,96 @@ class Memory:
                 # P6-S5: defer rotation.mark_association() to finish_recall() so a budget-dropped
                 # association never pollutes cooldown or streak state.
                 pending_association_key = choice['key']
+        elif wake:
+            # P6-S6-2: autonomous leisure natural association.
+            # Strict leisure gate blocks all work/task wakes (0 interference); idle leisure wakes
+            # reuse the multi-source long-tail pool, shared turn embedding similarity, personal
+            # meaning (`why_remembered`), long-term importance, and cooldown/dedup.
+            from veil.brain.recall.leisure_association import (
+                choose_leisure, classify_wake_mode, settings as leisure_settings,
+            )
+            lcfg = leisure_settings(recall_cfg)
+            gate = classify_wake_mode(wake_context, query=query, recent=recent)
+            self.last_recall_debug['wake_mode'] = gate['mode']
+            shown = {other for other, _ in kept}
+            association_dropped = []
+            pool_meta = {'source': 'skipped', 'refreshed': False, 'long_tail': 0, 'ordinary': 0}
+            visible_pool = []
+            considered = []
+            similarities = None
+            if lcfg['master_enabled'] and lcfg['enabled'] and gate['is_leisure']:
+                pool_rows, pool_meta = self._association_pool(limit=int(lcfg['pool_size']))
+                if not pool_rows and breath_blocks:
+                    pool_meta['source'] = 'opening_fallback'
+                    pool_rows = list(breath_blocks)
+                visible_pool = self.context_visible(pool_rows, failure_stage='recall_visibility')
+                missing_meta = [key for key, _ in visible_pool if key not in metas]
+                if missing_meta:
+                    metas.update(self._recall_meta(missing_meta))
+                for key, body in visible_pool:
+                    if key in shown:
+                        association_dropped.append({'id': key, 'reason': 'duplicate'})
+                    elif cooled(key):
+                        association_dropped.append({'id': key, 'reason': 'cooldown'})
+                    elif duplicate(key, kept):
+                        association_dropped.append({'id': key, 'reason': 'same_event'})
+                    else:
+                        considered.append((key, body))
+                if considered:
+                    qvec = getattr(self, '_turn_query_vector', None)
+                    if qvec is None and prefetched is not None:
+                        try:
+                            qvec = prefetched.result(timeout=0.05)
+                        except Exception:
+                            qvec = None
+                    if qvec is not None:
+                        similarities = self._association_similarities(qvec, [key for key, _ in considered])
+            previous = (self.rotation.previous_leisure_association()
+                        if hasattr(self.rotation, 'previous_leisure_association')
+                        else (self.rotation.previous_association()
+                              if hasattr(self.rotation, 'previous_association') else None))
+            choice = choose_leisure(
+                query, considered, metas, self.rotation.last, self.rotation.turn, shown,
+                recall_cfg, wake_context=wake_context, similarities=similarities,
+                recent=recent, previous=previous,
+            )
+            association_dropped.extend(choice['dropped'])
+            listed = association_dropped[:40]
+            leisure_diag = {
+                'mode': 'leisure',
+                'enabled': bool(lcfg['enabled']),
+                'master_enabled': bool(lcfg['master_enabled']),
+                'effective': bool(lcfg['master_enabled'] and lcfg['enabled']),
+                'wake_gate': choice['wake_gate'],
+                'pool_source': pool_meta.get('source', 'skipped'),
+                'pool_refreshed': bool(pool_meta.get('refreshed')),
+                'context_mode': choice.get('context_mode') or gate['mode'],
+                'similarity': choice.get('similarity'),
+                'meaning_bonus': choice.get('meaning_bonus', 0.0),
+                'candidates': len(visible_pool),
+                'from_importance': pool_meta.get('long_tail', 0),
+                'from_ordinary': pool_meta.get('ordinary', 0),
+                'from_drift': 0,
+                'picked': [choice['key']] if choice['key'] else [],
+                'dropped': listed,
+                'dropped_more': (max(0, len(association_dropped) - len(listed))
+                                 + int(choice.get('dropped_more') or 0)),
+                'reason': choice['reason'] or '',
+            }
+            self.last_recall_debug['association'] = dict(leisure_diag)
+            self.last_recall_debug['leisure_association'] = dict(leisure_diag)
+            if choice['key']:
+                delimited_body = (
+                    prompts.text('memory.association.leisure.label')
+                    + '\n<recalled_leisure_memory_data>\n'
+                    + choice['body']
+                    + '\n</recalled_leisure_memory_data>'
+                )
+                kept.append((choice['key'], delimited_body))
+                sources[choice['key']] = 'association'
+                kinds[choice['key']] = 'association'
+                pending_association_key = choice['key']
+                pending_association_is_leisure = True
         if not self.last_recall_debug.get('association'):
             self.last_recall_debug['association'] = {
                 'candidates': 0, 'from_importance': len({key for key, _ in breath_blocks}),
@@ -2317,7 +2489,8 @@ class Memory:
                                'kind': 'opening'})
         self.last_recall_debug['reused'] = []   # ticket 419 review: no prefix-only reuse claims
         self._pending_recall = {'blocks': blocks_out, 'include_opening': include_opening,
-                                'association_key': pending_association_key}
+                                'association_key': pending_association_key,
+                                'association_is_leisure': pending_association_is_leisure}
         if defer:
             return []
         return self.finish_recall()
@@ -2446,24 +2619,43 @@ class Memory:
         self.mark_surfaced(self.last_context_refs)
         injected_assoc = [item['id'] for item in recall_items if item.get('kind') == 'association']
         pending_assoc_key = pending.get('association_key') or ''
+        pending_assoc_is_leisure = bool(pending.get('association_is_leisure', False))
+        # P6-S6-2: reconcile leisure_association diagnostics with post-budget injected IDs so a
+        # budget-dropped memory is never reported as a hit.
+        if pending_assoc_is_leisure and isinstance(debug.get('leisure_association'), dict):
+            if pending_assoc_key and pending_assoc_key not in injected_assoc:
+                debug['leisure_association']['picked'] = []
+                debug['leisure_association']['reason'] = 'budget_dropped'
+                debug['leisure_association']['budget_dropped'] = True
+                if isinstance(debug.get('association'), dict):
+                    debug['association']['picked'] = []
+                    debug['association']['reason'] = 'budget_dropped'
         req_id = str(request_id or getattr(self, '_pending_recall_request_id', '') or '').strip()
         with self.mutex:
             # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
             recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
             self.last_recall_marks = recall_marks
             self.rotation.mark(self.last_context_refs)
-            # P6-S5: commit association streak in memory only when the association actually survived budget fitting;
-            # disk persistence is deferred until confirm_delivery() so crashes/cancellations never pollute disk.
+            # P6-S5 / P6-S6-2: commit association streak in memory only when the association actually
+            # survived budget fitting; keep leisure streak isolated from ordinary chat association.
             has_assoc_rollback = False
             assoc_marks = None
-            if pending_assoc_key and pending_assoc_key in injected_assoc and hasattr(self.rotation, 'mark_association'):
-                assoc_marks = (
-                    self.rotation.previous_association()
-                    if hasattr(self.rotation, 'previous_association') else None)
-                has_assoc_rollback = True
-                self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
+            if pending_assoc_key and pending_assoc_key in injected_assoc:
+                if pending_assoc_is_leisure and hasattr(self.rotation, 'mark_leisure_association'):
+                    assoc_marks = (
+                        self.rotation.previous_leisure_association()
+                        if hasattr(self.rotation, 'previous_leisure_association') else None)
+                    has_assoc_rollback = True
+                    self.rotation.mark_leisure_association(pending_assoc_key, self.rotation.turn)
+                elif hasattr(self.rotation, 'mark_association'):
+                    assoc_marks = (
+                        self.rotation.previous_association()
+                        if hasattr(self.rotation, 'previous_association') else None)
+                    has_assoc_rollback = True
+                    self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
             self._has_association_rollback = has_assoc_rollback
             self.last_association_marks = assoc_marks
+            self._last_association_is_leisure = pending_assoc_is_leisure
             self._last_newly_surfaced = list(newly_surfaced)
             self._pending_recall_request_id = req_id
             pending_entry = {
@@ -2475,8 +2667,10 @@ class Memory:
                                  if item.get('kind') in ('search', 'context', 'relevant', 'rotation')],
                 'association_ids': list(injected_assoc),
                 'carried_ids': [item['id'] for item in recall_items if item.get('source') == 'followup'],
+                'wake_mode': str(debug.get('wake_mode') or ''),
                 'recall_marks': recall_marks,
                 'association_marks': assoc_marks,
+                'association_is_leisure': pending_assoc_is_leisure,
                 'has_association_rollback': has_assoc_rollback,
                 'newly_surfaced': list(newly_surfaced),
                 'previous_injected_refs': list(self._previous_injected_refs),

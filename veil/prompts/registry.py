@@ -166,6 +166,8 @@ ENTRIES = (
           '同上，没有命中时替换条目', max_bytes=800),
     _text('memory.association.label', 'memory', '自然浮现那一条的前缀说明',
           '不在检索命中里、由 Peter 自己想起来的旧事', max_bytes=600),
+    _text('memory.association.leisure.label', 'memory', '自主闲暇自然联想的前缀说明',
+          '自主闲暇醒来时自然想起来的过往经历，仅作灵感与情绪参考，不是任务', max_bytes=600),
     _text('memory.opening.head', 'memory', '开场记忆的开头',
           '新对话第一次请求', max_bytes=2000),
     _text('memory.opening.empty', 'memory', '没有开场记忆时的说明',

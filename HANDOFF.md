@@ -1,10 +1,16 @@
 # HANDOFF
 
-> 更新：2026-11-27 +08:00 · 基线 `main = 504c0a7`（PR #460、PR #461 均已合并）· 当前 PR #462 / 分支 `ticket/461-p5-s6-gates`（已合流最新 `main` 并完成联合回归；待独立审核/CI/Lan 体验；未合并、未部署）
+> 更新：2026-11-28 +08:00 · 基线 `main = ead71b6`（PR #460、PR #461、PR #462 均已合并）· 当前工单 463 / 分支 `ticket/463-p6-s6-2-leisure-association`（P6-S6-2 自主闲暇自然联想，与 S6-1 并行独立 worktree；已完成实现、定向回归与 VEIL Lab 隔离验证；待审核/CI/Lan 体验；未合并、未部署）
 
 ## 当前停点
 
-- **工单 461 / P5 遗留 + S6 开工门禁**：开发、隔离验证与与 S5 的联合回归完成；未合并、未部署，未触碰正式 `data/peter`。
+- **工单 463 / P6-S6-2 自主闲暇自然联想**：开发、单元与桌面回归、VEIL Lab 完整生产上下文 + 隔离真实工具验证完成；默认关闭、未合并、未部署，未触碰正式 `data/peter`，未追加付费实验。
+  - 核心模块：`veil/brain/recall/leisure_association.py`（`classify_wake_mode` 严格闲暇门控、`choose_leisure` 复用 S5 共享向量相似度 + 个人意义 `why_remembered` + 长期重要度 + 冷却/去重、`audit_autonomy_output` 旁白与无工具扮演审计）；`veil/prompts/defaults/memory.association.leisure.label.md`、`autonomy.wake.rules.md`、`autonomy.wake.protocol.md`、`veil/prompts/registry.py`。
+  - 协作闭环：`veil/autonomy/autonomy.py`（`_wake_situation` 传结构化唤醒状态，`autonomy.jsonl` 写脱敏 `leisure_association` 与 `output_audit`）；`veil/brain/memory_agent.py`（`wake=True` 自主闲暇联想分支、持久化开关 `leisure_association_enabled`、`confirm_delivery` 透出 `wake_mode` 供 S6-1 监听）；`veil/core/veil_agent.py`（修复自主唤醒不发消息时 `confirm_delivery` 被误回滚的问题）。
+  - 界面与配置：`veil/core/config_registry.py`、`veil/brain/brain_p4_api.py`（`association_leisure` 独立开关 + 自主闲暇运行诊断）、`desktop/workspace-brain.js`。
+  - 测试与隔离验证：119/119 Python 定向测试通过（含新增 `tests/test_p6_s6_2_leisure_association.py` 11 项）；桌面 `workspace-brain.test.cjs` 3/3 通过；VEIL Lab `run verify` 通过（`veil-lab/runs/p6-s6-2-verify-20261127T235657/reports/latest.md`，快照 `peter-20261127T170245/r2`），8/8 任务唤醒 0 干扰、闲暇唤醒命中真实长尾记忆、隔离真实 `ThoughtIndex` 工具执行成功、冷却去重生效、正式目录零变化、0 付费调用。
+  - 已知边界：未运行付费 `--live` 真实大模型回复对比；S6-1 并行施工中，双模块动态评价权重联调待 S6-1 合流后复验。
+- **工单 461 / PR #462（P5 遗留 + S6 开工门禁）**：已合并为 `ead71b6`；未部署，待 Lan 按 `docs/ACCEPTANCE.md` B-9/B-10 体验。
   - P5：`veil/brain/brain_health.py` 的 H-3（悬空引用 vs 无关联记忆/事件，带类别与判断依据）、H-7（删除 1024 维硬编码，按库内维度 + `meta.embedding_model` + 配置模型身份对账）、`period`（日期段增长/重复/碎片/断链/索引）、`historical_state`（只读快照，缺失即声明）；`veil/server/web_agent.py` 传入配置模型身份；`veil/brain/brain_p4_api.py` 成长报告期间摘要（与 S5 的同文件改动已自动合流）；`desktop/workspace-brain.js` 期间卡片、范围标签、证据依据（与 S5 的联想开关同文件改动已自动合流）。
   - S6：`veil/brain/learned_context.py` 聊天证据增量索引/400 条 LRU/旧证据按需查询/失效重建；淘汰后的 ID 与更正回扫日志，扫不完则不可用而不是当空；`_EvidenceBudget` 统一墙钟预算；`event_ledger`/`quotes`/`sources` 分页与截断降级；反证去重，超过 120 条只分批核验触及该认知或证据的反证，无关积累不停止其他晋升；写入幂等按工具调用身份而不是参数哈希；`veil/brain/relationship_semantic.py` 接受单层 code fence 的严格 JSON。
   - 文档与实验：`docs/tickets/461-p5-s6-gates.md`、`docs/reports/461-test-evidence-20261127.md`、`docs/reports/461-chat-index-benchmark-20261127.json`、`docs/reports/461-cross-language-live-20261127.md`、`veil-lab/runs/461-sem-synthetic-20261127T210905/reports/latest.md`。

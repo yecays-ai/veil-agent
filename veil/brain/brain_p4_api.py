@@ -596,17 +596,85 @@ def overview(hub):
         assoc_status = mem.association_status()
     else:
         from veil.brain.recall.recall_rotation import settings as load_rot_settings
-        rot_base = load_rot_settings(getattr(cfg, 'memory', None) if cfg is not None else {})
-        a_on = bool(saved_switches.get('association', rot_base.get('association_enabled', True)))
-        a_ctx = bool(saved_switches.get('association_contextual', rot_base.get('association_contextual_enabled', False)))
+        mem_cfg = getattr(cfg, 'memory', None) if cfg is not None else {}
+        rot_base = load_rot_settings(mem_cfg)
+        raw_recall = (mem_cfg or {}).get('recall') if isinstance((mem_cfg or {}).get('recall'), dict) else {}
+        recall_enabled = bool((mem_cfg or {}).get('enabled', True)) and raw_recall.get('enabled') is not False
+        # Read the same persistence file (`recall-association.json`) used by Memory._save_association_switches.
+        persisted_assoc = {}
+        if store is not None and cfg is not None:
+            try:
+                p_path = Path(store.root) / f'{cfg.id}/recall-association.json'
+                if p_path.is_file():
+                    raw_p = json.loads(p_path.read_text(encoding='utf-8'))
+                    if isinstance(raw_p, dict):
+                        persisted_assoc = raw_p
+            except (OSError, ValueError):
+                persisted_assoc = {}
+        a_on = bool(persisted_assoc.get('association_enabled',
+                                        saved_switches.get('association', rot_base.get('association_enabled', True))))
+        a_ctx = bool(persisted_assoc.get('association_contextual_enabled',
+                                         saved_switches.get('association_contextual', rot_base.get('association_contextual_enabled', False))))
+        a_leisure = bool(persisted_assoc.get('leisure_association_enabled',
+                                             saved_switches.get('association_leisure', rot_base.get('leisure_association_enabled', False))))
         assoc_status = {
             'available': True,
+            'recall_enabled': recall_enabled,
             'enabled': a_on,
             'contextual_enabled': a_ctx,
-            'effective_mode': 'disabled' if not a_on else ('contextual' if a_ctx else 'legacy'),
+            'leisure_enabled': a_leisure,
+            'leisure_effective': bool(recall_enabled and a_on and a_leisure),
+            'effective_mode': 'disabled' if not (recall_enabled and a_on) else ('contextual' if a_ctx else 'legacy'),
             'min_similarity': float(rot_base.get('association_min_similarity', 0.52)),
             'pool_size': int(rot_base.get('association_pool_size', 32)),
+            'leisure_min_similarity': float(rot_base.get('leisure_association_min_similarity', 0.38)),
+            'leisure_min_importance': int(rot_base.get('leisure_association_min_importance', 5)),
+            'leisure_cooldown_turns': int(rot_base.get('leisure_association_cooldown_turns', 12)),
+            'leisure_pool_size': int(rot_base.get('leisure_association_pool_size', 36)),
         }
+    recall_on = bool(assoc_status.get('recall_enabled', True))
+    leisure_on = bool(assoc_status.get('leisure_enabled', False))
+    leisure_eff = bool(assoc_status.get('leisure_effective', recall_on and assoc_status['enabled'] and leisure_on))
+    leisure_diag = {
+        'recent_wakes': 0,
+        'leisure_wakes': 0,
+        'task_blocked': 0,
+        'hits': 0,
+        'audit_flagged': 0,
+        'last_wake_at': '',
+        'last_wake_mode': '',
+        'last_reason': '',
+        'last_picked': [],
+        'last_similarity': None,
+        'last_audit_clean': None,
+    }
+    data_root_for_diag = getattr(hub, 'data_root', None) or (getattr(store, 'root', None) if store is not None else None)
+    if data_root_for_diag is not None and cfg is not None:
+        auto_rows = _read_all_jsonl(Path(data_root_for_diag) / cfg.id / 'autonomy.jsonl', max_rows=50)
+        for arow in auto_rows:
+            if not isinstance(arow, dict):
+                continue
+            la = arow.get('leisure_association')
+            audit = arow.get('output_audit')
+            if isinstance(audit, dict) and audit.get('clean') is False:
+                leisure_diag['audit_flagged'] += 1
+            if isinstance(la, dict):
+                leisure_diag['recent_wakes'] += 1
+                if la.get('is_leisure'):
+                    leisure_diag['leisure_wakes'] += 1
+                elif str(la.get('reason') or '').startswith('task_wake_suppressed'):
+                    leisure_diag['task_blocked'] += 1
+                picked = la.get('picked') or []
+                if picked:
+                    leisure_diag['hits'] += 1
+                leisure_diag['last_wake_at'] = str(arow.get('started_at') or '')
+                leisure_diag['last_wake_mode'] = str(la.get('wake_mode') or '')
+                leisure_diag['last_reason'] = str(la.get('reason') or '')
+                leisure_diag['last_picked'] = list(picked)
+                leisure_diag['last_similarity'] = la.get('similarity')
+                leisure_diag['last_audit_clean'] = (
+                    bool(audit.get('clean')) if isinstance(audit, dict) and 'clean' in audit else None
+                )
     assoc_mode_label = {
         'disabled': '已关闭',
         'legacy': '已启用 · 现行联想机制',
@@ -617,10 +685,23 @@ def overview(hub):
         else ('已保存开启（受总开关关闭抑制）' if assoc_status['contextual_enabled']
               else '已关闭 · 恢复现行联想机制')
     )
+    leisure_status_text = (
+        '已启用 · 下次自主闲暇唤醒生效' if leisure_eff
+        else ('已保存开启（受记忆召回总开关关闭抑制）' if (leisure_on and not recall_on)
+              else ('已保存开启（受自然联想总开关关闭抑制）' if leisure_on
+                    else '已关闭 · 自主唤醒不触发联想'))
+    )
+    leisure_detail = (
+        f"独立灰度开关（默认关闭）· 仅在自主闲暇态触发，任务态零干扰"
+        + (f" · 近 {leisure_diag['recent_wakes']} 次唤醒：闲暇 {leisure_diag['leisure_wakes']} / 命中 {leisure_diag['hits']} / 任务拦截 {leisure_diag['task_blocked']}"
+           if leisure_diag['recent_wakes'] > 0 else " · 暂无自主联想运行记录")
+    )
     assoc_status = {
         **assoc_status,
         'status_text': assoc_mode_label,
         'contextual_status_text': ctx_status_text,
+        'leisure_status_text': leisure_status_text,
+        'leisure_diagnostics': leisure_diag,
         'controls': [
             {
                 'id': 'association',
@@ -641,6 +722,17 @@ def overview(hub):
                 'detail': f"候选机制（默认关闭）· 关闭后恢复现行联想机制",
                 'toggle_key': 'association_contextual',
                 'effective_mode': assoc_status['effective_mode'],
+            },
+            {
+                'id': 'association_leisure',
+                'name': '自主闲暇自然联想',
+                'enabled': leisure_on,
+                'effective': leisure_eff,
+                'tone': 'good' if leisure_eff else ('warn' if leisure_on else ''),
+                'status_text': leisure_status_text,
+                'detail': leisure_detail,
+                'toggle_key': 'association_leisure',
+                'effective_mode': 'leisure' if leisure_eff else 'disabled',
             },
         ],
     }
@@ -828,17 +920,31 @@ def toggle_layer(hub, layer_id, enabled):
             actual = bool(_load_layer_switches(store, cfg).get('short_notes', enabled))
             return {'ok': True, 'layer_id': layer_id, 'enabled': actual, 'persisted': True, 'persistence_path': rel}
 
-        if layer_id in ('association', 'association_contextual'):
+        if layer_id in ('association', 'association_contextual', 'association_leisure'):
             mem = getattr(chat, 'memory', None)
-            if mem is not None and hasattr(mem, 'set_association_enabled') and hasattr(mem, 'set_association_contextual_enabled'):
-                status = (mem.set_association_enabled(enabled)
-                          if layer_id == 'association'
-                          else mem.set_association_contextual_enabled(enabled))
-                actual = bool(status['enabled'] if layer_id == 'association' else status['contextual_enabled'])
+            if (mem is not None and hasattr(mem, 'set_association_enabled')
+                    and hasattr(mem, 'set_association_contextual_enabled')):
+                if layer_id == 'association':
+                    status = mem.set_association_enabled(enabled)
+                    actual = bool(status['enabled'])
+                elif layer_id == 'association_contextual':
+                    status = mem.set_association_contextual_enabled(enabled)
+                    actual = bool(status['contextual_enabled'])
+                else:
+                    if hasattr(mem, 'set_leisure_association_enabled'):
+                        status = mem.set_leisure_association_enabled(enabled)
+                    else:
+                        persisted, rel = _save_layer_switch(store, cfg, layer_id, enabled)
+                        if not persisted:
+                            return {'ok': False, 'error': '自主闲暇联想开关无法持久化到磁盘，未修改配置', 'status_code': 503}
+                        actual = bool(_load_layer_switches(store, cfg).get(layer_id, enabled))
+                        return {'ok': True, 'layer_id': layer_id, 'enabled': actual, 'persisted': True, 'persistence_path': rel}
+                    actual = bool(status.get('leisure_enabled', enabled))
                 return {
                     'ok': True,
                     'layer_id': layer_id,
                     'enabled': actual,
+                    'leisure_effective': bool(status.get('leisure_effective', False)),
                     'effective_mode': status['effective_mode'],
                     'recall_association': status,
                     'persisted': True,
@@ -1475,6 +1581,8 @@ def _build_turn_record(row, ctx_by_rid, recall_by_rid, costs_by_rid):
         },
         'cost_cny': round(settled_sum, 6) if has_cost else None,
         'recall': r_dict,
+        'leisure_association': (r_dict.get('leisure_association')
+                                if isinstance(r_dict.get('leisure_association'), dict) else None),
         'recall_evidence_state': 'present' if has_recall_evidence else 'missing',
         'has_actual_hit': has_actual_hit,
         'recall_chain': recall_chain,

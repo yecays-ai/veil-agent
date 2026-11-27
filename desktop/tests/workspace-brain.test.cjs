@@ -32,3 +32,10 @@ test('4 visual themes, detached pin controls, and 3-tier custom CSS hooks are wi
     assert.match(mainSrc, new RegExp(ipc));
   }
 });
+
+test('P6-S6-2 autonomous leisure association status and diagnostics are wired in Brain UI', () => {
+  assert.match(brainSrc, /leisure_status_text/);
+  assert.match(brainSrc, /leisure_diagnostics/);
+  assert.match(brainSrc, /自主闲暇诊断/);
+  assert.match(brainSrc, /自主门控/);
+});
