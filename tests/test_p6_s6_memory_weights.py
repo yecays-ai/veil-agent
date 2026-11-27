@@ -758,8 +758,10 @@ class IntegrityAndRecoveryTests(_Base):
         from veil.brain.storage import brain_backup
         current = self.root / 'current.db'
         target = self.root / 'target.db'
-        make_db(current, [{'id': 'm1', 'title': '旧事', 'importance': 5}])
-        make_db(target, [{'id': 'm1', 'title': '旧事', 'importance': 5}])
+        rows = [{'id': 'm1', 'title': '旧事', 'importance': 5},
+                {'id': 'm2', 'title': '仍在的记忆', 'importance': 5}]
+        make_db(current, rows)
+        make_db(target, rows)
         conn = sqlite3.connect(str(target))
         try:
             conn.execute("INSERT INTO memory_activation(memory_id, delivery_count, distinct_days, "
@@ -769,6 +771,9 @@ class IntegrityAndRecoveryTests(_Base):
             conn.execute("INSERT INTO memory_importance_proposals(proposal_id, memory_id, "
                          "created_at, proposed_importance) VALUES('p1', 'm1', "
                          "'2026-11-01T10:00:00+0800', 6)")
+            conn.execute("INSERT INTO memory_importance_proposals(proposal_id, memory_id, "
+                         "created_at, proposed_importance) VALUES('p2', 'm2', "
+                         "'2026-11-01T10:00:00+0800', 6)")
             conn.commit()
         finally:
             conn.close()
@@ -777,6 +782,10 @@ class IntegrityAndRecoveryTests(_Base):
             conn.execute("INSERT INTO tombstones(memory_id, deleted_at, reason_hash) "
                          "VALUES('m1', '2026-11-02T10:00:00+0800', 'x')")
             conn.execute("DELETE FROM memories WHERE id='m1'")
+            conn.execute("INSERT INTO memory_importance_proposals(proposal_id, memory_id, "
+                         "created_at, status, proposed_importance, decided_at, decided_by) "
+                         "VALUES('p2', 'm2', '2026-11-01T10:00:00+0800', 'rejected', 6, "
+                         "'2026-11-02T10:00:00+0800', 'lan')")
             conn.commit()
         finally:
             conn.close()
@@ -792,6 +801,10 @@ class IntegrityAndRecoveryTests(_Base):
                 "SELECT 1 FROM memories WHERE id='m1'").fetchone())
             self.assertIsNotNone(conn.execute(
                 "SELECT 1 FROM tombstones WHERE memory_id='m1'").fetchone())
+            decision = conn.execute(
+                "SELECT status, decided_by FROM memory_importance_proposals "
+                "WHERE proposal_id='p2'").fetchone()
+            self.assertEqual(tuple(decision), ('rejected', 'lan'))
         finally:
             conn.close()
 
@@ -842,6 +855,55 @@ class IntegrityAndRecoveryTests(_Base):
         index = brain_retrieval.get_index(self.db, settings)
         results = index.search('冷门但重要的共同经历', limit=8, query_vector=[])
         self.assertIn('cold', [item['id'] for item in results])
+
+    def test_first_counted_delivery_fills_first_delivery_at(self):
+        w = self.make([{'id': 'm1'}])
+        w.apply_delivery({'request_id': 'r0', 'injected_ids': ['m1'], 'regenerated': True})
+        self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 0)
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        info = w.activation_map(['m1'])['m1']
+        self.assertEqual(info['deliveries'], 1)
+        self.assertTrue(info['first_delivery_at'])
+
+    def test_pruned_same_day_evidence_does_not_double_count_the_day(self):
+        w = self.make([{'id': 'm1'}])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        conn = sqlite3.connect(str(self.db))
+        try:
+            conn.execute('DELETE FROM memory_delivery_events')
+            conn.commit()
+        finally:
+            conn.close()
+        w.apply_delivery({'request_id': 'r2', 'injected_ids': ['m1']})
+        self.assertEqual(w.activation_map(['m1'])['m1']['distinct_days'], 1)
+        self.clock.value = '2026-11-02T10:00:00+0800'
+        w.apply_delivery({'request_id': 'r3', 'injected_ids': ['m1']})
+        self.assertEqual(w.activation_map(['m1'])['m1']['distinct_days'], 2)
+
+    def test_external_evidence_must_belong_to_the_target_memory(self):
+        w = self.make([{'id': 'm1', 'event_id': 'e1', 'event_title': '自己的经历'},
+                       {'id': 'm2', 'event_id': 'e2', 'event_title': '别人的经历'}])
+        foreign = w.propose('m1', proposed_importance=6, confidence=0.9,
+                            evidence=[{'kind': 'event', 'ref': 'e2'}], auto_apply=True)
+        self.assertEqual(foreign['reason'], 'no_evidence')
+        own = w.propose('m1', proposed_importance=6, confidence=0.9,
+                        evidence=[{'kind': 'event', 'ref': 'e1'}], auto_apply=True)
+        self.assertTrue(own['ok'], own)
+        self.assertTrue(own['applied'])
+
+    def test_activation_disabled_keeps_queued_delivery_until_reenabled(self):
+        from unittest.mock import patch
+        w = self.make([{'id': 'm1'}])
+        with patch.object(w, '_write_connection', side_effect=RuntimeError('locked')):
+            out = w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertEqual(out['status'], 'error')
+        self.assertEqual(len(w._load_retries()), 1)
+        w.update_settings({'activation_enabled': False})
+        self.assertEqual(w.drain_retries(), 0)
+        self.assertEqual(len(w._load_retries()), 1)
+        w.update_settings({'activation_enabled': True})
+        self.assertEqual(w.drain_retries(), 1)
+        self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 1)
 
 class ApiSurfaceTests(_Base):
     def _hub(self, weights):

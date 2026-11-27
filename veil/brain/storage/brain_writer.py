@@ -32,7 +32,8 @@ TABLE_DDLS = (
     'last_request_id TEXT, delivery_count INTEGER NOT NULL DEFAULT 0, '
     'distinct_days INTEGER NOT NULL DEFAULT 0, distinct_sessions INTEGER NOT NULL DEFAULT 0, '
     'activity_score REAL NOT NULL DEFAULT 0, score_updated_at TEXT, updated_at TEXT, '
-    'reeval_pending INTEGER NOT NULL DEFAULT 0)',
+    'reeval_pending INTEGER NOT NULL DEFAULT 0, last_delivered_day TEXT, '
+    'activation_seq INTEGER NOT NULL DEFAULT 0)',
     'CREATE TABLE IF NOT EXISTS memory_delivery_events('
     'event_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, request_id TEXT NOT NULL, '
     'session_key TEXT NOT NULL DEFAULT \'\', delivered_at TEXT NOT NULL, delivered_day TEXT NOT NULL, '
@@ -75,11 +76,22 @@ def now():
     return time.strftime('%Y-%m-%dT%H:%M:%S%z')
 
 
-def _needs_activation_column(connection, present):
+ACTIVATION_COLUMNS = {
+    'reeval_pending': 'INTEGER NOT NULL DEFAULT 0',
+    'last_delivered_day': 'TEXT',
+    'activation_seq': 'INTEGER NOT NULL DEFAULT 0',
+}
+
+
+def _missing_activation_columns(connection, present):
     if 'memory_activation' not in present:
-        return False
+        return []
     columns = {row[1] for row in connection.execute('PRAGMA table_info(memory_activation)')}
-    return 'reeval_pending' not in columns
+    return [name for name in ACTIVATION_COLUMNS if name not in columns]
+
+
+def _needs_activation_column(connection, present):
+    return bool(_missing_activation_columns(connection, present))
 
 
 def ensure_schema(connection):
@@ -104,10 +116,12 @@ def ensure_schema(connection):
             connection.execute(SCHEMA_ADDITIONS[0])
         for ddl in TABLE_DDLS:
             connection.execute(ddl)
-        if _needs_activation_column(connection, present):
-            # Existing role databases from the first S6-1 build gain the crash-recovery marker.
+        for name in _missing_activation_columns(connection, present):
+            # Existing role databases from the first S6-1 build gain the recovery/date/sequence
+            # columns without a destructive rebuild.
             connection.execute(
-                'ALTER TABLE memory_activation ADD COLUMN reeval_pending INTEGER NOT NULL DEFAULT 0')
+                'ALTER TABLE memory_activation ADD COLUMN %s %s'
+                % (name, ACTIVATION_COLUMNS[name]))
         try:
             apply_digest(connection)
         except sqlite3.Error:

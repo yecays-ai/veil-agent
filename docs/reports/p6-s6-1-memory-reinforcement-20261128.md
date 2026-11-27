@@ -10,7 +10,7 @@
 - 保护性衰减只对 `importance <= 6` 且未置顶的**活跃度投影**生效；`importance >= 7` 与 `pinned` 永不衰减；衰减不改重要度、不删除、不隐藏。
 - 活跃度排序是**可选信号**，默认关闭。理由：#455 的 `AB-R5b` 只有 `+1/53` 且无冷门重要样本，证据不足；本单只保证信号可靠，等真实多日送达数据积累后再决定。
 - 隔离真实链路（VEIL Lab，mock，¥0）已验证：送达后更新、重复确认幂等、回滚不增加、重启保留、60 天后低保真衰减而高重要度不动、5→6 自动重评并写版本。
-- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 42 项 Python 测试与 2 项桌面测试，合流 S6-2 后桌面全套 64/64。
+- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 46 项 Python 测试与 3 项桌面测试，合流 S6-2 后桌面全套 64/64。
 
 ## 2. 范围、前置与并行边界
 
@@ -45,8 +45,9 @@
 - 事务：`BEGIN IMMEDIATE`；时间戳在拿到写锁后捕获；聚合/事件/摘要刷新同一事务；`distinct_sessions` 与 `distinct_days` 是持久聚合，不从可裁剪明细重算。
 - 重生成：`regenerated=True` 时记录曝光（`counted=0`）并推进 `last_active`，但不增加强化计数/分数；首次曝光也会留下零计数的激活行，UI 能显示最近活跃。
 - 失败/取消/回滚：不调用 `confirm_delivery()`，不写任何派生行；`rollback_recall()` 只回滚冷却，不触碰记账。自主唤醒只有内部回复、没有真正发给 Lan 时 `activation=False`，S5 冷却照旧但 S6-1 不记账。
-- 重启/瞬时锁：`pending_deliveries` 只在内存；已确认但写库失败的送达进入有界 JSON 重试队列，启动/成功送达时重放，receipt 防重复；`reeval_pending` 让崩溃后的重评在启动时补做。
-- 最终裁剪：请求因长度最终去掉的记忆 ID 会从本轮待确认交付中移除，不计数。
+- 重启/瞬时锁：`pending_deliveries` 只在内存；已确认但写库失败的送达进入有界 JSON 重试队列，启动/成功送达时重放，receipt 防重复；队列保留原 `delivered_at`、写回前重读以免覆盖新条目、停用期间不丢弃；`reeval_pending` + `activation_seq` 让崩溃后的重评在启动时补做，且只清除本次实际评估的那一代标记。
+- 最终裁剪：请求因长度最终去掉的记忆 ID 会从本轮待确认交付中移除，不计数；跨天天数用持久 `last_delivered_day` 判断，不依赖可裁剪明细。
+- 恢复合并：墓碑删除派生行；同名提案把当前库的接受/拒绝/撤回决定同步回恢复库，避免恢复出已拒绝的待审建议。
 - 提案：待审状态上的部分唯一索引 `memory_proposals_pending`；冷却按最近一次提案时间；拒绝冷却从拒绝时刻算；应用后若证据未增加不再重复提；重评在后台线程完成，不占用发送锁。
 
 ### 3.3 保护守卫
@@ -55,7 +56,7 @@
 - 自动应用条件：方向为提升、固定 +1、结果 ≤ 7（配置只能在 5–7 调低）、置信度 ≥ `reeval_min_confidence`、非 `pinned`、非 `locked`，外部建议还必须有已验证的共同经历证据。
 - 降权、进入 8+、锁定/置顶：只生成 `pending`，由 Lan 决定。
 - 任何应用都只写 `importance` 字段，不写正文；`apply_update_memory()` 同时写 `versions` 与 frontmatter；应用/撤回/送达都在同一事务刷新 `meta.digest`。
-- 外部（S6-3）建议必须有存活引用：`event`/`memory`/`relationship`/`delivery`；没有已验证证据直接拒绝，降权/锁定/置顶永远待审，全局自动开关可再收紧。
+- 外部（S6-3）建议必须有存活且**属于该记忆**的引用（event 必须挂在该记忆上，relationship 必须引用该记忆/事件，memory 必须是自身或已有 relation，delivery 必须是该记忆的 receipt）；没有已验证证据直接拒绝，降权/锁定/置顶永远待审，全局自动开关可再收紧。
 - `hard_delete()` 与恢复合并按 `memory_id` 删除四张派生表与该记忆的行。
 
 ## 4. 实现位置
@@ -72,12 +73,12 @@
 | `veil/brain/brain_p4_api.py` | 记忆库投影 `activation/reeval`、活跃度排序、权重状态/设置、提案列表/决策、手动重评 |
 | `veil/server/web_agent.py` | `GET/POST /api/brain/memory-weights`、`GET /memory-proposals`、`POST /memory-proposal`、`POST /memory-reevaluate` |
 | `desktop/workspace-brain.js` | 记忆监控权重面板、记忆详情活跃度/待审/历史/撤回、过滤与排序 |
-| `tests/test_p6_s6_memory_weights.py`（新） | 42 项 |
+| `tests/test_p6_s6_memory_weights.py`（新） | 46 项 |
 | `desktop/tests/memory-weights.test.cjs`（新） | 3 项（含实际渲染记忆详情） |
 
 ## 5. 单元与集成证据
 
-    python -m unittest tests.test_p6_s6_memory_weights -v          # 42 项通过
+    python -m unittest tests.test_p6_s6_memory_weights -v          # 46 项通过
     python -m unittest tests.test_p6_s5_retrieval_judge_association \
       tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store \
       tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget \
@@ -164,16 +165,16 @@
 
 ## 8. 完整回归
 
-- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2555 项，18 失败 + 3 错误 + 29 跳过**。
+- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2559 项，18 失败 + 3 错误 + 29 跳过**。
 - `origin/main = 81dba35` 同命令基线：**2513 项，18 失败 + 3 错误 + 29 跳过**。
-- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 42 项全部来自本单新增测试且通过。
+- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 46 项全部来自本单新增测试且通过。
 
 | 项 | 本分支（合流后） | origin/main = 81dba35 基线 |
 | --- | --- | --- |
-| 测试数 / 失败 / 错误 / 跳过 | 2555 / 18 / 3 / 29 | 2513 / 18 / 3 / 29 |
+| 测试数 / 失败 / 错误 / 跳过 | 2559 / 18 / 3 / 29 | 2513 / 18 / 3 / 29 |
 | 失败/错误名称集合 | 21 个（maintenance / OpenCode / 备份 / APPDATA 桌面数据类） | 21 个，同名同序 |
 | 记忆/检索/Brain 相关失败 | 0 | 0 |
-| 新增测试 | +42（全部通过） | — |
+| 新增测试 | +46（全部通过） | — |
 
 已知既有失败类别（与 #461 记录一致）：Maintenance CRLF、OpenCode 未安装、APPDATA desktop-data、备份组件清单。本单未改这些模块。
 

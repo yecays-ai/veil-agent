@@ -351,6 +351,27 @@ def _merge_new_rows(current_db, target_db):
             names = ', '.join(columns)
             target.execute('INSERT OR REPLACE INTO main.%s(%s) SELECT %s FROM old.%s' %
                            (table, names, names, table))
+        # P6-S6-1: a proposal that was rejected/reverted after the backup must not come back as
+        # pending from the backup. Synchronize decisions for proposals present on both sides; do
+        # not invent proposals that only exist in the live database.
+        try:
+            shared = [row[0] for row in target.execute(
+                'SELECT proposal_id FROM main.memory_importance_proposals '
+                'WHERE proposal_id IN (SELECT proposal_id FROM old.memory_importance_proposals)')]
+            for proposal_id in shared:
+                source = current.execute(
+                    'SELECT status,auto_applied,applied_at,version_seq,decided_at,decided_by,note '
+                    'FROM memory_importance_proposals WHERE proposal_id=?',
+                    (proposal_id,)).fetchone()
+                if source is None:
+                    continue
+                target.execute(
+                    'UPDATE main.memory_importance_proposals SET status=?,auto_applied=?,'
+                    'applied_at=?,version_seq=?,decided_at=?,decided_by=?,note=? '
+                    'WHERE proposal_id=?', (*source, proposal_id))
+            counts['importance_proposals'] = len(shared)
+        except sqlite3.Error:
+            counts['importance_proposals'] = 0
         new_memory_ids = {row[0] for row in target.execute(
             'SELECT id FROM old.memories WHERE id NOT IN (SELECT id FROM main.memories)')}
         new_event_ids = {row[0] for row in target.execute(

@@ -2398,8 +2398,14 @@
       host.replaceChildren(wrap);
     }
 
-    const { data } = await reqJson(req, '/api/brain/health');
-    await drawHealth(data || {});
+    const healthRes = await reqJson(req, '/api/brain/health');
+    if (!healthRes.ok || !healthRes.data) {
+      // Do not render a writable settings form from defaults after a failed read: a later save
+      // would silently overwrite the real schedule. Show the failure and let the user retry.
+      host.replaceChildren(renderEmptyState('暂时无法读取健康巡检数据', '请检查后端服务后重新打开本页。'));
+      return;
+    }
+    await drawHealth(healthRes.data);
   }
 
   window.veilBrain = {

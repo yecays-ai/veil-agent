@@ -439,6 +439,9 @@ class MemoryWeights:
             'carried_ids': [str(k) for k in (event.get('carried_ids') or []) if isinstance(k, str)],
             'session_key': str(event.get('session_key') or ''),
             'regenerated': bool(event.get('regenerated')),
+            # Preserve the original delivery time across a retry; otherwise an overnight failure
+            # would be counted on the replay day.
+            'delivered_at': str(event.get('delivered_at') or self._now()),
         }
         if not any(payload[key] for key in
                    ('injected_ids', 'opening_ids', 'association_ids', 'carried_ids')):
@@ -477,27 +480,40 @@ class MemoryWeights:
             with self.mutex:
                 self._retry_thread = None
 
+    @staticmethod
+    def _retry_identity(event):
+        return (str(event.get('request_id') or ''),
+                tuple(event.get('injected_ids') or []),
+                tuple(event.get('opening_ids') or []),
+                tuple(event.get('association_ids') or []),
+                tuple(event.get('carried_ids') or []))
+
     def drain_retries(self, limit=10):
         """Replay queued deliveries; returns the number that reached a terminal state."""
         with self.mutex:
             events = self._load_retries()
             if not events:
                 return 0
-        remaining = list(events)
+        finished = set()
         done = 0
         for event in list(events)[:max(1, int(limit))]:
             try:
                 result = self.apply_delivery(event, _retry=True)
             except Exception:
                 continue
-            if result.get('status') in ('applied', 'duplicate', 'skipped'):
-                try:
-                    remaining.remove(event)
-                except ValueError:
-                    pass
+            if result.get('status') in ('applied', 'duplicate'):
+                finished.add(self._retry_identity(event))
                 done += 1
+            elif (result.get('status') == 'skipped'
+                  and result.get('reason') == 'nothing_delivered'):
+                finished.add(self._retry_identity(event))
+                done += 1
+        # Re-read before writing: a chat thread may have appended a newer delivery while this
+        # worker was replaying the old queue. Never overwrite that newer entry with a stale list.
         with self.mutex:
-            self._save_retries(remaining)
+            latest = self._load_retries()
+            self._save_retries([event for event in latest
+                                if self._retry_identity(event) not in finished])
         return done
 
     def apply_delivery(self, event, *, _retry=False):
@@ -546,7 +562,8 @@ class MemoryWeights:
                 connection.execute('BEGIN IMMEDIATE')
                 # Capture the timestamp INSIDE the write transaction: two concurrent confirmations
                 # of the same memory must never let the older stamp overwrite the newer activity.
-                stamp = self._now()
+                # A retried delivery keeps its original delivery time instead of the replay time.
+                stamp = str(event.get('delivered_at') or '').strip() or self._now()
                 day = _day_of(stamp) or stamp[:10]
                 counters = {'counted_ids': [], 'duplicate_ids': [], 'updated_ids': []}
                 digest_changed = False
@@ -582,36 +599,54 @@ class MemoryWeights:
                         counters['duplicate_ids'].append(memory_id)
                         continue
                     digest_changed = True
+                    activation = connection.execute(
+                        'SELECT activity_score, score_updated_at, delivery_count, distinct_days, '
+                        'distinct_sessions, last_active, last_delivery_at, last_request_id, '
+                        'last_delivered_day FROM memory_activation WHERE memory_id=?',
+                        (memory_id,)).fetchone()
+                    delivery_time = parse_time(stamp)
+                    prior_active = parse_time(activation['last_active']) if activation else None
+                    prior_delivery = parse_time(activation['last_delivery_at']) if activation else None
+                    recency_stamp = stamp
+                    if prior_active is not None and delivery_time is not None and prior_active > delivery_time:
+                        recency_stamp = activation['last_active'] or stamp
+                    last_delivery_stamp = stamp
+                    request_for_recency = request_id
+                    if prior_delivery is not None and delivery_time is not None and prior_delivery > delivery_time:
+                        last_delivery_stamp = activation['last_delivery_at'] or stamp
+                        request_for_recency = activation['last_request_id'] or request_id
+                    write_stamp = self._now()
                     if not counted:
                         # A regenerated reply is a real exposure but not a new reinforcement: keep
                         # the factual recency timestamp, do not grow the counters or the score.
                         # An activation row with zero counters lets the UI show that recency even
                         # when this is the memory's first appearance.
-                        connection.execute(
-                            'INSERT INTO memory_activation(memory_id,last_active,updated_at,'
-                            'score_updated_at) VALUES(?,?,?,?) '
-                            'ON CONFLICT(memory_id) DO UPDATE SET last_active=excluded.last_active,'
-                            'updated_at=excluded.updated_at',
-                            (memory_id, stamp, stamp, stamp))
-                        connection.execute('UPDATE memories SET last_active=? WHERE id=?',
-                                           (stamp, memory_id))
+                        if activation is None:
+                            connection.execute(
+                                'INSERT INTO memory_activation(memory_id,last_active,updated_at,'
+                                'score_updated_at) VALUES(?,?,?,?)',
+                                (memory_id, recency_stamp, write_stamp, write_stamp))
+                        else:
+                            connection.execute(
+                                'UPDATE memory_activation SET last_active=?, updated_at=? '
+                                'WHERE memory_id=?',
+                                (recency_stamp, write_stamp, memory_id))
+                        if prior_active is None or delivery_time is None or prior_active <= delivery_time:
+                            connection.execute(
+                                'UPDATE memories SET last_active=? WHERE id=?', (stamp, memory_id))
                         continue
-                    activation = connection.execute(
-                        'SELECT activity_score, score_updated_at, delivery_count, distinct_days '
-                        'FROM memory_activation WHERE memory_id=?', (memory_id,)).fetchone()
                     score = (activation['activity_score'] if activation else 0.0)
                     updated_at = (activation['score_updated_at'] if activation else None) or stamp
                     base = effective_score(
                         score, updated_at, row['importance'], row['pinned'],
                         half_life_days=values['decay_half_life_days'],
-                        now=parse_time(stamp), decay_enabled=values['decay_enabled'])
+                        now=delivery_time, decay_enabled=values['decay_enabled'])
                     weight = 0.5 if kind == 'carried' else 1.0
                     new_score = min(float(values['activity_cap']), base + weight)
                     prior_days = _as_int(activation['distinct_days']) if activation else 0
-                    same_day = connection.execute(
-                        'SELECT 1 FROM memory_delivery_events WHERE memory_id=? AND delivered_day=? '
-                        'AND counted=1 AND event_key<>? LIMIT 1',
-                        (memory_id, day, event_key)).fetchone() is not None
+                    # Persisted last day, not the prunable event ledger: trimming old evidence
+                    # must never make the same calendar day count twice.
+                    same_day = bool(activation and activation['last_delivered_day'] == day)
                     distinct_days = prior_days + (0 if same_day else 1)
                     session_new = False
                     if session_key:
@@ -623,21 +658,28 @@ class MemoryWeights:
                     connection.execute(
                         'INSERT INTO memory_activation(memory_id,last_active,last_delivery_at,'
                         'first_delivery_at,last_request_id,delivery_count,distinct_days,'
-                        'distinct_sessions,activity_score,score_updated_at,updated_at,reeval_pending) '
-                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(memory_id) DO UPDATE SET '
+                        'distinct_sessions,activity_score,score_updated_at,updated_at,reeval_pending,'
+                        'last_delivered_day,activation_seq) '
+                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(memory_id) DO UPDATE SET '
                         'last_active=excluded.last_active,last_delivery_at=excluded.last_delivery_at,'
+                        'first_delivery_at=COALESCE(memory_activation.first_delivery_at,'
+                        'excluded.first_delivery_at),'
                         'last_request_id=excluded.last_request_id,'
                         'delivery_count=memory_activation.delivery_count+1,'
                         'distinct_days=excluded.distinct_days,'
                         'distinct_sessions=memory_activation.distinct_sessions + ?,'
                         'activity_score=excluded.activity_score,'
                         'score_updated_at=excluded.score_updated_at,updated_at=excluded.updated_at,'
-                        'reeval_pending=MAX(memory_activation.reeval_pending, ?)',
-                        (memory_id, stamp, stamp, stamp, request_id, 1, distinct_days,
-                         1 if session_key else 0, new_score, stamp, stamp, pending_flag,
-                         1 if session_new else 0, pending_flag))
-                    connection.execute('UPDATE memories SET last_active=? WHERE id=?',
-                                       (stamp, memory_id))
+                        'reeval_pending=MAX(memory_activation.reeval_pending, ?),'
+                        'last_delivered_day=excluded.last_delivered_day,'
+                        'activation_seq=memory_activation.activation_seq+1',
+                        (memory_id, recency_stamp, last_delivery_stamp, stamp,
+                         request_for_recency, 1, distinct_days,
+                         1 if session_key else 0, new_score, stamp, write_stamp, pending_flag,
+                         day, 1, 1 if session_new else 0, pending_flag))
+                    if prior_active is None or delivery_time is None or prior_active <= delivery_time:
+                        connection.execute(
+                            'UPDATE memories SET last_active=? WHERE id=?', (stamp, memory_id))
                     counters['counted_ids'].append(memory_id)
                     counters['updated_ids'].append(memory_id)
                 self._prune(connection, int(values['delivery_event_keep']))
@@ -694,13 +736,15 @@ class MemoryWeights:
         try:
             with self._read_connection() as connection:
                 rows = connection.execute(
-                    'SELECT memory_id FROM memory_activation WHERE reeval_pending=1 '
-                    'ORDER BY updated_at, memory_id LIMIT ?', (max(1, int(limit)),)).fetchall()
+                    'SELECT memory_id, activation_seq FROM memory_activation '
+                    'WHERE reeval_pending=1 ORDER BY updated_at, memory_id LIMIT ?',
+                    (max(1, int(limit)),)).fetchall()
         except (sqlite3.Error, FileNotFoundError):
             return []
         proposals = []
         for row in rows:
             memory_id = row['memory_id']
+            sequence = _as_int(row['activation_seq'])
             try:
                 result = self._reevaluate(memory_id, trigger='delivery', force=False)
             except Exception:
@@ -714,9 +758,12 @@ class MemoryWeights:
             try:
                 with self._write_connection() as connection:
                     connection.execute('BEGIN IMMEDIATE')
+                    # Only clear the marker observed for this evaluation. A delivery that arrived
+                    # while the review ran increments activation_seq and keeps its own marker.
                     connection.execute(
-                        'UPDATE memory_activation SET reeval_pending=0 WHERE memory_id=?',
-                        (memory_id,))
+                        'UPDATE memory_activation SET reeval_pending=0 '
+                        'WHERE memory_id=? AND activation_seq=?',
+                        (memory_id, sequence))
                     connection.commit()
             except Exception:
                 pass
@@ -743,9 +790,22 @@ class MemoryWeights:
             self._review_thread = thread
         thread.start()
 
+    def pending_reeval_count(self):
+        try:
+            with self._read_connection() as connection:
+                return connection.execute(
+                    'SELECT COUNT(*) FROM memory_activation WHERE reeval_pending=1').fetchone()[0]
+        except (sqlite3.Error, FileNotFoundError):
+            return 0
+
     def _review_worker(self):
         try:
-            self.drain_pending_reeval(limit=8)
+            # A delivery can set a marker after the worker's first read but while the worker is
+            # still alive; schedule() would then return early. Loop until the queue is empty.
+            for _ in range(4):
+                if self.pending_reeval_count() <= 0:
+                    break
+                self.drain_pending_reeval(limit=8)
         except Exception:
             pass
         finally:
@@ -1069,13 +1129,22 @@ class MemoryWeights:
                 'importance': target, 'previous': current, 'version_seq': seq,
                 'proposal_id': proposal_id, 'auto_applied': by == 'auto'}
 
-    def _validated_external_evidence(self, connection, evidence):
-        """Only real, already-stored references can support an external (S6-3) suggestion."""
+    def _validated_external_evidence(self, connection, evidence, memory_id):
+        """Only real references tied to THIS memory can support an external (S6-3) suggestion."""
         if not isinstance(evidence, (list, tuple)):
             return []
+        relationship_index = self._relationship_index()
+        event_row = None
+        try:
+            event_row = connection.execute(
+                'SELECT event_id FROM events WHERE memory_id=? ORDER BY rowid DESC LIMIT 1',
+                (memory_id,)).fetchone()
+        except sqlite3.Error:
+            event_row = None
         relationship_ids = set()
-        for items in self._relationship_index().values():
-            for item in items:
+        for key in ('memory:%s' % memory_id,
+                    'event:%s' % (event_row['event_id'] if event_row else '')):
+            for item in relationship_index.get(key) or []:
                 if item.get('id'):
                     relationship_ids.add(item['id'])
         cleaned = []
@@ -1089,17 +1158,24 @@ class MemoryWeights:
             try:
                 if kind == 'event':
                     exists = connection.execute(
-                        'SELECT 1 FROM events WHERE event_id=? LIMIT 1', (ref,)).fetchone()
+                        'SELECT 1 FROM events WHERE event_id=? AND memory_id=? LIMIT 1',
+                        (ref, memory_id)).fetchone()
                 elif kind == 'memory':
-                    exists = connection.execute(
-                        'SELECT 1 FROM memories WHERE id=? AND is_tombstone=0 AND is_deleted=0 '
-                        'LIMIT 1', (ref,)).fetchone()
+                    if ref == memory_id:
+                        exists = connection.execute(
+                            'SELECT 1 FROM memories WHERE id=? AND is_tombstone=0 AND is_deleted=0 '
+                            'LIMIT 1', (ref,)).fetchone()
+                    else:
+                        exists = connection.execute(
+                            'SELECT 1 FROM relations WHERE memory_id=? AND target_id=? LIMIT 1',
+                            (memory_id, ref)).fetchone()
                 elif kind == 'relationship':
                     exists = ref in relationship_ids
                 else:
                     exists = connection.execute(
-                        'SELECT 1 FROM memory_delivery_receipts WHERE request_id=? OR event_key=? '
-                        'LIMIT 1', (ref, ref)).fetchone()
+                        'SELECT 1 FROM memory_delivery_receipts WHERE memory_id=? '
+                        'AND (request_id=? OR event_key=?) LIMIT 1',
+                        (memory_id, ref, ref)).fetchone()
             except sqlite3.Error:
                 continue
             if not exists:
@@ -1123,7 +1199,7 @@ class MemoryWeights:
                     return {'ok': False, 'reason': 'memory_missing'}
                 external = proposed is not None
                 if external:
-                    cleaned = self._validated_external_evidence(connection, evidence)
+                    cleaned = self._validated_external_evidence(connection, evidence, memory_id)
                     if not cleaned:
                         connection.rollback()
                         return {'ok': False, 'reason': 'no_evidence'}

@@ -83,8 +83,8 @@
 - `confirm_delivery()` 把最终注入的 `injected_ids` / `opening_ids` / `association_ids` / `carried_ids` 交给 `MemoryWeights.apply_delivery()`；同一 `(request_id, memory_id)` 重放返回 `duplicate`，不改计数。
 - 重生成：仍记录"真实曝光"并推进 `last_active`，但 `counted=0`，不增加强化次数/活跃度分数。
 - 记账在一个 `BEGIN IMMEDIATE` 事务内完成；SQLite 跨进程串行化，`INSERT OR IGNORE` 负责幂等。任何异常只写诊断、不抛回聊天。
-- 瞬时存储失败（锁/冻结）把已确认的送达写入本机有界重试队列（`memory/_agent/activation-retry.json`，只含 ID），下次启动或成功送达时重放；重放仍受 receipt 幂等保护。
-- 送达后的重评在后台线程完成；崩溃或提前退出由 `reeval_pending` 标记在下次启动补做，不在发送锁内逐条等待。
+- 瞬时存储失败（锁/冻结）把已确认的送达写入本机有界重试队列（`memory/_agent/activation-retry.json`，只含 ID 与原送达时间），下次启动或成功送达时重放；写回前重读队列，停用期间保留条目，重放仍受 receipt 幂等保护。
+- 送达后的重评在后台线程完成；崩溃或提前退出由 `reeval_pending` + `activation_seq` 标记在下次启动补做，且只清除本次实际评估的代次，不在发送锁内逐条等待。
 - 只统计仍可见、未归档、未删除、且最终真的进入请求/送达的记忆；预算最终裁剪掉的 ID 会从本轮待确认交付里移除；不做跨请求内存共享。
 
 ### 4.3 保护性衰减（派生投影，不是写库衰减）
@@ -129,7 +129,7 @@
 
 ## 五、验证证据
 
-- 单元/集成：`tests/test_p6_s6_memory_weights.py`（42 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
+- 单元/集成：`tests/test_p6_s6_memory_weights.py`（46 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
 - 桌面：合流 S6-2 后 `desktop/tests/*.test.cjs` 64/64 通过（本单 3 项 + S6-2 1 项；含实际渲染记忆详情）。
 - 回归：完整 Python 套件与 `origin/main` 基线失败集合对比（见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。
 - VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（最终代码 `612f6388...`），快照均为 `peter-20261127T170245 / r3`，mock、¥0；三次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→约 0.244、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；最终 run `digest_valid=true`、receipt 重放 `duplicate`、重要度/可见性/存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
