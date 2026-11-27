@@ -92,14 +92,21 @@
   }
 
   async function reqJson(req, url, options) {
-    const res = await req(url, options);
-    let data = null;
+    // A dropped connection must surface as a failed request, not as an unhandled rejection that
+    // leaves a just-disabled control impossible to retry. Write requests are never auto-retried:
+    // the server may already have committed.
     try {
-      data = await res.json();
-    } catch {
-      data = null;
+      const res = await req(url, options);
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      return { ok: false, status: 0, data: null, error: err };
     }
-    return { ok: res.ok, status: res.status, data };
   }
 
   function buildLineDiffNode(diffLines) {
@@ -283,7 +290,7 @@
         min: 1, max: 720, step: 1, detail: '同一条记忆两次重评之间的最小间隔。',
       }, v => { draft.reeval_cooldown_hours = v; }),
       memoryNumberRow('自动上限重要度', draft.reeval_max_auto_importance, {
-        min: 5, max: 9, step: 1, detail: '自动提升不会越过这个值；更高区间需要你确认。',
+        min: 5, max: 7, step: 1, detail: '自动提升不会越过这个值，硬上限 7；更高区间需要你确认。',
       }, v => { draft.reeval_max_auto_importance = v; }),
     );
     const actions = el('div', 'workspace-links');

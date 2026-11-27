@@ -10,7 +10,7 @@
 - 保护性衰减只对 `importance <= 6` 且未置顶的**活跃度投影**生效；`importance >= 7` 与 `pinned` 永不衰减；衰减不改重要度、不删除、不隐藏。
 - 活跃度排序是**可选信号**，默认关闭。理由：#455 的 `AB-R5b` 只有 `+1/53` 且无冷门重要样本，证据不足；本单只保证信号可靠，等真实多日送达数据积累后再决定。
 - 隔离真实链路（VEIL Lab，mock，¥0）已验证：送达后更新、重复确认幂等、回滚不增加、重启保留、60 天后低保真衰减而高重要度不动、5→6 自动重评并写版本。
-- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 26 项 Python 测试与 2 项桌面测试，合流 S6-2 后桌面全套 63/63。
+- 完整 Python 套件失败集合与 `origin/main` 基线一致（见第 8 节）；新增 41 项 Python 测试与 2 项桌面测试，合流 S6-2 后桌面全套 64/64。
 
 ## 2. 范围、前置与并行边界
 
@@ -41,45 +41,48 @@
 
 ### 3.2 幂等键与竞态
 
-- 事件键：`sha256(request_id + '|' + memory_id)`，主键；`INSERT OR IGNORE` 后 `rowcount==0` 即重放。
-- 事务：`BEGIN IMMEDIATE`；SQLite 跨进程串行化；聚合更新与事件插入同一事务。
-- 重生成：`regenerated=True` 时记录曝光（`counted=0`）并推进 `last_active`，但不增加强化计数/分数。
-- 失败/取消/回滚：不调用 `confirm_delivery()`，不写任何派生行；`rollback_recall()` 只回滚冷却，不触碰记账。
-- 重启：`pending_deliveries` 只在内存；重启后旧的确认不会重放；账本主键仍防重复。
-- 提案：待审状态上的部分唯一索引 `memory_proposals_pending`；冷却按最近一次提案时间；应用后若证据未增加不再重复提。
+- 事件键：`sha256(request_id + '|' + memory_id)`，主键；明细在 `memory_delivery_events`，不参与淘汰的 `memory_delivery_receipts` 负责长期幂等。
+- 事务：`BEGIN IMMEDIATE`；时间戳在拿到写锁后捕获；聚合/事件/摘要刷新同一事务；`distinct_sessions` 与 `distinct_days` 是持久聚合，不从可裁剪明细重算。
+- 重生成：`regenerated=True` 时记录曝光（`counted=0`）并推进 `last_active`，但不增加强化计数/分数；首次曝光也会留下零计数的激活行，UI 能显示最近活跃。
+- 失败/取消/回滚：不调用 `confirm_delivery()`，不写任何派生行；`rollback_recall()` 只回滚冷却，不触碰记账。自主唤醒只有内部回复、没有真正发给 Lan 时 `activation=False`，S5 冷却照旧但 S6-1 不记账。
+- 重启/瞬时锁：`pending_deliveries` 只在内存；已确认但写库失败的送达进入有界 JSON 重试队列，启动/成功送达时重放，receipt 防重复；`reeval_pending` 让崩溃后的重评在启动时补做。
+- 最终裁剪：请求因长度最终去掉的记忆 ID 会从本轮待确认交付中移除，不计数。
+- 提案：待审状态上的部分唯一索引 `memory_proposals_pending`；冷却按最近一次提案时间；拒绝冷却从拒绝时刻算；应用后若证据未增加不再重复提；重评在后台线程完成，不占用发送锁。
 
 ### 3.3 保护守卫
 
 - `is_protected(importance, pinned) = pinned or importance >= 7`。
-- 自动应用条件：方向为提升、单步、结果 ≤ `reeval_max_auto_importance`（默认 7）、置信度 ≥ `reeval_min_confidence`、非 `pinned`、非 `locked`。
+- 自动应用条件：方向为提升、固定 +1、结果 ≤ 7（配置只能在 5–7 调低）、置信度 ≥ `reeval_min_confidence`、非 `pinned`、非 `locked`，外部建议还必须有已验证的共同经历证据。
 - 降权、进入 8+、锁定/置顶：只生成 `pending`，由 Lan 决定。
-- 任何应用都只写 `importance` 字段，不写正文；`apply_update_memory()` 同时写 `versions` 与 frontmatter。
-- `hard_delete()` 在同事务删除三张派生表里该记忆的行。
+- 任何应用都只写 `importance` 字段，不写正文；`apply_update_memory()` 同时写 `versions` 与 frontmatter；应用/撤回/送达都在同一事务刷新 `meta.digest`。
+- 外部（S6-3）建议必须有存活引用：`event`/`memory`/`relationship`/`delivery`；没有已验证证据直接拒绝，降权/锁定/置顶永远待审，全局自动开关可再收紧。
+- `hard_delete()` 与恢复合并按 `memory_id` 删除四张派生表与该记忆的行。
 
 ## 4. 实现位置
 
 | 文件 | 改动 |
 | --- | --- |
 | `veil/brain/memory_weights.py`（新） | 设置校验/持久化、送达记账、衰减投影、证据评估、提案/决策/撤回、统一 `propose()` 接口 |
-| `veil/brain/storage/brain_writer.py` | 三张派生表 DDL、索引、待审唯一约束；硬删除清理 |
-| `veil/brain/memory_agent.py` | 构造 `weights`；`confirm_delivery(request_id, session_key, regenerated)` 接送达；`search_candidates()` 合并可选排序设置；生命周期诊断写入 `effective_used/activity` |
-| `veil/core/veil_agent.py` | `send()` 交付确认时传会话键与重生成标记；异常向后兼容 |
+| `veil/brain/storage/brain_writer.py` | 四张派生表 DDL、索引、待审唯一约束、`reeval_pending` 迁移；硬删除清理 |
+| `veil/brain/storage/brain_backup.py` | 恢复合并按墓碑删除派生行 |
+| `veil/brain/memory_agent.py` | 构造 `weights`；`confirm_delivery(request_id, session_key, regenerated, activation)` 接送达；预算最终裁剪同步移除待确认 ID；`search_candidates()` 合并可选排序设置；生命周期诊断写入 `effective_used/activity` |
+| `veil/core/veil_agent.py` | `_finalize_recall_delivery()` 交付确认时传会话键、重生成标记与用户可见标志；异常向后兼容 |
 | `veil/brain/recall/brain_retrieval.py` | 可选 `activation_ranking\(_enabled\)` 排序项与诊断；默认关闭 |
 | `veil/brain/storage/brain_authority.py` | 工具检索复用同一组 UI 设置 |
 | `veil/brain/brain_p4_api.py` | 记忆库投影 `activation/reeval`、活跃度排序、权重状态/设置、提案列表/决策、手动重评 |
 | `veil/server/web_agent.py` | `GET/POST /api/brain/memory-weights`、`GET /memory-proposals`、`POST /memory-proposal`、`POST /memory-reevaluate` |
 | `desktop/workspace-brain.js` | 记忆监控权重面板、记忆详情活跃度/待审/历史/撤回、过滤与排序 |
-| `tests/test_p6_s6_memory_weights.py`（新） | 26 项 |
-| `desktop/tests/memory-weights.test.cjs`（新） | 2 项 |
+| `tests/test_p6_s6_memory_weights.py`（新） | 41 项 |
+| `desktop/tests/memory-weights.test.cjs`（新） | 3 项（含实际渲染记忆详情） |
 
 ## 5. 单元与集成证据
 
-    python -m unittest tests.test_p6_s6_memory_weights -v          # 26 项通过
+    python -m unittest tests.test_p6_s6_memory_weights -v          # 41 项通过
     python -m unittest tests.test_p6_s5_retrieval_judge_association \
       tests.test_brain_retrieval tests.test_brain_writer tests.test_brain_store \
       tests.test_p4_p5_brain_routes tests.test_p6_s6_chat_evidence_budget \
       tests.test_p6_s6_idempotent_writes tests.test_p3_1_brain_only     # 98 项通过
-    node --test desktop/tests/*.test.cjs                            # 63/63 通过
+    node --test desktop/tests/*.test.cjs                            # 64/64 通过
 
 覆盖的关键场景：
 
@@ -104,9 +107,9 @@
 
 ## 6. VEIL Lab 真实运行链路
 
-- Run：`s6-1-activation-20261128T004338`（`veil-lab/runs/s6-1-activation-20261128T004338`）
+- Run：`s6-1-activation-20261128T004338`（`veil-lab/runs/s6-1-activation-20261128T004338`，含回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（`veil-lab/runs/s6-1-final-20261128T023357`，最终代码）
 - 快照：`peter-20261127T170245 / r3`（2026-11-28 00:42 刷新，正式目录无变化）
-- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；合流 S6-2 前 `code_sha256 = 44ddcdff...`，合流 `main = 81dba35` 后重新复制为 `code_sha256 = 8488cfb249479e2baeb43e3917e2bce86dc37d5068cac02b52f5491441018418`；两次 `run verify` 均通过。
+- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；合流 S6-2 前 `code_sha256 = 44ddcdff...`，合流 `main = 81dba35` 后为 `8488cfb2...`，最终干净 run 为 `612f638837fc52794e343d69a6121efc8cec3b0942ae5056fa0a2fe1fad7282a`；三次 `run verify` 均通过。
 - 模式：mock（不调用模型、不花钱）；实验变量：`memory.recall_judge.enabled=false`、离线检索 `weight_vector=0.0 / weight_keyword=1.0`（让合成的 `S61LAB` 记忆可被检索；不影响送达/记账逻辑）
 - 合成数据（仅实验副本）：记忆 `s61laba`（imp5，事件+意义+为什么）、`s61labb`（imp8）、`s61labc`（imp5，无事件/意义）；事件 `s61lab-ev-a`；关系条目 `s61lab-rel`（`confirmed`，引用 `event:s61lab-ev-a`）
 - 代码版本漂移说明：快照钉住的代码是 `2a264a7`，早于 S3；本分支的 S3 证据校验不再注入快照里那条无来源的 `uncertain` 关系条目，导致首次 `run verify` 缺少 `relationship_base`。为让核验对照成立，在实验副本里额外加了一条 `source='lan'`、`locked=true` 的合成关系条目（`s61-lab-rel`），之后 `run verify` 通过。这是快照代码与当前分支的差异，不是本单引入的运行回归；详见第 7 节。
@@ -130,9 +133,14 @@
                              b 2.0（imp8 保护，不衰减）；重要度仍 6/8/5；当日无重复提案（冷却生效）
     新增真实记忆激活: activation 行 13→28，均只记 ID/计数，未读取或输出正文
 
+    最终干净 run s6-1-final-20261128T023357（code_sha256=612f6388...，verify 通过）:
+    digest_valid=true；duplicate 重放 status=duplicate、计数不变；proposal applied 5→6（version 287）；
+    60 天后 s61fa/c score=0.2437 display=11 decayed=true，s61fb score=1.0 protected=true；
+    重要度 6/8/5，is_deleted=0/is_tombstone=0，versions(s61fa)=1，receipts=9
+
 ### 6.2 真实链路验证命令（可复现）
 
-    cd E:\Peter-Agent\VEIL\veil-lab
+    cd veil-lab        # 从工作区根目录进入实验环境
     ..\veil-agent\.venv\Scripts\python.exe -m veil_lab run verify s6-1-activation-20261128T004338
     ..\veil-agent\.venv\Scripts\python.exe -m veil_lab run chat s6-1-activation-20261128T004338 --message "S61LAB ..."
 
@@ -156,9 +164,9 @@
 
 ## 8. 完整回归
 
-- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2539 项，18 失败 + 3 错误 + 29 跳过**。
+- 本分支完整套件（已合流 S6-2）：`python -m unittest discover -s tests -v`，**2541 项，18 失败 + 3 错误 + 29 跳过**。
 - `origin/main = 81dba35` 同命令基线：**2513 项，18 失败 + 3 错误 + 29 跳过**。
-- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 26 项全部来自本单新增测试且通过。
+- 两边失败/错误名称集合 **21/21 完全一致**（`comm` 双向差集为空）；多出的 41 项全部来自本单新增测试且通过。
 
 | 项 | 本分支（合流后） | origin/main = 81dba35 基线 |
 | --- | --- | --- |
@@ -175,8 +183,12 @@
 - 重评触发器只有"送达后"和"手动/API"；没有夜间批量、没有跨会话模型巩固（S6-3）。
 - 自动提升上限为 7；8+、降权、锁定/置顶均需 Lan 确认。
 - 衰减只作用于活跃度投影，不写 `importance`；没有"遗忘删除"。
-- 投递事件有界（默认 20000 条，可调），淘汰只删最旧事件，不改聚合计数；重评提案为保留审计暂不自动清理，长期运行需按实际节奏再评估上限。
-- `brain_backup` 的“备份后新增记录合并”只合并记忆内容相关表；派生激活/提案不会从源库补进恢复后的库，恢复后从下一次真实送达重新积累，不伪造历史。
+- 投递明细有界（默认 20000 条，可调），淘汰只删最旧明细；幂等 receipt 与 `distinct_days/distinct_sessions` 聚合不随明细淘汰，旧请求重放不会重复计数；receipt 长期增长（约每条送达一行），需按实际节奏再评估上限。
+- 重评提案为保留审计暂不自动清理；`reeval_pending` 标记最多由启动时前 5 条补做，剩余等后续送达；后台线程不保证进程被杀时立即完成。
+- 瞬时存储失败进入最多 100 条的本机重试队列；队列本身写失败（磁盘满/目录只读）时只能记诊断，该次激活丢失但不产生虚假强化。
+- `brain_backup` 的“备份后新增记录合并”只合并记忆内容相关表；恢复合并会按墓碑删除派生行，但不从源库补入恢复点之后的派生激活/提案，之后从真实送达重新积累，不伪造历史。
+- 重评提案的拒绝冷却从拒绝时刻计算；接受时若记忆已被手动改动，待审建议会标记 `superseded`（需要重新评估），不会静默覆盖用户改动。
+- 自主闲暇（S6-2）只有真正发给 Lan 的消息才计入本单活跃度；内部回复不计数。
 - 实验脚本与合成数据只在 veil-lab 本地；未提交、未外发。
 - 未验证/未覆盖：真实主聊天模型下 judge 与 S6-1 的联合行为（本单不改 judge）；S6-2 合流后的记忆监控页布局；多日真实日常下的重评节奏；Windows 真机 UI 手工体验（由 Lan 验收）。
 

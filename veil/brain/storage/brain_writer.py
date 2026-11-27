@@ -20,7 +20,8 @@ SCHEMA_ADDITIONS = (
 # that import/verify must compare. hard_delete() still erases a memory's rows in one transaction so a
 # user deletion never leaves copies of the memory behind.
 TABLE_NAMES = ('tombstones', 'delete_requests', 'write_journal', 'experience_recoveries',
-               'memory_activation', 'memory_delivery_events', 'memory_importance_proposals')
+               'memory_activation', 'memory_delivery_events', 'memory_delivery_receipts',
+               'memory_importance_proposals')
 TABLE_DDLS = (
     'CREATE TABLE IF NOT EXISTS tombstones(memory_id TEXT PRIMARY KEY, deleted_at TEXT, reason_hash TEXT)',
     'CREATE TABLE IF NOT EXISTS delete_requests(request_id TEXT PRIMARY KEY, memory_id TEXT, reason TEXT, status TEXT, created_at TEXT, raw_json TEXT)',
@@ -30,7 +31,8 @@ TABLE_DDLS = (
     'memory_id TEXT PRIMARY KEY, last_active TEXT, last_delivery_at TEXT, first_delivery_at TEXT, '
     'last_request_id TEXT, delivery_count INTEGER NOT NULL DEFAULT 0, '
     'distinct_days INTEGER NOT NULL DEFAULT 0, distinct_sessions INTEGER NOT NULL DEFAULT 0, '
-    'activity_score REAL NOT NULL DEFAULT 0, score_updated_at TEXT, updated_at TEXT)',
+    'activity_score REAL NOT NULL DEFAULT 0, score_updated_at TEXT, updated_at TEXT, '
+    'reeval_pending INTEGER NOT NULL DEFAULT 0)',
     'CREATE TABLE IF NOT EXISTS memory_delivery_events('
     'event_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, request_id TEXT NOT NULL, '
     'session_key TEXT NOT NULL DEFAULT \'\', delivered_at TEXT NOT NULL, delivered_day TEXT NOT NULL, '
@@ -40,6 +42,9 @@ TABLE_DDLS = (
     'ON memory_delivery_events(memory_id, delivered_at)',
     'CREATE INDEX IF NOT EXISTS memory_delivery_request '
     'ON memory_delivery_events(request_id)',
+    'CREATE TABLE IF NOT EXISTS memory_delivery_receipts('
+    'event_key TEXT PRIMARY KEY, memory_id TEXT NOT NULL, request_id TEXT NOT NULL, '
+    'delivered_at TEXT NOT NULL)',
     'CREATE TABLE IF NOT EXISTS memory_importance_proposals('
     'proposal_id TEXT PRIMARY KEY, memory_id TEXT NOT NULL, created_at TEXT NOT NULL, '
     'status TEXT NOT NULL DEFAULT \'pending\', current_importance INTEGER, '
@@ -70,13 +75,21 @@ def now():
     return time.strftime('%Y-%m-%dT%H:%M:%S%z')
 
 
+def _needs_activation_column(connection, present):
+    if 'memory_activation' not in present:
+        return False
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(memory_activation)')}
+    return 'reeval_pending' not in columns
+
+
 def ensure_schema(connection):
     columns = {row[1] for row in connection.execute('PRAGMA table_info(memories)')}
     need_vector_state = 'vector_state' not in columns
     present = {row[0] for row in connection.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     missing_tables = any(name not in present for name in TABLE_NAMES)
-    if not need_vector_state and not missing_tables:
+    need_activation_column = _needs_activation_column(connection, present)
+    if not need_vector_state and not missing_tables and not need_activation_column:
         if connection.in_transaction:
             connection.commit()
         return
@@ -91,6 +104,10 @@ def ensure_schema(connection):
             connection.execute(SCHEMA_ADDITIONS[0])
         for ddl in TABLE_DDLS:
             connection.execute(ddl)
+        if _needs_activation_column(connection, present):
+            # Existing role databases from the first S6-1 build gain the crash-recovery marker.
+            connection.execute(
+                'ALTER TABLE memory_activation ADD COLUMN reeval_pending INTEGER NOT NULL DEFAULT 0')
         try:
             apply_digest(connection)
         except sqlite3.Error:
@@ -499,7 +516,7 @@ def hard_delete(connection, memory_id, reason=''):
         # must erase them in the same transaction rather than leave a behavioural trace behind.
         for table in ('vectors', 'versions', 'relations', 'sources', 'quotes', 'sidecar_state',
                       'sidecar_events', 'memory_activation', 'memory_delivery_events',
-                      'memory_importance_proposals'):
+                      'memory_delivery_receipts', 'memory_importance_proposals'):
             if table in tables:
                 connection.execute('DELETE FROM %s WHERE memory_id=?' % table, (memory_id,))
         if 'event_sources' in tables:

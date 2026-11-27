@@ -164,6 +164,13 @@ class Memory:
         # returns an error dict instead of raising, and confirm_delivery() still completes.
         from veil.brain.memory_weights import MemoryWeights
         self.weights = MemoryWeights(cfg, self.store, brain_authority=self.brain_authority)
+        # Replay deliveries whose derived-state write hit a transient storage failure last run.
+        # Bounded and non-fatal: the chat path must start even if the database is still busy.
+        try:
+            self.weights.drain_retries(limit=5)
+            self.weights.drain_pending_reeval(limit=5)
+        except Exception:
+            pass
         vault_path(store.root, cfg.id)
         self.path = f'{cfg.id}/memory/_agent/state.jsonl'
         self.diagnostics = f'{cfg.id}/memory/_agent/diagnostics.jsonl'
@@ -984,6 +991,14 @@ class Memory:
         self.last_context_kinds = {key: value for key, value in self.last_context_kinds.items()
                                    if key not in dropped}
         self.last_injected_refs = [key for key in self.last_injected_refs if key not in dropped]
+        # P6-S6-1: the final assembled request no longer contains these blocks, so the confirmed
+        # delivery payload must not count them as delivered either. Only this turn's pending entry
+        # is edited; a future turn builds a new one.
+        with self.mutex:
+            pending = getattr(self, '_pending_delivery', None)
+            if isinstance(pending, dict):
+                for key in ('injected_ids', 'opening_ids', 'association_ids', 'carried_ids'):
+                    pending[key] = [mid for mid in (pending.get(key) or []) if mid not in dropped]
 
     def _association_switch_path(self):
         return f'{self.cfg.id}/recall-association.json'
@@ -1563,7 +1578,7 @@ class Memory:
             self._save_rotation()
         return True
 
-    def confirm_delivery(self, request_id='', session_key='', regenerated=False):
+    def confirm_delivery(self, request_id='', session_key='', regenerated=False, activation=True):
         """P6-S5: mark the matching finish_recall() payload as actually delivered to the user.
 
         Verifies request_id ownership per concurrent request, persists rotation/association state
@@ -1574,6 +1589,8 @@ class Memory:
         P6-S6-1: the same confirmed event feeds MemoryWeights.apply_delivery() exactly once per
         (request_id, memory_id). A regenerated reply is a real exposure but must not count as a new
         reinforcement, so it is passed through as such instead of being silently counted twice.
+        activation=False keeps S5's cooldown persistence but skips S6-1 accounting when the
+        autonomy reply was internal and never shown to Lan.
         """
         req_id = str(request_id or '').strip()
         with self.mutex:
@@ -1642,7 +1659,10 @@ class Memory:
         # derived-state writes outside self.mutex (SQLite I/O must not serialize other turns), and
         # record a failure in the turn diagnostic instead of failing the confirmed delivery.
         weights = getattr(self, 'weights', None)
-        if weights is not None:
+        if weights is not None and not activation:
+            event['activity'] = {'status': 'skipped', 'reason': 'not_user_visible'}
+            self.last_delivered_recall = event
+        elif weights is not None:
             try:
                 activity = weights.apply_delivery({'request_id': event['request_id'],
                                                    'injected_ids': event['injected_ids'],

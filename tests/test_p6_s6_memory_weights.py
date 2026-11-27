@@ -111,16 +111,18 @@ class _Base(unittest.TestCase):
 
     def make(self, rows, relationship=None, **kwargs):
         make_db(self.db, rows, relationship=relationship)
+        kwargs.setdefault('review_inline', True)
         return MemoryWeights(self.cfg, Store(self.root), now_fn=self.clock, **kwargs)
 
     def weights(self):
-        return MemoryWeights(self.cfg, Store(self.root), now_fn=self.clock)
+        return MemoryWeights(self.cfg, Store(self.root), now_fn=self.clock, review_inline=True)
 
 
 class ActivationAccountingTests(_Base):
     def setUp(self):
         super().setUp()
-        self.w = self.make([{'id': 'm1', 'title': '海边散步', 'importance': 5}])
+        self.w = self.make([{'id': 'm1', 'title': '海边散步', 'importance': 5},
+                            {'id': 'm2', 'title': '只被重新生成过', 'importance': 5}])
 
     def test_only_confirmed_delivery_writes_activation(self):
         self.assertEqual(self.w.activation_map(['m1']), {})
@@ -164,8 +166,18 @@ class ActivationAccountingTests(_Base):
         # The factual recency timestamp still moves: the memory really was on screen again.
         self.assertEqual(info['last_active'][:16], '2026-11-01T10:05')
 
+    def test_first_regenerated_exposure_is_visible_without_reinforcement(self):
+        out = self.w.apply_delivery({'request_id': 'r2', 'injected_ids': ['m2'],
+                                     'regenerated': True})
+        self.assertEqual(out['counted_ids'], [])
+        info = self.w.activation_map(['m2'])['m2']
+        self.assertEqual(info['deliveries'], 0)
+        self.assertEqual(info['display'], 0)
+        self.assertTrue(info['last_active'])
+        self.assertFalse(info['reeval_pending'])
+
     def test_concurrent_confirmations_of_one_request_count_once(self):
-        workers = [MemoryWeights(self.cfg, Store(self.root), now_fn=self.clock)
+        workers = [MemoryWeights(self.cfg, Store(self.root), now_fn=self.clock, review_inline=True)
                    for _ in range(4)]
         barrier = threading.Barrier(4)
 
@@ -416,6 +428,17 @@ class SettingsAndRankingTests(_Base):
         settings = brain_retrieval.load_settings({})
         self.assertFalse(settings['activation_ranking_enabled'])
 
+    def test_inactive_activation_settings_do_not_create_index_variants(self):
+        self.make([{'id': 'm1', 'title': '常聊的事', 'body': '我们最近一直聊这件事'}])
+        base = {'weight_vector': 0.65, 'weight_keyword': 0.35, 'candidate_k': 8,
+                'stopwords_enabled': False, 'activation_ranking_enabled': False}
+        first = brain_retrieval.get_index(self.db, {**base, 'activation_half_life_days': 30})
+        second = brain_retrieval.get_index(self.db, {**base, 'activation_half_life_days': 7})
+        self.assertIs(first, second)
+        third = brain_retrieval.get_index(
+            self.db, {**base, 'activation_ranking_enabled': True, 'activation_half_life_days': 7})
+        self.assertIsNot(first, third)
+
     def test_ui_settings_persist_and_validate(self):
         w = self.make([{'id': 'm1'}])
         result = w.update_settings({'ranking_enabled': True, 'ranking_weight': 0.08,
@@ -503,6 +526,72 @@ class DeliveryIntegrationTests(_Base):
         self.assertEqual(info['deliveries'], 1)
         self.assertEqual(mem.last_recall_debug['lifecycle']['effective_used'], ['m1'])
 
+    def test_final_trim_removes_ids_from_pending_delivery(self):
+        from veil.brain.memory_agent import Memory
+        w = self.make([{'id': 'm1'}, {'id': 'm2'}])
+        mem = object.__new__(Memory)
+        mem.mutex = threading.RLock()
+        mem.rotation = recall_rotation.Cooldown()
+        mem.rotation_path = 'peter/recall-rotation.jsonl'
+        mem.store = SimpleNamespace(root=self.root, replace=lambda *a, **k: None)
+        mem.cfg = SimpleNamespace(id='peter', memory={'model': 'BAAI/bge-m3'})
+        mem.budget = SimpleNamespace(clock=lambda: '2026-11-01T10:00:00+0800')
+        mem.last_recall_debug = {'ombre': ['m1', 'm2'], 'judge': {'picked': ['m1', 'm2']}}
+        mem.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
+        mem.last_injected_refs = []
+        mem._previous_injected_refs = []
+        mem.last_recall_marks = None
+        mem.last_association_marks = None
+        mem.surfaced_ids = {}
+        mem.delivery_listeners = []
+        mem.weights = w
+        mem._pending_recall = {
+            'include_opening': False,
+            'blocks': [
+                {'id': 'm1', 'group': 'recall', 'text': '[bucket_id:m1]\n正文', 'priority': 10,
+                 'source': 'search', 'event_id': '', 'pointer': '', 'kind': 'search'},
+                {'id': 'm2', 'group': 'recall', 'text': '[bucket_id:m2]\n正文', 'priority': 20,
+                 'source': 'search', 'event_id': '', 'pointer': '', 'kind': 'search'},
+            ],
+        }
+        mem.finish_recall(request_id='req-trim')
+        mem.note_budget_dropped(['m2'])
+        event = mem.confirm_delivery('req-trim')
+        self.assertIsNotNone(event)
+        info = w.activation_map(['m1', 'm2'])
+        self.assertEqual(info['m1']['deliveries'], 1)
+        self.assertNotIn('m2', info)
+
+    def test_non_user_visible_delivery_does_not_reinforce(self):
+        from veil.brain.memory_agent import Memory
+        w = self.make([{'id': 'm1'}])
+        mem = object.__new__(Memory)
+        mem.mutex = threading.RLock()
+        mem.rotation = recall_rotation.Cooldown()
+        mem.rotation_path = 'peter/recall-rotation.jsonl'
+        mem.store = SimpleNamespace(root=self.root, replace=lambda *a, **k: None)
+        mem.cfg = SimpleNamespace(id='peter', memory={'model': 'BAAI/bge-m3'})
+        mem.budget = SimpleNamespace(clock=lambda: '2026-11-01T10:00:00+0800')
+        mem.last_recall_debug = {'ombre': ['m1'], 'judge': {'picked': ['m1']}}
+        mem.last_recall_skipped = {}
+        mem.last_injected_refs = []
+        mem._previous_injected_refs = []
+        mem.last_recall_marks = None
+        mem.last_association_marks = None
+        mem.surfaced_ids = {}
+        mem.delivery_listeners = []
+        mem.weights = w
+        mem._pending_recall = {
+            'include_opening': False,
+            'blocks': [{'id': 'm1', 'group': 'recall', 'text': '[bucket_id:m1]\n正文',
+                        'priority': 10, 'source': 'search', 'event_id': '', 'pointer': '',
+                        'kind': 'search'}],
+        }
+        mem.finish_recall(request_id='req-a')
+        event = mem.confirm_delivery('req-a', activation=False)
+        self.assertEqual(event['activity']['reason'], 'not_user_visible')
+        self.assertEqual(w.activation_map(['m1']), {})
+
     def test_activation_error_never_breaks_delivery_confirmation(self):
         from veil.brain.memory_agent import Memory
         w = self.make([{'id': 'm1'}])
@@ -534,6 +623,211 @@ class DeliveryIntegrationTests(_Base):
         self.assertIsNotNone(event)
         self.assertEqual(event['activity']['status'], 'error')
 
+
+
+
+class IntegrityAndRecoveryTests(_Base):
+    def test_digest_stays_valid_after_delivery_and_importance_change(self):
+        w = self.make([{'id': 'm1', 'title': '共同经历', 'importance': 5,
+                        'meaning': '有意义', 'event_id': 'e1', 'event_title': '长谈'}],
+                      relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                     'sources': ['event:e1']}])
+        out = w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertTrue(out['counted_ids'])
+        conn = sqlite3.connect(str(self.db))
+        try:
+            stored = conn.execute("SELECT value FROM meta WHERE key='digest'").fetchone()[0]
+            actual = veil_brain.canonical_digest(conn)
+        finally:
+            conn.close()
+        self.assertEqual(stored, actual)
+        applied = w.proposals(memory_id='m1', status='applied')
+        self.assertEqual(len(applied), 1)
+        conn = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT importance FROM memories WHERE id='m1'").fetchone()[0], 6)
+            stored = conn.execute("SELECT value FROM meta WHERE key='digest'").fetchone()[0]
+            self.assertEqual(stored, veil_brain.canonical_digest(conn))
+        finally:
+            conn.close()
+
+    def test_receipts_keep_replay_idempotent_after_event_prune(self):
+        w = self.make([{'id': 'm1'}])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        conn = sqlite3.connect(str(self.db))
+        try:
+            conn.execute('DELETE FROM memory_delivery_events')
+            conn.commit()
+        finally:
+            conn.close()
+        out = w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertEqual(out['status'], 'duplicate')
+        self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 1)
+
+    def test_session_and_day_totals_survive_event_prune(self):
+        w = self.make([{'id': 'm1'}])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1'], 'session_key': 'conv:1'})
+        self.clock.value = '2026-11-02T10:00:00+0800'
+        w.apply_delivery({'request_id': 'r2', 'injected_ids': ['m1'], 'session_key': 'conv:2'})
+        conn = sqlite3.connect(str(self.db))
+        try:
+            conn.execute('DELETE FROM memory_delivery_events')
+            conn.commit()
+        finally:
+            conn.close()
+        info = w.activation_map(['m1'])['m1']
+        self.assertEqual((info['deliveries'], info['distinct_days'], info['distinct_sessions']),
+                         (2, 2, 2))
+        self.clock.value = '2026-11-03T10:00:00+0800'
+        w.apply_delivery({'request_id': 'r3', 'injected_ids': ['m1'], 'session_key': 'conv:3'})
+        info = w.activation_map(['m1'])['m1']
+        self.assertEqual((info['distinct_days'], info['distinct_sessions']), (3, 3))
+
+    def test_external_proposal_needs_real_evidence(self):
+        w = self.make([{'id': 'm1', 'event_id': 'e1', 'event_title': '共同经历'}])
+        missing = w.propose('m1', proposed_importance=6, confidence=0.9, evidence=[])
+        self.assertEqual(missing['reason'], 'no_evidence')
+        bad = w.propose('m1', proposed_importance=6, confidence=0.9,
+                        evidence=[{'kind': 'event', 'ref': 'does-not-exist'}])
+        self.assertEqual(bad['reason'], 'no_evidence')
+        self.assertEqual(w.proposals(memory_id='m1'), [])
+        good = w.propose('m1', proposed_importance=6, confidence=0.9,
+                         evidence=[{'kind': 'event', 'ref': 'e1', 'detail': '共同经历'}],
+                         auto_apply=True)
+        self.assertTrue(good['ok'], good)
+        self.assertTrue(good['applied'])
+        self.assertEqual(good['proposal']['status'], 'applied')
+        self.assertEqual(good['proposal']['metrics']['external_has_experience'], True)
+
+    def test_auto_limits_cannot_be_raised_above_policy(self):
+        w = self.make([{'id': 'm1'}])
+        rejected = w.update_settings({'reeval_max_auto_importance': 9})
+        self.assertIn('reeval_max_auto_importance', rejected['rejected'])
+        self.assertEqual(w.settings()['reeval_max_auto_importance'], 7)
+        lowered = w.update_settings({'reeval_max_auto_importance': 5})
+        self.assertTrue(lowered['ok'])
+        w2 = self.make([{'id': 'm2', 'event_id': 'e1'}],
+                       relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                      'sources': ['event:e1']}])
+        out = w2.apply_delivery({'request_id': 'r1', 'injected_ids': ['m2']})
+        proposals = w2.proposals(memory_id='m2')
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]['status'], 'pending')
+        self.assertEqual(proposals[0]['proposed_importance'], 6)
+
+    def test_association_and_carried_deliveries_are_counted(self):
+        w = self.make([{'id': 'm1'}])
+        out = w.apply_delivery({'request_id': 'r1', 'association_ids': ['m1']})
+        self.assertEqual(out['counted_ids'], ['m1'])
+        out = w.apply_delivery({'request_id': 'r2', 'carried_ids': ['m1']})
+        self.assertEqual(out['counted_ids'], ['m1'])
+        info = w.activation_map(['m1'])['m1']
+        self.assertEqual(info['deliveries'], 2)
+        self.assertAlmostEqual(info['score'], 1.5, places=3)
+
+    def test_pending_review_recovers_after_interruption(self):
+        from unittest.mock import patch
+        w = self.make([{'id': 'm1', 'meaning': '有意义', 'event_id': 'e1',
+                        'event_title': '共同经历'}],
+                      relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                     'sources': ['event:e1']}])
+        with patch.object(w, '_reevaluate', side_effect=RuntimeError('locked')):
+            out = w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertEqual(out['status'], 'applied')
+        info = w.activation_map(['m1'])['m1']
+        self.assertTrue(info['reeval_pending'])
+        self.assertEqual(w.proposals(memory_id='m1'), [])
+        proposals = w.drain_pending_reeval()
+        self.assertEqual(len(proposals), 1)
+        self.assertFalse(w.activation_map(['m1'])['m1']['reeval_pending'])
+        self.assertEqual(w.proposals(memory_id='m1', status='applied')[0]['proposed_importance'], 6)
+
+    def test_transient_write_failure_is_queued_and_replayed(self):
+        from unittest.mock import patch
+        w = self.make([{'id': 'm1'}])
+        with patch.object(w, '_write_connection', side_effect=RuntimeError('locked')):
+            out = w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        self.assertEqual(out['status'], 'error')
+        self.assertEqual(len(w._load_retries()), 1)
+        self.assertEqual(w.drain_retries(), 1)
+        self.assertEqual(w.activation_map(['m1'])['m1']['deliveries'], 1)
+        self.assertEqual(w._load_retries(), [])
+
+    def test_backup_merge_removes_derived_rows_for_tombstoned_memory(self):
+        from veil.brain.storage import brain_backup
+        current = self.root / 'current.db'
+        target = self.root / 'target.db'
+        make_db(current, [{'id': 'm1', 'title': '旧事', 'importance': 5}])
+        make_db(target, [{'id': 'm1', 'title': '旧事', 'importance': 5}])
+        conn = sqlite3.connect(str(target))
+        try:
+            conn.execute("INSERT INTO memory_activation(memory_id, delivery_count, distinct_days, "
+                         "distinct_sessions, activity_score) VALUES('m1', 2, 1, 1, 2.0)")
+            conn.execute("INSERT INTO memory_delivery_receipts(event_key, memory_id, request_id, "
+                         "delivered_at) VALUES('k1', 'm1', 'r1', '2026-11-01T10:00:00+0800')")
+            conn.execute("INSERT INTO memory_importance_proposals(proposal_id, memory_id, "
+                         "created_at, proposed_importance) VALUES('p1', 'm1', "
+                         "'2026-11-01T10:00:00+0800', 6)")
+            conn.commit()
+        finally:
+            conn.close()
+        conn = sqlite3.connect(str(current))
+        try:
+            conn.execute("INSERT INTO tombstones(memory_id, deleted_at, reason_hash) "
+                         "VALUES('m1', '2026-11-02T10:00:00+0800', 'x')")
+            conn.execute("DELETE FROM memories WHERE id='m1'")
+            conn.commit()
+        finally:
+            conn.close()
+        brain_backup._merge_new_rows(current, target)
+        conn = sqlite3.connect(str(target))
+        try:
+            for table in ('memory_activation', 'memory_delivery_receipts',
+                          'memory_importance_proposals'):
+                count = conn.execute('SELECT COUNT(*) FROM %s WHERE memory_id=?' % table,
+                                     ('m1',)).fetchone()[0]
+                self.assertEqual(count, 0, table)
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM memories WHERE id='m1'").fetchone())
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM tombstones WHERE memory_id='m1'").fetchone())
+        finally:
+            conn.close()
+
+    def test_external_auto_cannot_override_global_switch(self):
+        w = self.make([{'id': 'm1', 'event_id': 'e1', 'event_title': '共同经历'}])
+        w.update_settings({'reeval_auto_apply': False})
+        out = w.propose('m1', proposed_importance=6, confidence=0.95,
+                        evidence=[{'kind': 'event', 'ref': 'e1'}], auto_apply=True)
+        self.assertTrue(out['ok'], out)
+        self.assertFalse(out['applied'])
+        self.assertEqual(out['proposal']['status'], 'pending')
+        conn = sqlite3.connect(str(self.db))
+        try:
+            self.assertEqual(conn.execute(
+                "SELECT importance FROM memories WHERE id='m1'").fetchone()[0], 5)
+        finally:
+            conn.close()
+
+    def test_revert_refuses_after_a_later_importance_version(self):
+        w = self.make([{'id': 'm1', 'meaning': '有意义', 'event_id': 'e1',
+                        'event_title': '共同经历'}],
+                      relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                     'sources': ['event:e1']}])
+        w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
+        applied = w.proposals(memory_id='m1', status='applied')[0]
+        conn = sqlite3.connect(str(self.db))
+        try:
+            conn.execute("INSERT INTO versions(memory_id,time,operation_reason,fields_json,"
+                         "old_content,old_sha256) VALUES('m1','2026-11-02T10:00:00+0800',"
+                         "'Lan 手动改重要度','[\"importance\"]','x','x')")
+            conn.commit()
+        finally:
+            conn.close()
+        out = w.decide(applied['proposal_id'], 'revert')
+        self.assertFalse(out['ok'])
+        self.assertEqual(out['error'], 'importance_changed_since_apply')
 
 class ApiSurfaceTests(_Base):
     def _hub(self, weights):
@@ -588,7 +882,10 @@ class ApiSurfaceTests(_Base):
     def test_get_routes_wire_weights_and_proposals(self):
         from unittest.mock import Mock
         from veil.server import web_agent
-        w = self.make([{'id': 'm1', 'title': '旧事', 'importance': 5}])
+        w = self.make([{'id': 'm1', 'title': '旧事', 'importance': 5,
+                        'meaning': '有意义', 'event_id': 'e1', 'event_title': '共同经历'}],
+                      relationship=[{'id': 'rel1', 'status': 'confirmed', 'text': '关系',
+                                     'sources': ['event:e1']}])
         w.apply_delivery({'request_id': 'r1', 'injected_ids': ['m1']})
         hub = self._hub(w)
         handler = web_agent.make_handler(hub, 'tok-test')
@@ -607,6 +904,8 @@ class ApiSurfaceTests(_Base):
         status, payload = req._send.call_args.args
         self.assertEqual(200, status)
         self.assertEqual(payload['source'], 'brain.db')
+        self.assertEqual(len(payload['items']), 1)
+        self.assertEqual(payload['items'][0]['status'], 'applied')
 
 if __name__ == '__main__':
     unittest.main()

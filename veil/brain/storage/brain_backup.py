@@ -329,7 +329,9 @@ def _merge_new_rows(current_db, target_db):
             affected.update(row[0] for row in target.execute(
                 'SELECT event_id FROM main.event_sources WHERE memory_id=?', (memory_id,)))
             for table in ('vectors', 'versions', 'relations', 'sources', 'quotes', 'sidecar_state',
-                          'sidecar_events', 'experience_recoveries'):
+                          'sidecar_events', 'experience_recoveries', 'memory_activation',
+                          'memory_delivery_events', 'memory_delivery_receipts',
+                          'memory_importance_proposals'):
                 target.execute('DELETE FROM main.%s WHERE memory_id=?' % table, (memory_id,))
             target.execute('DELETE FROM main.event_sources WHERE memory_id=?', (memory_id,))
             target.execute('UPDATE main.events SET memory_id=NULL WHERE memory_id=?', (memory_id,))

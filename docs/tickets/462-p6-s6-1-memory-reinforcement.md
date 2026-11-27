@@ -36,7 +36,7 @@
                     confidence=0.82, reasons=[...], evidence=[...], auto_apply=False)
 
 - 与本地证据走同一条 `_reevaluate()`：同一事务、同一唯一待审约束、同一版本写入；
-- `pinned` / 锁定条目不自动应用；降权永远先进入待审；自动增量不超过 `reeval_max_auto_importance`；
+- `pinned` / 锁定条目不自动应用；降权永远先进入待审；自动增量固定 +1，硬上限 7（`reeval_max_auto_importance` 只能在 5–7 调低，不能调高）；
 - 返回 proposal（含 `proposal_id` / `status` / `version_seq`）供 S6-3 记录来源；
 - S6-3 的批量巩固可在其自己的日预算与调度内调用，本单**不**启动夜间定时器，避免与 S6-3 抢后台调用和预算。
 
@@ -72,17 +72,20 @@
 ### 4.1 数据（brain.db，派生、不含正文副本）
 
 - `memory_delivery_events`：`(event_key, memory_id, request_id, session_key, delivered_at, delivered_day, kind, counted, regenerated)`；`event_key = sha256(request_id|memory_id)`，主键 + `INSERT OR IGNORE` 保证一次投递最多记账一次。
-- `memory_activation`：每条记忆一行；`delivery_count`、`distinct_days`、`distinct_sessions`、`first/last_delivery_at`、`activity_score`（衰减后的暴露计数）、`score_updated_at`。
+- `memory_delivery_receipts`：只存 `event_key/memory_id/request_id/delivered_at`，**不参与淘汰**，使旧请求在明细被裁剪后重放仍被识别为重复。
+- `memory_activation`：每条记忆一行；`delivery_count`、`distinct_days`、`distinct_sessions`（累计值，不从可裁剪明细重算）、`first/last_delivery_at`、`activity_score`（衰减后的暴露计数）、`score_updated_at`、`reeval_pending`（崩溃/中断后补做重评的标记）。
 - `memory_importance_proposals`：版本化建议；`status = pending / applied / rejected / reverted / superseded`，保存 `current/proposed_importance`、`confidence`、`trigger`、`policy_version`、`reasons_json`、`evidence_json`、`metrics_json`、`version_seq`；`status='pending'` 上的部分唯一索引保证一条记忆最多一个待审建议。
-- 三张表是**派生状态**，不进入 `canonical_digest`（导入/校验只比对记忆内容）；但 `hard_delete()` 在同一事务里按 `memory_id` 删除它们，用户删除不留下行为痕迹。备份/恢复随 `brain.db` 一起走现有 S2 契约。
+- 这些表是**派生状态**，不进入 `canonical_digest`（导入/校验只比对记忆内容）；但送达会更新 digest 覆盖的 `memories.last_active`，应用/撤回重评会更新 `memories.importance` 与 `versions`，因此这些路径在同一事务里刷新 `meta.digest`，`check_db()`/备份校验不会误报。`hard_delete()` 与恢复合并按 `memory_id` 删除派生行，用户删除不留下行为痕迹；备份/恢复随 `brain.db` 走现有 S2 契约。
 
 ### 4.2 记账（只在实际送达后）
 
-- `Chat.send()` 在 `delivered = sent_messages or reply_row_saved` 时调用 `Memory.confirm_delivery(request_id, session_key=..., regenerated=...)`；失败、取消、无回复走 `rollback_recall()`，不触发记账。
+- `Chat.send()` 在用户可见的 `delivered = sent_messages or reply_row_saved` 时调用 `Memory.confirm_delivery(request_id, session_key=..., regenerated=..., activation=...)`；失败、取消、无回复走 `rollback_recall()`，不触发记账；自主唤醒只有内部文字、没有真正发给 Lan 时，S5 冷却照旧但 S6-1 不记账。
 - `confirm_delivery()` 把最终注入的 `injected_ids` / `opening_ids` / `association_ids` / `carried_ids` 交给 `MemoryWeights.apply_delivery()`；同一 `(request_id, memory_id)` 重放返回 `duplicate`，不改计数。
 - 重生成：仍记录"真实曝光"并推进 `last_active`，但 `counted=0`，不增加强化次数/活跃度分数。
 - 记账在一个 `BEGIN IMMEDIATE` 事务内完成；SQLite 跨进程串行化，`INSERT OR IGNORE` 负责幂等。任何异常只写诊断、不抛回聊天。
-- 只统计仍可见、未归档、未删除的记忆；不做跨请求内存共享。
+- 瞬时存储失败（锁/冻结）把已确认的送达写入本机有界重试队列（`memory/_agent/activation-retry.json`，只含 ID），下次启动或成功送达时重放；重放仍受 receipt 幂等保护。
+- 送达后的重评在后台线程完成；崩溃或提前退出由 `reeval_pending` 标记在下次启动补做，不在发送锁内逐条等待。
+- 只统计仍可见、未归档、未删除、且最终真的进入请求/送达的记忆；预算最终裁剪掉的 ID 会从本轮待确认交付里移除；不做跨请求内存共享。
 
 ### 4.3 保护性衰减（派生投影，不是写库衰减）
 
@@ -98,7 +101,7 @@
 | --- | --- | --- |
 | 实际送达次数 | `delivered` | `memory_activation` + 最近 request id |
 | 跨天 | `cross_day` | `distinct_days >= 2` |
-| 跨会话 | `cross_session` | 事件表 `session_key` 去重 |
+| 跨会话 | `cross_session` | `memory_activation.distinct_sessions` 累计值 |
 | 共同经历 | `event` | `events.memory_id` |
 | 关系认知引用 | `relationship` | `learned-context.json` 的 `confirmed` 条目 `event:` / `memory:` 引用 |
 | 个人意义 / 为什么记住 | `meaning` / `why` | `memories.meaning` / `why_remembered` |
@@ -109,7 +112,7 @@
 
 - 至少要有一项"共同经历"证据（事件、关系引用，或跨天重复送达），才会提出调整；
 - `importance <= 5` 需 `strength >= 0.45`，`= 6` 需 `>= 0.60`，`7..9` 需 `>= 0.80` 且至少三类证据；
-- **自动**只允许提升，最多 +1，结果不超过 `reeval_max_auto_importance`（默认 7）；`pinned` / 锁定条目不自动应用；
+- **自动**只允许提升，固定 +1，硬上限 7（`reeval_max_auto_importance` 只能调低到 5–7）；`pinned` / 锁定条目不自动应用；
 - 降权、进入 8+ 的重评、以及锁定/置顶条目一律进入 `pending`，等 Lan 在记忆详情或"重评建议"里确认；
 - 每次应用写一条普通 `versions`（`operation_reason = importance-reevaluation: ...`），可撤回；拒绝后默认 168 小时不再自动提同类建议；
 - 每个 `(request_id, memory_id)` 只产生一次；同一记忆同一时刻最多一个待审建议；冷却默认 24 小时；应用后若证据没有新增，不再重复提。
@@ -126,10 +129,10 @@
 
 ## 五、验证证据
 
-- 单元/集成：`tests/test_p6_s6_memory_weights.py`（26 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
-- 桌面：合流 S6-2 后 `desktop/tests/*.test.cjs` 63/63 通过（本单新增 2 项 + S6-2 新增 1 项）。
+- 单元/集成：`tests/test_p6_s6_memory_weights.py`（41 项）覆盖送达幂等、4 线程同请求、重启、重生成、取消/回滚、缺失/归档记忆、开关关闭、保护性衰减、锁定/置顶、降权待审、接受/撤回、硬删除清理、排序默认关闭与无操作、API/路由接线。
+- 桌面：合流 S6-2 后 `desktop/tests/*.test.cjs` 64/64 通过（本单 3 项 + S6-2 1 项；含实际渲染记忆详情）。
 - 回归：完整 Python 套件与 `origin/main` 基线失败集合对比（见 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md`）。
-- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`，快照 `peter-20261127T170245 / r3`，mock、¥0；合流 S6-2 前（代码 `44ddcdff...`）与合流 `main = 81dba35` 后（代码 `8488cfb2...`）两次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→0.2441、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；重要度、可见性、存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
+- VEIL Lab 真实链路：run `s6-1-activation-20261128T004338`（回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（最终代码 `612f6388...`），快照均为 `peter-20261127T170245 / r3`，mock、¥0；三次 `run verify` 均通过。合成记忆 `s61laba/b/c` 证明：送达后 `last_active`/计数/分数更新；重复确认与回滚不增加；重启保留；60 天后 `imp6` 分数 1.0→约 0.244、`imp8` 保持 1.0；`s61laba` 5→6 自动应用并写版本；合流后再次送达 `delivery_count 1→2`、`a/c` 分数 1.244、`b` 2.0 且无重复提案；最终 run `digest_valid=true`、receipt 重放 `duplicate`、重要度/可见性/存在性不变。报告见 run 的 `reports/latest.md` 与本单报告。
 
 ## 六、验收步骤（Lan 在 Windows 上体验）
 
@@ -145,7 +148,8 @@
 - 重评只在"送达后 + 手动/接口"触发，不做夜间定时批处理；多日灰度、跨会话批量巩固与花费由 S6-3 决定。
 - 自动调整只覆盖"提升到 ≤7"；8+、降权、锁定/置顶条目都需 Lan 确认，因此本单不会自动降权任何重要共同经历。
 - 衰减是展示/可选排序的派生分，不会写回 `importance`；不做"遗忘删除"。
-- 投递事件默认保留 20000 条（可调 1000–200000），超出后按时间淘汰最旧事件；聚合计数不因淘汰回退；提案暂不自动清理，保留审计。
-- `brain_backup` 的备份后新增记录合并只覆盖记忆内容表；派生激活/提案在恢复后从下一次真实送达重新积累，不伪造历史。
+- 投递明细默认保留 20000 条（可调 1000–200000），超出后按时间淘汰最旧明细；幂等 receipt 与 `distinct_days/distinct_sessions` 聚合不随明细淘汰，旧请求重放不会重复计数；提案暂不自动清理，保留审计。
+- `brain_backup` 的备份后新增记录合并只覆盖记忆内容表；恢复合并会按墓碑删除派生行，但不会从源库补入恢复点之后的派生激活/提案，之后从真实送达重新积累，不伪造历史。
+- 重评后台线程只保证“最终会完成”；进程被立即杀死时由 `reeval_pending` 在下次启动补做，连续两次启动都失败才需要人工查看诊断。
 - 界面参数只对当前角色生效；S6-2 若同时改记忆监控页，合流时需保留本单面板与详情区域。
 - 本单未改正式 `data/peter`、未启停正式 Peter、未部署。

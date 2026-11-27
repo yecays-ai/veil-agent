@@ -407,11 +407,15 @@ _INDEX_LOCK = threading.Lock()
 def get_index(db_path, settings):
     stopwords = bool(settings.get('stopwords_enabled', False))
     activation = bool(settings.get('activation_ranking_enabled', False))
+    # Inactive activation settings must not create a separate full index per value; the index
+    # ignores them anyway when the switch is off.
+    activation_key = ((settings.get('activation_weight', 0.05),
+                       settings.get('activation_half_life_days', 30),
+                       bool(settings.get('activation_decay_enabled', True)))
+                      if activation else (0, 0, False))
     key = (str(Path(db_path).resolve()) + '|' + str(settings['weight_vector']) + '|'
            + str(settings['weight_keyword']) + '|' + str(int(stopwords)) + '|'
-           + str(int(activation)) + '|' + str(settings.get('activation_weight', 0.05)) + '|'
-           + str(settings.get('activation_half_life_days', 30)) + '|'
-           + str(int(bool(settings.get('activation_decay_enabled', True)))))
+           + str(int(activation)) + '|' + '|'.join(str(part) for part in activation_key))
     with _INDEX_LOCK:
         index = _INDICES.get(key)
         if index is None:
@@ -423,6 +427,10 @@ def get_index(db_path, settings):
                                activation_half_life_days=settings.get('activation_half_life_days', 30),
                                activation_decay_enabled=settings.get('activation_decay_enabled', True))
             _INDICES[key] = index
+            # Bounded cache: a long-lived process that edits settings must not retain an unbounded
+            # number of full book indexes.
+            while len(_INDICES) > 32:
+                _INDICES.pop(next(iter(_INDICES)))
     return index
 
 

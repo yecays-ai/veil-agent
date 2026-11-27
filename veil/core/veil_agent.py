@@ -4028,6 +4028,12 @@ class Chat:
                                 or 'regenerated' in parameters):
                             kwargs['regenerated'] = bool(
                                 getattr(self, 'regeneration_parent_message_id', None))
+                        if (inspect.Parameter.VAR_KEYWORD in kinds
+                                or 'activation' in parameters):
+                            # Autonomy can succeed with an internal reply that was never shown to
+                            # Lan. S5 keeps its cooldown, but S6-1 must not count that as delivered.
+                            kwargs['activation'] = bool(
+                                self.sent_messages or getattr(self, 'reply_row_saved', False))
                     except (TypeError, ValueError):
                         kwargs = {}
                     confirm(req_id, **kwargs)
