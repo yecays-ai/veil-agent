@@ -2859,7 +2859,7 @@ configOverviewRefresh.onclick=async()=>{
       const li=document.createElement('li'), title=document.createElement('strong'), detail=document.createElement('p');
       title.textContent=entry.label;
       const ready=entry.readiness==='configured'?'凭据已配置（未探测）':entry.readiness==='missing'?'缺少凭据':'凭据未核实';
-      detail.textContent=`配置：${describe(entry.configured)}；实际生效：${describe(entry.effective)}；生效时机：${timing[entry.apply_mode]||'未核实'}；${ready}${entry.pending_restart===true?'；待重启':''}`;
+      detail.textContent=`配置：${describe(entry.configured)}；实际生效：${describe(entry.effective)}；生效时机：${timing[entry.apply_mode]||'未核实'}${entry.readiness?'；'+ready:''}${entry.pending_restart===true?'；待重启':''}`;
       li.append(title,detail);rows.append(li);
     }
     status.textContent=view.entries.length?`已读取 ${view.entries.length} 项。`:'没有可显示的配置项。';

@@ -228,9 +228,11 @@ class StrictEvidenceChainTests(unittest.TestCase):
         live2 = self.lc.relationship_items()
         self.assertTrue(live2[0]['evidence_degraded'])
         self.assertEqual(live2[0]['effective_status'], 'uncertain')
-        # Base rendering must NOT render it as confirmed consensus
+        # A claim whose original evidence vanished stays visible in management as uncertain,
+        # but may not silently reenter the model's relationship base.
         base = build_relationship_base(self.lc)
-        self.assertIn('(not confirmed yet)', base['text'])
+        self.assertNotIn('我更喜欢直接沟通', base['text'])
+        self.assertEqual(base['items'], [])
 
 
 class UserSovereigntyAndConsistencyTests(unittest.TestCase):

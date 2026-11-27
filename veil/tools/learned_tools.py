@@ -5,8 +5,9 @@ SECTION_PARAM = {'type': 'string', 'enum': ['facts', 'growth', 'relationship'],
                                  'relationship = shared agreements, boundaries, habits between both.')}
 RELATIONSHIP_STATUS = {'type': 'string', 'enum': ['confirmed', 'uncertain'],
                        'description': ('relationship only: confirmed requires a verifiable user '
-                                       'speech source (chat:<id> or event:/memory: with user quotes); '
-                                       'uncertain for your own unconfirmed reading.')}
+                                       'speech source (chat:<id> or event:/memory: tracing to her words). '
+                                       'An independent background check may be needed; do not claim confirmation while pending. '
+                                       'Use uncertain for your own unconfirmed reading.')}
 RELATIONSHIP_SOURCES = {'type': 'array', 'items': {'type': 'string'},
                         'description': ('relationship only: evidence refs like chat:<message_id>, '
                                         'event:<id>, or memory:<id> tracing to Lan\'s words. '

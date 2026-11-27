@@ -148,6 +148,8 @@ ENTRIES = (
           '请求第 4 段内', max_bytes=800),
     _text('memory.relationship.no_source', 'memory', '关系条目没有可查来源时的说明',
           '工具结果：confirmed 被降级成他自己的理解时', max_bytes=800),
+    _text('memory.relationship.semantic_verify', 'memory', '关系认知独立语义核验',
+          '仅用于后台语义核验请求；不进入聊天提示词', max_bytes=3200),
     _text('memory.relationship_base.header', 'memory', '稳定关系底色的开头',
           '请求第 4 段内；有当前有效的关系底色才带', max_bytes=1200),
     _text('memory.ongoing.header', 'memory', '「正在进行」的开头',

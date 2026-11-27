@@ -788,7 +788,8 @@ class PageRoundTripTests(PageSaveProvenanceTests):
         self.assertEqual(['chat:m-e'], evidence['sources'])
         base = relationship_base.build(self.profile, {'max_chars': 480})
         self.assertNotIn('small surprises', base['text'])
-        self.assertIn('Maybe she prefers mornings.', base['text'])
+        self.assertIn('Maybe she prefers mornings.', [item['text'] for item in after])
+        self.assertNotIn('Maybe she prefers mornings.', base['text'])
 
 
 class AssociationPolicyTests(unittest.TestCase):

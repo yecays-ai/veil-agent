@@ -173,6 +173,31 @@ _MODEL_DEFINITIONS = ConfigRegistry(
 )
 
 
+_SEMANTIC_TYPES = {
+    'daily_cap_cny': ('关系语义核验日额度（元）', ValueType.NUMBER),
+    'timeout_seconds': ('关系语义核验超时（秒）', ValueType.INTEGER),
+}
+_SEMANTIC_DEFINITIONS = ConfigRegistry(
+    ConfigDefinition(f'budget.relationship_semantic.{key}', label, Scope.ROLE,
+                     value_type, ApplyMode.NEXT_TASK, sensitive=False)
+    for key, (label, value_type) in _SEMANTIC_TYPES.items()
+)
+
+
+def semantic_config_overview(*, role_id: str, observation: tuple[dict, bool] | None) -> list:
+    evidence = {}
+    if observation is not None:
+        settings, explicit = observation
+        source = Source.SAVED if explicit else Source.SETTINGS_DEFAULT
+        for name in _SEMANTIC_TYPES:
+            value = settings[name]
+            if name == 'daily_cap_cny':
+                value = float(value)
+            evidence[f'budget.relationship_semantic.{name}'] = ConfigEvidence(
+                role_id, Observation(source, value), Observation(Source.RUNTIME, value))
+    return _SEMANTIC_DEFINITIONS.overview(role_id=role_id, evidence=evidence)['entries']
+
+
 def model_config_registry() -> ConfigRegistry:
     return _MODEL_DEFINITIONS
 

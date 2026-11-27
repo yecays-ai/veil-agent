@@ -102,6 +102,37 @@ def _is_instruction(text):
     return bool(CJK_TEXT.search(text) or BEHAVIOR_INSTRUCTION.search(text))
 
 
+class PeriodicBackgroundTick:
+    """The chat runtime's stop-aware periodic worker; never runs callbacks on the chat thread."""
+
+    def __init__(self, name, interval_seconds, callback):
+        self.name = name
+        self.interval_seconds = interval_seconds
+        self.callback = callback
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1)
+
+    def _run(self):
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                self.callback(self._stop.is_set)
+            except Exception:
+                # An optional background task cannot stop chat or later ticks.
+                pass
+
+
 class ShortTermNotes:
     def __init__(self, cfg, store, budget, model, chat_path, session_path):
         self.cfg = cfg
@@ -114,35 +145,25 @@ class ShortTermNotes:
         self._started_at = _local_now()
         self._write_lock = threading.RLock()
         self._extract_lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = None
+        self._scheduler = PeriodicBackgroundTick(
+            f'{self.cfg.id}-short-term-notes', INTERVAL.total_seconds(), self._tick)
         if getattr(self.budget, 'reconcile_unsettled', None):
             self.budget.reconcile_unsettled({COST_ACCOUNTING})
 
     def start(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name=f'{self.cfg.id}-short-term-notes', daemon=True)
-        self._thread.start()
+        self._scheduler.start()
 
     def stop(self):
-        self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1)
+        self._scheduler.stop()
 
-    def _run(self):
-        while not self._stop.wait(INTERVAL.total_seconds()):
-            try:
-                self.extract_if_due()
-            except Exception:
-                # Notes are optional context; a failed extraction must not stop chat.
-                pass
-            try:
-                self.expire_overdue()
-            except Exception:
-                # Expiry bookkeeping must also remain independent of the extractor.
-                pass
+    def _tick(self, stopped):
+        try:
+            self.extract_if_due()
+        except Exception:
+            # Expiry bookkeeping must remain independent of the extractor.
+            pass
+        if not stopped():
+            self.expire_overdue()
 
     def extract_if_due(self):
         with self._extract_lock:

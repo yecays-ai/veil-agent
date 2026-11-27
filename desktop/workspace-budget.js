@@ -9,6 +9,13 @@
     recall_judge: '想起判官',
     calendar_agreements: '日历约定',
   };
+  const verificationReasons = new Map(Object.entries({
+    budget: '额度不足', budget_exhausted: '额度不足', timeout: '核验超时', contradicted: '原话反驳',
+    insufficient: '证据不足', invalid_response: '核验返回无效', provider_error: '模型请求失败',
+    invalid_payload: '核验材料无效', payload_too_large: '核验材料超长', invalid_usage: '模型用量无法核对',
+    request_not_sent: '请求未发送', stale: '原始证据已变化', stale_ref: '证据引用失效',
+    unavailable: '核验暂不可用', interrupted: '核验中断', accounting: '费用尚未核对',
+  }));
   const currency = value => (value == null ? '—' : `¥${value}`);
 
   function create(tag, className, text) {
@@ -80,7 +87,28 @@
     const catBody = create('div', 'workspace-content');
     catCard.append(catHead, catBody);
 
-    root.append(summaryCard, catCard);
+    const semanticCard = create('article', 'veil-card');
+    semanticCard.hidden = true;
+    const semanticTitle = create('h3', '', '关系语义核验 · 当前角色');
+    const semanticCost = create('p');
+    const semanticCounts = create('p');
+    const semanticReasons = create('ul');
+    const semanticForm = create('form', 'filter-bar');
+    const capLabel = create('label', '', '语义日额度 ¥（0 暂停）');
+    const capInput = create('input');
+    Object.assign(capInput, { type: 'number', min: '0', max: '1000', step: '0.00000001', required: true });
+    capLabel.append(capInput);
+    const timeoutLabel = create('label', '', '单次超时（秒）');
+    const timeoutInput = create('input');
+    Object.assign(timeoutInput, { type: 'number', min: '1', max: '60', step: '1', required: true });
+    timeoutLabel.append(timeoutInput);
+    const semanticSave = create('button', 'veil-btn primary sm', '保存语义核验设置');
+    semanticSave.type = 'submit';
+    const semanticNote = create('small');
+    semanticNote.setAttribute('role', 'status');
+    semanticForm.append(capLabel, timeoutLabel, semanticSave, semanticNote);
+    semanticCard.append(semanticTitle, semanticCost, semanticCounts, semanticReasons, semanticForm);
+    root.append(summaryCard, semanticCard, catCard);
     host.replaceChildren(root);
 
     async function load() {
@@ -125,6 +153,30 @@
             card.append(meter);
           }
           kpiGrid.append(card);
+        }
+
+        const semantic = data.relationship_semantic;
+        semanticCard.hidden = !semantic;
+        if (semantic) {
+          capInput.value = semantic.daily_cap_cny;
+          timeoutInput.value = String(semantic.timeout_seconds);
+          const paused = Number(semantic.daily_cap_cny) === 0 ? ' · 核验已暂停' : '';
+          semanticCost.textContent = '今日已用 ' + currency(semantic.spent_cny)
+            + ' · 预留 ' + currency(semantic.pending_cny) + ' · 额度余额 '
+            + currency(semantic.remaining_cny) + paused;
+          const counts = semantic.verification;
+          semanticCounts.textContent = counts
+            ? '待核验 ' + counts.pending + ' 条 · 已晋升 ' + counts.promoted + ' 条'
+            : '当前角色的核验状态暂不可读。';
+          semanticReasons.replaceChildren();
+          if (counts) {
+            const reasons = Object.entries(counts.reasons || {})
+              .filter(([key]) => !['pending', 'dispatched', 'supported'].includes(key));
+            for (const [key, count] of reasons) {
+              semanticReasons.append(create('li', '', (verificationReasons.get(key) || key) + '：' + count + ' 条'));
+            }
+            if (!reasons.length) semanticReasons.append(create('li', '', '暂无失败或未通过原因。'));
+          }
         }
 
         catBody.replaceChildren();
@@ -173,6 +225,31 @@
         saveNote.textContent = err.message || '保存失败';
       } finally {
         saveBtn.disabled = false;
+      }
+    });
+
+    semanticForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      semanticSave.disabled = true;
+      semanticNote.textContent = '正在保存…';
+      try {
+        const res = await request('/api/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ semantic_verification: {
+            daily_cap_cny: capInput.value, timeout_seconds: Number(timeoutInput.value),
+          } }),
+        });
+        if (!res.ok) {
+          const error = await res.json().catch(() => null);
+          throw new Error(error?.message || '保存失败');
+        }
+        semanticNote.textContent = '已保存，下次核验生效，无需重启。';
+        await load();
+      } catch (err) {
+        semanticNote.textContent = err.message || '保存失败';
+      } finally {
+        semanticSave.disabled = false;
       }
     });
 

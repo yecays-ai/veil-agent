@@ -2384,6 +2384,21 @@ class Chat:
         self.email_attachment_admission = None
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
+        self.relationship_semantic_scheduler = None
+        semantic_settings = getattr(getattr(cfg, 'models', None), 'semantic_verification', None)
+        if (callable(getattr(self.profile, 'pending_relationship_semantics', None))
+                and callable(semantic_settings) and background_model is not None):
+            from veil.brain.relationship_semantic import RelationshipSemanticWorker, TICK_SECONDS
+            from veil.brain.short_term_notes import PeriodicBackgroundTick
+
+            # Independent from optional short-term notes; use only the selected background model.
+            request = getattr(background_model, '__dict__', {}).get('raw') or background_model
+            verifier = RelationshipSemanticWorker(
+                background_cfg(cfg), budget, request,
+                semantic_settings, profile=self.profile,
+            )
+            self.relationship_semantic_scheduler = PeriodicBackgroundTick(
+                f'{cfg.id}-relationship-semantic', TICK_SECONDS, verifier.tick)
         notes_config = getattr(cfg, 'short_term_notes', None) or {}
         self.short_term_notes = None
         if notes_config.get('enabled') is True:
@@ -2400,12 +2415,16 @@ class Chat:
                                                load_settings(experience_config))
 
     def start_short_term_notes_scheduler(self):
+        if self.relationship_semantic_scheduler:
+            self.relationship_semantic_scheduler.start()
         if self.short_term_notes:
             self.short_term_notes.start()
         if self.experience:
             self.experience.start()
 
     def stop_short_term_notes_scheduler(self):
+        if self.relationship_semantic_scheduler:
+            self.relationship_semantic_scheduler.stop()
         if self.short_term_notes:
             self.short_term_notes.stop()
         if self.experience:

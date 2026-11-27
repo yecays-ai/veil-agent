@@ -28,6 +28,10 @@ ROLE_LABELS = {'peter': '聊天', 'autonomy': '自主活动', 'background': '记
 GLANCE_DEFAULT_MODEL = 'grok-4.6'  # Ticket 211: preferred glance model when Lan has configured it
 DEFAULT_DAILY = Decimal('10')
 DEFAULT_MONTHLY = Decimal('300')
+SEMANTIC_DEFAULT_CAP = Decimal('0.06')
+SEMANTIC_DEFAULT_TIMEOUT = 6
+MAX_DAILY_CAP = Decimal(1000)
+SEMANTIC_MAX_TIMEOUT = 60
 DEFAULT_MAX_INPUT = 32768
 MAX_ENDPOINTS = 20
 MAX_MODELS = 60
@@ -378,6 +382,8 @@ class ModelSettings:
             data['limits'] = self._limits(limits) if limits else {}
         except SettingsError as exc:
             raise SettingsError(f'模型配置 models.json 的费用上限无效：{exc}；原文件已保留。') from None
+        if 'semantic_verification' in raw:
+            data['semantic_verification'] = self._semantic_verification(raw['semantic_verification'])
         migration = raw.get('migration')
         if isinstance(migration, dict) and migration:
             data['migration'] = migration
@@ -442,11 +448,27 @@ class ModelSettings:
 
     @staticmethod
     def _limits(raw):
-        daily = _decimal(raw.get('daily_cny', DEFAULT_DAILY), '每天上限', maximum=Decimal(1000))
+        daily = _decimal(raw.get('daily_cny', DEFAULT_DAILY), '每天上限', maximum=MAX_DAILY_CAP)
         monthly = _decimal(raw.get('monthly_cny', DEFAULT_MONTHLY), '每月上限', maximum=Decimal(30000))
         if monthly < daily:
             raise SettingsError('每月上限不能比每天上限小。')
         return {'daily_cny': str(daily), 'monthly_cny': str(monthly)}
+
+    @staticmethod
+    def _semantic_verification(raw):
+        keys = {'daily_cap_cny', 'timeout_seconds'}
+        if not isinstance(raw, dict) or set(raw) - keys:
+            raise SettingsError('语义核验设置格式不对。')
+        cap = _decimal(raw.get('daily_cap_cny', SEMANTIC_DEFAULT_CAP), '语义核验日额度',
+                       allow_zero=True, maximum=MAX_DAILY_CAP)
+        timeout = raw.get('timeout_seconds', SEMANTIC_DEFAULT_TIMEOUT)
+        if type(timeout) is not int or not 1 <= timeout <= SEMANTIC_MAX_TIMEOUT:
+            raise SettingsError(f'语义核验超时要填 1 到 {SEMANTIC_MAX_TIMEOUT} 的整数秒。')
+        # Use plain decimal strings, matching the existing limits and ledger API.
+        if cap and cap.as_tuple().exponent < -8:
+            raise SettingsError('语义核验日额度最多支持 8 位小数。')
+        return {'daily_cap_cny': format(cap if cap else Decimal(0), 'f'),
+                'timeout_seconds': timeout}
 
     def _provider(self, data, model_id):
         if not isinstance(model_id, str):
@@ -571,6 +593,17 @@ class ModelSettings:
                 return DEFAULT_DAILY, DEFAULT_MONTHLY
             return Decimal(limits['daily_cny']), Decimal(limits['monthly_cny'])
 
+    def semantic_verification(self):
+        """The current role's settings; read per task, never cached by the worker."""
+        with self.lock:
+            if self.blocked:
+                raise SettingsError('模型设置保存未完成；已停止模型请求，请重启恢复。')
+            return dict(self.data.get('semantic_verification') or self._semantic_verification({}))
+
+    def semantic_verification_observation(self):
+        with self.lock:
+            return self.semantic_verification(), 'semantic_verification' in self.data
+
     def _env_values(self):
         try:
             from dotenv import dotenv_values
@@ -614,7 +647,7 @@ class ModelSettings:
 
     # ---- changes from the settings page -------------------------------
     def save(self, payload):
-        """Replace endpoints, models and limits; new keys go to .env. Returns the new public view."""
+        """Save configuration using the existing model-settings transaction."""
         if not isinstance(payload, dict):
             raise SettingsError('设置格式不对。')
         endpoints_in = payload.get('endpoints') or []
@@ -667,8 +700,17 @@ class ModelSettings:
                     models.append(self._model(item, endpoint_ids))
                 if len({item['id'] for item in models}) != len(models):
                     raise SettingsError('两个模型不能使用相同 ID。')
-            data = {'endpoints': endpoints, 'models': models, 'use': {},
-                    'limits': self._limits(payload.get('limits') or {})}
+            limits = (self._limits(payload.get('limits') or {}) if 'limits' in payload
+                      else dict(self.data['limits']))
+            data = {'endpoints': endpoints, 'models': models, 'use': {}, 'limits': limits}
+            semantic = self.data.get('semantic_verification')
+            if 'semantic_verification' in payload:
+                patch = payload['semantic_verification']
+                if not isinstance(patch, dict) or not patch:
+                    raise SettingsError('语义核验设置格式不对。')
+                semantic = self._semantic_verification({**(semantic or {}), **patch})
+            if semantic is not None:
+                data['semantic_verification'] = semantic
             use = payload.get('use') if isinstance(payload.get('use'), dict) else self.data['use']
             for role in ROLES:
                 model_id = use.get(role, self.data['use'].get(role))

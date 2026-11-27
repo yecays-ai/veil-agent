@@ -4,6 +4,9 @@
 
 ## 当前停点
 
+- 独立语义核验、费用热配置与费用管理状态已完成开发，待 PR 审核；未合并、未部署。用户明确否决可在原始证据层拦截：来源与否决正文或其中明确引用的锚点匹配时，不发送核验请求，也不应用旧的模型结论。无明确锚点的任意跨语言改写仍依赖语义判断，不能视为完整的等价判定。
+- VEIL Lab 合成快照 `459-sem-synthetic/r1`（manifest `ef1e50ff…`）。最终真实模型矩阵 9/9：4 条晋升并实际注入、5 条未注入；其中跨语言否决在程序层拦截，无对应模型调用。最后一轮本地账本 ¥0.043138，五轮累计 ¥0.227000（含 mock 探针，低于 ¥2）。合成候选由脚本提交到生产入口，未测主聊天模型自行提取候选。
+
 - **本单（工单 459 · P6-S3 关系底座解耦、证据链晋升与认知治理）**：
   - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
   - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。

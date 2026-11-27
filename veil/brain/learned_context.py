@@ -48,6 +48,16 @@ RELATIONSHIP_STATUSES = ('confirmed', 'uncertain', 'outdated')
 # Who says so. Lan's own words outrank repeated evidence, evidence outranks Peter's reading.
 RELATIONSHIP_SOURCES = ('lan', 'evidence', 'peter')
 SOURCE_RANK = {'lan': 3, 'evidence': 2, 'peter': 1}
+SEMANTIC_RULE = 'relationship-semantic-v1'
+SEMANTIC_PROMPT = 'memory.relationship.semantic_verify'
+SEMANTIC_FINISH = frozenset({'supported', 'insufficient', 'contradicted', 'failed', 'budget'})
+SEMANTIC_RETRY = frozenset({'pending', 'budget'})
+SEMANTIC_TRANSIENT = frozenset({'pending', 'dispatched', 'budget'})
+SEMANTIC_PREFLIGHT = frozenset({'payload_too_large', 'invalid_payload'})
+SEMANTIC_REASONS = SEMANTIC_PREFLIGHT | {
+    'budget_exhausted', 'timeout', 'provider_error', 'invalid_response',
+    'request_not_sent', 'invalid_usage',
+}
 EVIDENCE_STATES = ('valid', 'partial_stale', 'invalid', 'unavailable', 'rebutted', 'none')
 # Ticket 422 review: a relationship item keeps the smallest evidence a program can check.
 SOURCE_REF = re.compile(r'^(chat|memory|event|long_task):[A-Za-z0-9_-]{1,100}$')
@@ -81,7 +91,9 @@ _NEGATION_RE = re.compile(
 )
 _REBUTTAL_CUE_RE = re.compile(
     r'(?:不对|错了|不算|别这样|不是的|收回|取消|改成|改为|不用了|不要再|其实我|'
-    r'\b(?:actually|no,|not\s+anymore|forget\s+that|changed\s+my\s+mind|stop\s+doing|never\s+mind)\b)',
+    r'(?:更新|更正|修正|纠正)(?:一下|：|:)|从今(?:以后|往后)|以后只|仅我自己|'
+    r'\b(?:actually|not\s+anymore|not\s+correct|forget\s+that|changed\s+my\s+mind|stop\s+doing|'
+    r'never\s+mind|from\s+now\s+on|instead)\b|^\s*no\s*[,!.])',
     re.IGNORECASE,
 )
 _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
@@ -90,6 +102,11 @@ _WORD_RE = re.compile(r'[a-z0-9]{2,}', re.IGNORECASE)
 
 def _now():
     return datetime.now().astimezone().isoformat(timespec='microseconds')
+
+
+def _fingerprint(value):
+    encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+    return sha256(encoded.encode('ascii')).hexdigest()
 
 
 def _text_bytes(value):
@@ -141,6 +158,35 @@ def _matches_governed_claim(text, reference):
         if (left == right or _jaccard_similar(left, right)
                 or (len(right) >= 8 and re.search(r'(?<![a-z0-9])' + re.escape(right) + r'(?![a-z0-9])', left))):
             return True
+    return False
+
+
+def _veto_grounded_in_origins(evidence, counters):
+    """Do not let translating the candidate hide an overlap in the original language.
+
+    Explicitly quoted names/phrases in user vetoes are conservative protected anchors,
+    not proof of agreement. Escalate to the user rather than authorizing another model
+    to declare an overlapping source unrelated.
+    """
+    for row in counters:
+        if row['kind'] != 'veto':
+            continue
+        veto = row['text']
+        anchors = re.findall(r'[「『“"]([^」』”"]{3,80})[」』”"]', veto)
+        for origin in evidence:
+            text = origin['text']
+            if _matches_governed_claim(text, veto):
+                return True
+            normalized = _norm_text(text)
+            for anchor in anchors:
+                anchor = _norm_text(anchor)
+                if len(anchor) < 3:
+                    continue
+                # Whitespace-delimited scripts require a whole phrase; CJK does not
+                # use word spacing. Only consider anchors taken verbatim from a veto.
+                if ((_CJK_RE.search(anchor) and anchor in normalized)
+                        or re.search(r'(?<!\w)' + re.escape(anchor) + r'(?!\w)', normalized)):
+                    return True
     return False
 
 
@@ -453,7 +499,7 @@ class LearnedContext:
             if role == 'assistant':
                 target = _confirmation_target(text)
                 if target:
-                    previous = (mid, target)
+                    previous = (mid, target, text)
             elif role == 'user':
                 index[mid] = {
                     'text': text, 'confirmation': preceding,
@@ -463,7 +509,11 @@ class LearnedContext:
             index.pop(mid, None)
         for info in index.values():
             preceding = info.pop('confirmation')
-            info['confirmation_target'] = preceding[1] if preceding and preceding[0] not in duplicates else ''
+            if preceding and preceding[0] not in duplicates and _AGREEMENT_RE.fullmatch(info['text'].strip()):
+                info['confirmation_target'] = preceding[1]
+                info['question'] = {'id': 'chat:' + preceding[0], 'text': preceding[2]}
+            else:
+                info['confirmation_target'] = ''
         self._chat_cache_key = key
         self._chat_cache = index
         return index
@@ -573,7 +623,7 @@ class LearnedContext:
         finally:
             conn.close()
 
-    def _evaluate_sources(self, sources, claim_text='', data=None):
+    def _evaluate_sources(self, sources, claim_text='', data=None, *, chat_index=None):
         """Unified strict evidence verification entry point.
 
         Distinguishes:
@@ -582,9 +632,10 @@ class LearnedContext:
         3. Same-origin deduplication across direct chat: and indirect event:/memory: refs.
         4. Programmatic content support & whether Lan already vetoed/corrected this claim.
         """
-        chat_index = self._chat_user_index()
+        if chat_index is None:
+            chat_index = self._chat_user_index()
         kept_refs, dropped, missing_refs, unverified_support = [], [], [], []
-        valid_origins = set()
+        valid_origins, raw_origins, provenance = set(), set(), {}
         any_unavailable = False
         for source in dict.fromkeys(s for s in (sources or []) if isinstance(s, str)):
             if not SOURCE_REF.fullmatch(source):
@@ -611,6 +662,8 @@ class LearnedContext:
                 kept_refs.append(source)  # long_task is for traceability only.
                 continue
             kept_refs.append(source)
+            provenance[source] = sorted(origins)
+            raw_origins.update(origins)
             matched = set()
             for mid in origins:
                 info = chat_index[mid]
@@ -661,6 +714,14 @@ class LearnedContext:
             'missing_refs': missing_refs,
             'unverified_support': unverified_support,
             'valid_origin_count': len(valid_origins),
+            'raw_origins': [
+                {'id': 'chat:' + mid, 'text': chat_index[mid]['text'],
+                 **({'question': chat_index[mid]['question']} if 'question' in chat_index[mid] else {})}
+                for mid in sorted(raw_origins)
+            ],
+            'raw_provenance': provenance,
+            'source_unavailable': any_unavailable or chat_index is None,
+            'chat_index': chat_index,
             'evidence_state': evidence_state,
             'rebutted': rebutted,
         }
@@ -713,7 +774,7 @@ class LearnedContext:
         if ev['rebutted']:
             return {
                 'status': 'uncertain', 'source': 'peter', 'sources': ev['kept_refs'],
-                'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'],
+                'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'], 'evaluation': ev,
                 'unverified_support': ev['unverified_support'],
                 'evidence_state': 'rebutted', 'downgraded': status == 'confirmed',
                 'rebutted': True,
@@ -722,18 +783,262 @@ class LearnedContext:
             return {
                 'status': 'confirmed' if status == 'confirmed' else 'uncertain',
                 'source': 'evidence', 'sources': ev['kept_refs'],
-                'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'],
+                'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'], 'evaluation': ev,
                 'unverified_support': ev['unverified_support'],
                 'evidence_state': ev['evidence_state'], 'downgraded': False,
                 'rebutted': False,
             }
         return {
             'status': 'uncertain', 'source': 'peter', 'sources': ev['kept_refs'],
-            'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'],
+            'dropped_sources': ev['dropped'], 'missing_refs': ev['missing_refs'], 'evaluation': ev,
             'unverified_support': ev['unverified_support'],
             'evidence_state': ev['evidence_state'], 'downgraded': status == 'confirmed',
             'rebutted': False,
         }
+
+    # ---------- durable background verification ----------
+
+    @staticmethod
+    def _semantic_rule():
+        return _fingerprint([SEMANTIC_RULE, prompts.text(SEMANTIC_PROMPT)])
+
+    @staticmethod
+    def _semantic_counters(data, item, ev):
+        rows = {}
+
+        def add(kind, text, identity):
+            if isinstance(text, str) and text.strip():
+                key = kind + ':' + _fingerprint(identity)
+                rows[key] = {'id': key, 'kind': kind, 'text': text}
+
+        corrected_ids = set()
+        for section in ALL_SECTIONS:
+            for veto in data[section].get('vetoed') or []:
+                if isinstance(veto, dict):
+                    text = veto.get('text')
+                    add('veto', text, [section, text, veto.get('vetoed_at')])
+                    if section == 'relationship' and veto.get('id'):
+                        corrected_ids.add(veto['id'])
+        for other in data['relationship']['items']:
+            if other['id'] == item['id']:
+                continue
+            if other['status'] == 'outdated' and other['source'] == 'lan':
+                add('veto', other['text'], other['id'])
+            elif other['status'] != 'outdated':
+                if other.get('locked'):
+                    add('locked', other['text'], other['id'])
+                elif other['source'] == 'lan' and other['id'] in corrected_ids:
+                    add('lan', other['text'], other['id'])
+        # Keep order by chat turn, including missing timestamps. Corrections are not selected by
+        # overlap with the candidate; a low-overlap paraphrase can still be a contradiction.
+        cited = {row['id'] for row in ev['raw_origins']}
+        after_origin = not cited
+        for mid, row in (ev['chat_index'] or {}).items():
+            if 'chat:' + mid in cited:
+                after_origin = True
+            elif after_origin and _REBUTTAL_CUE_RE.search(row['text']):
+                add('correction', row['text'], mid)
+        return [rows[key] for key in sorted(rows)]
+
+    @staticmethod
+    def _semantic_replacement_target(data, item):
+        replacement = (item.get('verification') or {}).get('replaces')
+        if replacement is None:
+            return None
+        return next((row for row in data['relationship']['items']
+                     if row['id'] == replacement['id'] and not row.get('locked')
+                     and row['source'] != 'lan' and row['status'] != 'outdated'
+                     and row.get('updated_at', '') == replacement['updated_at']), None)
+
+    def _semantic_basis(self, data, item, ev, rule):
+        """Return live state, input fingerprints and an ephemeral, original-only payload."""
+        if item['status'] == 'outdated' or item['source'] == 'lan' or item.get('locked'):
+            return 'manual', None, None
+        if ev['rebutted'] or self._automatic_write_error(data, item['text'], source='evidence', previous=item):
+            return 'contradicted', None, None
+        evidence = ev['raw_origins']
+        counters = self._semantic_counters(data, item, ev)
+        if _veto_grounded_in_origins(evidence, counters):
+            return 'contradicted', None, None
+        known = item.get('verification') or {}
+        if known.get('replaces') and self._semantic_replacement_target(data, item) is None:
+            return 'stale', None, None
+        evidence_fp = _fingerprint([evidence, ev['raw_provenance']]) if evidence else ''
+        literal_fp = _fingerprint(evidence) if evidence else ''
+        if (ev['valid_origin_count'] and not counters and not known.get('required')
+                and not ev['source_unavailable'] and known.get('evidence', literal_fp) == literal_fp):
+            return 'literal', None, None
+        if ((known or counters) and (ev['source_unavailable'] or ev['missing_refs'])
+                or (known.get('evidence') and not evidence)):
+            return 'stale', None, None
+        if not evidence:
+            return ('stale' if known else 'authority_unverified' if counters else 'none'), None, None
+        payload = {
+            'candidate': {'text': item['text'], 'kind': 'relationship'},
+            'evidence': evidence, 'counterevidence': counters,
+        }
+        fingerprints = {
+            'rule': rule,
+            'claim': _fingerprint(item['text']),
+            'evidence': evidence_fp,
+            'counters': _fingerprint(counters),
+        }
+        return 'pending', fingerprints, payload
+
+    def _semantic_current(self, data, item, ev, rule):
+        state, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
+        if fingerprints is None:
+            return state, None, payload
+        key = _fingerprint(fingerprints)
+        receipt = data['relationship'].get('semantic_receipts', {}).get(key)
+        return receipt['state'] if receipt else state, key, payload
+
+    def _track_relationship_verification(self, data, item, requested, ev, rule):
+        """Set pending state in the same body/version transaction as candidate admission."""
+        state, fingerprints, _ = self._semantic_basis(data, item, ev, rule)
+        if state == 'literal' and ev['raw_origins'] and not ev['missing_refs']:
+            # Pin literal evidence as well, so edited/deleted evidence cannot silently keep
+            # an automatically confirmed entry current (even when uncited copies still exist).
+            item['verification'] = {
+                'requested': requested, 'required': False,
+                'evidence': _fingerprint(ev['raw_origins']),
+            }
+        if fingerprints is None:
+            return state
+        key = _fingerprint(fingerprints)
+        item['verification'] = {**(item.get('verification') or {}), 'requested': requested,
+                                'required': True, 'evidence': fingerprints['evidence']}
+        receipts = data['relationship'].setdefault('semantic_receipts', {})
+        receipt = receipts.setdefault(key, {**fingerprints, 'state': 'pending', 'claim_id': uuid.uuid4().hex})
+        if receipt['state'] == 'supported':
+            item.update(source='evidence', status=requested, evidence_state='valid')
+        else:
+            item.update(source='peter', status='uncertain')
+        return receipt['state']
+
+    def _live_semantic_rows(self, data):
+        chat_index = self._chat_user_index()
+        rule = self._semantic_rule()
+        for item in data['relationship']['items']:
+            if item['status'] == 'outdated' or item['source'] == 'lan' or item.get('locked'):
+                continue
+            ev = self._evaluate_sources(item.get('sources'), item['text'], data, chat_index=chat_index)
+            yield item, ev, rule
+
+    def pending_relationship_semantics(self):
+        """Snapshot tasks; derive raw text afresh, never persist raw model payloads."""
+        with self.lock:
+            if not self.path.is_file():
+                return []
+            data = self._load()
+            before = copy.deepcopy(data)
+            tasks = {}
+            for item, ev, rule in self._live_semantic_rows(data):
+                state, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
+                if state != 'pending':
+                    continue
+                key = _fingerprint(fingerprints)
+                # A changed basis needs a fresh task, not permission to reuse a prior approval.
+                requested = (item.get('verification') or {}).get('requested', item['status'])
+                receipts = data['relationship'].setdefault('semantic_receipts', {})
+                receipt = receipts.get(key)
+                if receipt is None:
+                    self._track_relationship_verification(data, item, requested, ev, rule)
+                    receipt = receipts[key]
+                if receipt['state'] in SEMANTIC_RETRY:
+                    tasks[receipt['claim_id']] = {'claim_id': receipt['claim_id'], 'payload': payload}
+            if before != data:
+                self._commit_with_version('relationship_semantic_queue', before, data)
+            return list(tasks.values())
+
+    def claim_relationship_semantic(self, claim_id):
+        """Compare-and-set before dispatch. Interrupted dispatch is never retried implicitly."""
+        return self._transaction_relationship_semantic(claim_id)
+
+    def finish_relationship_semantic(self, claim_id, *, verdict, reason=''):
+        """Compare-and-set a verdict only for the still-current input and authority state."""
+        if not isinstance(verdict, str) or verdict not in SEMANTIC_FINISH:
+            return False
+        return self._transaction_relationship_semantic(claim_id, verdict, reason if isinstance(reason, str) else '')
+
+    def _transaction_relationship_semantic(self, claim_id, verdict=None, reason=''):
+        if not isinstance(claim_id, str) or not claim_id:
+            return False
+        with self.lock:
+            if not self.path.is_file():
+                return False
+            data = self._load()
+            block = data['relationship']
+            receipts = block.get('semantic_receipts', {})
+            match = next(((key, row) for key, row in receipts.items() if row['claim_id'] == claim_id), None)
+            if match is None:
+                return False
+            key, receipt = match
+            preflight = verdict == 'failed' and reason in SEMANTIC_PREFLIGHT
+            allowed = SEMANTIC_RETRY if verdict is None or verdict == 'budget' or preflight else {'dispatched'}
+            if receipt['state'] not in allowed:
+                return False
+            current = []
+            for item, ev, rule in self._live_semantic_rows(data):
+                _, fingerprints, payload = self._semantic_basis(data, item, ev, rule)
+                if fingerprints is not None and _fingerprint(fingerprints) == key:
+                    current.append((item, payload))
+            if not current:
+                return False
+            targets = {item['id']: item.get('updated_at', '') for item, _ in current}
+            if receipt['state'] == 'dispatched' and targets != receipt.get('targets'):
+                return False
+            before = copy.deepcopy(data)
+            if verdict is None:
+                receipt.update(state='dispatched', targets=targets)
+                receipt.pop('reason', None)
+            elif verdict == 'budget':
+                # No dispatch occurred. A racing worker must not turn an in-flight claim
+                # into a retry; repeated budget ticks do not append identical versions.
+                if receipt['state'] == 'budget':
+                    return True
+                receipt.update(state='budget', reason='budget_exhausted')
+            else:
+                if verdict == 'supported' and not current[0][1]['evidence']:
+                    verdict = 'insufficient'
+                receipt.update(state=verdict, reason=reason if reason in SEMANTIC_REASONS else verdict)
+                receipt.pop('targets', None)
+                now = _now()
+                for item, _ in current:
+                    requested = (item.get('verification') or {}).get('requested', item['status'])
+                    if verdict == 'supported':
+                        previous = self._semantic_replacement_target(data, item)
+                        if previous is not None:
+                            previous.update(status='outdated', superseded_by=item['id'], updated_at=now)
+                            item['verification'].pop('replaces')
+                        item.update(source='evidence', status=requested, evidence_state='valid')
+                    else:
+                        item.update(source='peter', status='uncertain',
+                                    evidence_state='rebutted' if verdict == 'contradicted' else 'none')
+                        if verdict == 'contradicted':
+                            item.setdefault('verification', {})['was_contradicted'] = True
+                    item['updated_at'] = now
+                block['updated_at'] = now
+            self._commit_with_version('relationship_semantic_' + ('finish' if verdict else 'claim'), before, data)
+            return True
+
+    def relationship_semantic_summary(self):
+        """Role-local, body-free accounting for the settings read path."""
+        summary = {'pending': 0, 'promoted': 0, 'reasons': {}}
+        with self.lock:
+            if not self.path.is_file():
+                return summary
+            data = self._load()
+            for item in self._apply_live_evidence_check(data):
+                state = item.get('semantic_state')
+                if state in SEMANTIC_TRANSIENT:
+                    summary['pending'] += 1
+                if state == 'supported' and item.get('effective_status', item['status']) == 'confirmed':
+                    summary['promoted'] += 1
+                if state and state not in ('literal', 'manual', 'none'):
+                    reason = item.get('semantic_reason') or state
+                    summary['reasons'][reason] = summary['reasons'].get(reason, 0) + 1
+        return summary
 
     # ---------- independent 4-section budget ----------
 
@@ -827,7 +1132,8 @@ class LearnedContext:
         conflicts = self.relationship_conflict_texts(data)
         # A bare duplicate must not undo the live evidence downgrade or its caveat.
         conflicts.extend(item['text'] for item in relations
-                         if item.get('evidence_degraded') or item.get('evidence_state') == 'rebutted')
+                         if item.get('evidence_degraded') or item.get('prompt_vetoed')
+                         or item.get('evidence_state') == 'rebutted')
 
         def rejected(text, section, explicit=False):
             return not explicit and (self._is_rebutted_by_lan(text, data, section=section)
@@ -835,7 +1141,7 @@ class LearnedContext:
 
         for item in relations:
             if item.get('source') != 'lan' and not item.get('locked'):
-                item['prompt_vetoed'] = self._is_rebutted_by_lan(item['text'], data)
+                item['prompt_vetoed'] = item.get('prompt_vetoed', False) or self._is_rebutted_by_lan(item['text'], data)
 
         def project_notes(section):
             block = data[section]
@@ -890,24 +1196,43 @@ class LearnedContext:
         """Evaluate current evidence health for active relationship items without mutating disk."""
         block = data.get('relationship') or {}
         items = []
+        chat_index = self._chat_user_index() if block.get('items') else {}
+        rule = self._semantic_rule() if block.get('items') else ''
         for raw in block.get('items') or []:
             if not isinstance(raw, dict):
                 continue
             item = dict(raw)
             if item.get('status') in ('confirmed', 'uncertain'):
                 sources = item.get('sources') or []
+                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data, chat_index=chat_index)
+                state, key, payload = self._semantic_current(data, item, ev, rule)
+                receipt = block.get('semantic_receipts', {}).get(key, {})
+                item['semantic_state'] = state
+                if receipt.get('reason'):
+                    item['semantic_reason'] = receipt['reason']
+                if state == 'supported':
+                    item['evidence_state'] = 'valid'
+                    item['effective_status'] = (item.get('verification') or {}).get('requested', item['status'])
+                elif state not in ('manual', 'literal', 'none'):
+                    known = item.get('verification') or {}
+                    item['effective_status'] = 'uncertain'
+                    item['prompt_vetoed'] = (state in ('contradicted', 'stale', 'authority_unverified')
+                                              or bool((payload or {}).get('counterevidence'))
+                                              or known.get('requested') == 'confirmed' or bool(known.get('replaces'))
+                                              or bool(known.get('was_contradicted')))
+                    item['evidence_degraded'] = bool(item['prompt_vetoed'] or item['status'] == 'confirmed')
                 if sources or item.get('source') == 'evidence':
-                    ev = self._evaluate_sources(sources, claim_text=item.get('text', ''), data=data)
                     item['stale_ref'] = bool(ev['missing_refs'])
                     if ev['missing_refs']:
                         item['missing_refs'] = ev['missing_refs']
                     else:
                         item.pop('missing_refs', None)
-                    item['evidence_state'] = ev['evidence_state']
+                    if state != 'supported':
+                        item['evidence_state'] = 'rebutted' if state == 'contradicted' else ev['evidence_state']
                     # Model-promoted confirmed item whose evidence became invalid/unavailable/rebutted
                     # must safely degrade so it cannot pass as confirmed consensus.
                     if (item.get('status') == 'confirmed' and item.get('source') == 'evidence'
-                            and not item.get('locked')
+                            and not item.get('locked') and state != 'supported'
                             and ev['evidence_state'] in ('invalid', 'unavailable', 'rebutted', 'none')):
                         item['effective_status'] = 'uncertain'
                         item['evidence_degraded'] = True
@@ -1199,7 +1524,7 @@ class LearnedContext:
                     row['created_at'] = previous.get('created_at', now)
                     row['updated_at'] = previous.get('updated_at', now)
                     for key in ('sources', 'superseded_by', 'stale_ref', 'missing_refs',
-                                'evidence_state', 'restored_from'):
+                                'evidence_state', 'restored_from', 'verification'):
                         if key in previous:
                             row[key] = previous[key]
                     cleaned.append(row)
@@ -1212,7 +1537,7 @@ class LearnedContext:
                     row['created_at'] = previous.get('created_at', now)
                     row['updated_at'] = now
                     for key in ('sources', 'superseded_by', 'stale_ref', 'missing_refs',
-                                'evidence_state', 'restored_from'):
+                                'evidence_state', 'restored_from', 'verification'):
                         if key in previous:
                             row[key] = previous[key]
                     cleaned.append(row)
@@ -1350,13 +1675,18 @@ class LearnedContext:
             before = json.loads(json.dumps(data, ensure_ascii=False))
             changed = False
             now = _now()
+            rule = self._semantic_rule() if items else ''
+            chat_index = self._chat_user_index() if items else {}
             for item in items:
                 if not isinstance(item, dict) or item.get('status') not in ('confirmed', 'uncertain'):
                     continue
                 sources = item.get('sources') or []
                 if not sources and item.get('source') != 'evidence':
                     continue
-                ev = self._evaluate_sources(sources, claim_text=item.get('text', ''), data=data)
+                ev = self._evaluate_sources(sources, claim_text=item['text'], data=data, chat_index=chat_index)
+                semantic, _, _ = self._semantic_current(data, item, ev, rule)
+                evidence_state = ('valid' if semantic == 'supported' else
+                                  'rebutted' if semantic == 'contradicted' else ev['evidence_state'])
                 new_stale = bool(ev['missing_refs'])
                 if item.get('stale_ref', False) != new_stale:
                     item['stale_ref'] = new_stale
@@ -1368,13 +1698,14 @@ class LearnedContext:
                 elif 'missing_refs' in item:
                     item.pop('missing_refs', None)
                     changed = True
-                if item.get('evidence_state') != ev['evidence_state']:
-                    item['evidence_state'] = ev['evidence_state']
+                if item.get('evidence_state') != evidence_state:
+                    item['evidence_state'] = evidence_state
                     changed = True
                 # Only downgrade model-promoted items when evidence is definitively invalid or rebutted
                 # (do not permanently mutate on temporary unavailability).
                 if (item.get('status') == 'confirmed' and item.get('source') == 'evidence'
-                        and not item.get('locked') and ev['evidence_state'] in ('invalid', 'rebutted', 'none')):
+                        and not item.get('locked')
+                        and evidence_state in ('invalid', 'rebutted', 'none')):
                     item['status'] = 'uncertain'
                     item['source'] = 'peter'
                     item['updated_at'] = now
@@ -1500,7 +1831,7 @@ class LearnedContext:
             },
         }
         for item in rel_items:
-            copy = dict(item)
+            copy = {key: value for key, value in item.items() if key != 'verification'}
             if not with_text:
                 copy['text'] = ''
             result['relationship']['items'].append(copy)
@@ -1650,6 +1981,22 @@ class LearnedContext:
                             f'An identical relationship item ({existing["id"]}) is already locked by Lan. '
                             f'Nothing was changed.'
                         ), '被拒绝', name
+                    if existing['source'] != 'lan' and raw_sources:
+                        refresh = self._evaluate_sources(raw_sources, clean_text, data)
+                        if (refresh['raw_origins'] and not refresh['missing_refs']
+                                and not refresh['source_unavailable']
+                                and set(refresh['kept_refs']) != set(existing.get('sources', ()))):
+                            # Accept a newly cited original on the same row; don't duplicate the note,
+                            # or carry forward an approval tied to different evidence.
+                            existing.update(sources=refresh['kept_refs'], updated_at=now)
+                            state = self._track_relationship_verification(
+                                data, existing, requested, refresh, self._semantic_rule(),
+                            )
+                            if state == 'literal':
+                                existing.update(source='evidence', status=requested, evidence_state='valid')
+                            block['updated_at'] = now
+                            self._commit_with_version(name + '_refresh_evidence', before, data)
+                            return f'Relationship evidence updated ({state}). Nothing duplicated.', '成功', name
                     return (
                         f'Relationship note already exists ({existing["id"]}, {existing["status"]}, '
                         f'{existing["source"]}). Nothing duplicated.'
@@ -1669,10 +2016,13 @@ class LearnedContext:
                     new_item['missing_refs'] = provenance['missing_refs']
                 if provenance['evidence_state'] != 'none':
                     new_item['evidence_state'] = provenance['evidence_state']
+                semantic_state = self._track_relationship_verification(
+                    data, new_item, requested, provenance['evaluation'], self._semantic_rule(),
+                )
                 items.append(new_item)
                 message = (
                     'Saved as a current relationship note (%s, %s). It applies from the next request.'
-                    % (provenance['status'], provenance['source'])
+                    % (new_item['status'], new_item['source'])
                 )
             else:
                 old, new = args.get('old_text'), args.get('new_text')
@@ -1706,6 +2056,7 @@ class LearnedContext:
                 if error:
                     return error, '被拒绝', name
                 replacement = None
+                semantic_state = 'none'
                 if clean_new:
                     replacement = {
                         'id': uuid.uuid4().hex[:12], 'text': clean_new,
@@ -1718,19 +2069,33 @@ class LearnedContext:
                         replacement['missing_refs'] = provenance['missing_refs']
                     if provenance['evidence_state'] != 'none':
                         replacement['evidence_state'] = provenance['evidence_state']
+                    semantic_state = self._track_relationship_verification(
+                        data, replacement, requested, provenance['evaluation'], self._semantic_rule(),
+                    )
                     items.append(replacement)
-                previous['status'] = 'outdated'
-                previous['updated_at'] = now
-                if replacement:
-                    previous['superseded_by'] = replacement['id']
-                message = (
-                    'Updated. The old note is kept as history and is no longer sent as current.'
-                    if replacement else
-                    'That relationship note is no longer current. Nothing was added.'
-                )
+                if (replacement and semantic_state not in ('none', 'literal', 'supported')
+                        and (requested == 'confirmed' or previous['source'] == 'evidence'
+                             or self._semantic_counters(data, replacement, provenance['evaluation']))):
+                    replacement.setdefault('verification', {}).update(
+                        requested=requested, required=True,
+                        replaces={'id': previous['id'], 'updated_at': previous.get('updated_at', '')},
+                    )
+                    message = 'Replacement stored as a proposal; the previous note has not been retired.'
+                else:
+                    previous['status'] = 'outdated'
+                    previous['updated_at'] = now
+                    if replacement:
+                        previous['superseded_by'] = replacement['id']
+                    message = (
+                        'Updated. The old note is kept as history and is no longer sent as current.'
+                        if replacement else
+                        'That relationship note is no longer current. Nothing was added.'
+                    )
 
             notes = []
-            if provenance['downgraded']:
+            if semantic_state not in ('none', 'literal', 'supported'):
+                notes.append('Semantic verification: %s; not used as current consensus.' % semantic_state)
+            if provenance['downgraded'] and semantic_state != 'supported':
                 notes.append(prompts.text('memory.relationship.no_source'))
             elif provenance['dropped_sources']:
                 notes.append(
@@ -1865,3 +2230,26 @@ class LearnedContext:
         if len(rows) > limit:
             lines.append(f'... {len(rows) - limit} more not shown.')
         return '\n'.join(lines), '成功', 'ongoing_update'
+
+
+def _relationship_profile(data_dir):
+    if isinstance(data_dir, LearnedContext):
+        return data_dir
+    role = Path(data_dir)
+    return LearnedContext(role.parent, role.name, {'file': 'learned-context.json'})
+
+
+def pending_relationship_semantics(data_dir):
+    return _relationship_profile(data_dir).pending_relationship_semantics()
+
+
+def claim_relationship_semantic(data_dir, claim_id):
+    return _relationship_profile(data_dir).claim_relationship_semantic(claim_id)
+
+
+def finish_relationship_semantic(data_dir, claim_id, *, verdict, reason=''):
+    return _relationship_profile(data_dir).finish_relationship_semantic(claim_id, verdict=verdict, reason=reason)
+
+
+def relationship_semantic_summary(data_dir):
+    return _relationship_profile(data_dir).relationship_semantic_summary()
