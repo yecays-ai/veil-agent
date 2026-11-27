@@ -1029,7 +1029,13 @@ class Memory:
             self._pending_recall_request_id = req_id
             pending = getattr(self, '_pending_delivery', None)
             if isinstance(pending, dict):
+                old_key = str(pending.get('request_id') or '').strip()
                 pending['request_id'] = req_id
+                pending_map = getattr(self, '_pending_deliveries', None)
+                if isinstance(pending_map, dict):
+                    if old_key != req_id and pending_map.get(old_key) is pending:
+                        pending_map.pop(old_key, None)
+                    pending_map[req_id] = pending
 
     def save_recall_debug(self, request_id):
         """Append one read-only diagnostics row for this turn; IDs and reasons only, never text."""
@@ -1381,27 +1387,82 @@ class Memory:
 
         Ticket 419: a failed/retried turn keeps the last *successfully injected* context available,
         so an immediate follow-up or a retry can still use it.
-        P6-S5: verifies request_id ownership when bound, clears pending delivery state, and always
+        P6-S5: verifies request_id ownership per concurrent request, clears pending delivery state,
+        removes newly surfaced IDs so undelivered memories never retain edit permission, and always
         restores association state even when the prior association state was None/empty (first-time
         association failure).
         """
         req_id = str(request_id or '').strip()
+        need_save = False
         with self.mutex:
-            bound_req = str(getattr(self, '_pending_recall_request_id', '') or '').strip()
-            if req_id and bound_req and req_id != bound_req:
-                debug = getattr(self, 'last_recall_debug', None)
-                if isinstance(debug, dict):
-                    lifecycle = debug.get('lifecycle')
-                    if isinstance(lifecycle, dict):
-                        lifecycle['rollback_mismatch'] = {'expected': bound_req, 'got': req_id}
-                return False
-            marks, self.last_recall_marks = self.last_recall_marks, None
-            has_assoc_rollback = bool(getattr(self, '_has_association_rollback', False))
-            association = getattr(self, 'last_association_marks', None)
-            self._has_association_rollback = False
-            self.last_association_marks = None
-            self._pending_delivery = None
-            self._pending_recall_request_id = ''
+            pending_map = getattr(self, '_pending_deliveries', None)
+            if not isinstance(pending_map, dict):
+                pending_map = {}
+                self._pending_deliveries = pending_map
+            pending_entry = None
+            if req_id:
+                if req_id in pending_map:
+                    pending_entry = pending_map.pop(req_id)
+                elif pending_map:
+                    debug = getattr(self, 'last_recall_debug', None)
+                    if isinstance(debug, dict):
+                        lifecycle = debug.get('lifecycle')
+                        if isinstance(lifecycle, dict):
+                            lifecycle['rollback_mismatch'] = {
+                                'expected': list(pending_map.keys())[-1], 'got': req_id}
+                    return False
+                else:
+                    bound_req = str(getattr(self, '_pending_recall_request_id', '') or '').strip()
+                    if bound_req and req_id != bound_req:
+                        debug = getattr(self, 'last_recall_debug', None)
+                        if isinstance(debug, dict):
+                            lifecycle = debug.get('lifecycle')
+                            if isinstance(lifecycle, dict):
+                                lifecycle['rollback_mismatch'] = {'expected': bound_req, 'got': req_id}
+                        return False
+            else:
+                if '' in pending_map:
+                    pending_entry = pending_map.pop('')
+                elif pending_map:
+                    last_key = list(pending_map.keys())[-1]
+                    pending_entry = pending_map.pop(last_key)
+
+            if isinstance(pending_entry, dict):
+                marks = pending_entry.get('recall_marks')
+                has_assoc_rollback = bool(pending_entry.get('has_association_rollback', False))
+                association = pending_entry.get('association_marks')
+                newly_surfaced = list(pending_entry.get('newly_surfaced') or [])
+                prev_injected = list(pending_entry.get('previous_injected_refs') or [])
+                was_persisted = bool(pending_entry.get('persisted', False))
+                if self._pending_delivery is pending_entry:
+                    self._pending_delivery = None
+                if str(getattr(self, '_pending_recall_request_id', '') or '').strip() == req_id:
+                    self._pending_recall_request_id = ''
+                self.last_recall_marks = None
+                self._has_association_rollback = False
+                self.last_association_marks = None
+            else:
+                marks, self.last_recall_marks = self.last_recall_marks, None
+                has_assoc_rollback = bool(getattr(self, '_has_association_rollback', False))
+                association = getattr(self, 'last_association_marks', None)
+                newly_surfaced = list(getattr(self, '_last_newly_surfaced', []) or [])
+                prev_injected = list(getattr(self, '_previous_injected_refs', []) or [])
+                was_persisted = True
+                self._has_association_rollback = False
+                self.last_association_marks = None
+                self._pending_delivery = None
+                self._pending_recall_request_id = ''
+            self._last_newly_surfaced = []
+
+            # Remove edit permission for memories that were only surfaced by this undelivered turn.
+            if newly_surfaced and hasattr(self, 'surfaced_ids'):
+                if isinstance(self.surfaced_ids, dict):
+                    for mid in newly_surfaced:
+                        self.surfaced_ids.pop(mid, None)
+                elif isinstance(self.surfaced_ids, list):
+                    remove_set = set(newly_surfaced)
+                    self.surfaced_ids = [mid for mid in self.surfaced_ids if mid not in remove_set]
+
             debug = getattr(self, 'last_recall_debug', None)
             if isinstance(debug, dict):
                 lifecycle = debug.get('lifecycle')
@@ -1414,42 +1475,68 @@ class Memory:
                 # streak must not grow as if it had been shown — even on the very first association.
                 self.rotation.restore_association(association if isinstance(association, dict) else {})
                 restored_assoc = True
-            self.last_injected_refs = list(getattr(self, '_previous_injected_refs', []) or [])
-            if not marks:
-                if restored_assoc:
-                    self._save_rotation()
-                return True
-            for key, previous in marks.items():
-                if previous is None:
-                    self.rotation.forget(key)
-                else:
-                    self.rotation.last.pop(key, None)
-                    self.rotation.last[key] = previous
-        self._save_rotation()
+            self.last_injected_refs = prev_injected
+            if marks:
+                for key, previous in marks.items():
+                    if previous is None:
+                        self.rotation.forget(key)
+                    else:
+                        self.rotation.last.pop(key, None)
+                        self.rotation.last[key] = previous
+            need_save = bool(was_persisted and (marks or restored_assoc))
+        if need_save:
+            self._save_rotation()
         return True
 
     def confirm_delivery(self, request_id=''):
-        """P6-S5: mark the last finish_recall() payload as actually delivered to the user.
+        """P6-S5: mark the matching finish_recall() payload as actually delivered to the user.
 
-        Verifies request_id ownership when bound, and separates retrieved / judged / injected /
-        delivered / effective_used (reserved for S6 activity reinforcement and consolidation) so
-        budget drops, cancellations, failures, and mismatched requests never fire delivery consumers.
+        Verifies request_id ownership per concurrent request, persists rotation/association state
+        only after confirmed delivery, and separates retrieved / judged / injected / delivered /
+        effective_used (reserved for S6 activity reinforcement and consolidation) so budget drops,
+        cancellations, failures, crashes, and mismatched requests never persist state or fire
+        delivery consumers.
         """
         req_id = str(request_id or '').strip()
         with self.mutex:
-            pending = getattr(self, '_pending_delivery', None)
-            if not isinstance(pending, dict):
-                return None
-            bound_req = str(pending.get('request_id') or getattr(self, '_pending_recall_request_id', '') or '').strip()
-            if req_id and bound_req and req_id != bound_req:
-                debug = getattr(self, 'last_recall_debug', None)
-                if isinstance(debug, dict):
-                    lifecycle = debug.get('lifecycle')
-                    if isinstance(lifecycle, dict):
-                        lifecycle['delivery_mismatch'] = {'expected': bound_req, 'got': req_id}
-                return None
-            self._pending_delivery = None
-            self._pending_recall_request_id = ''
+            pending_map = getattr(self, '_pending_deliveries', None)
+            if not isinstance(pending_map, dict):
+                pending_map = {}
+                self._pending_deliveries = pending_map
+            pending = None
+            if req_id:
+                pending = pending_map.pop(req_id, None)
+                if pending is None and '' in pending_map:
+                    pending = pending_map.pop('')
+                if pending is None:
+                    if pending_map:
+                        debug = getattr(self, 'last_recall_debug', None)
+                        if isinstance(debug, dict):
+                            lifecycle = debug.get('lifecycle')
+                            if isinstance(lifecycle, dict):
+                                lifecycle['delivery_mismatch'] = {
+                                    'expected': list(pending_map.keys())[-1], 'got': req_id}
+                    return None
+            else:
+                if '' in pending_map:
+                    pending = pending_map.pop('')
+                elif pending_map:
+                    pending = pending_map.pop(list(pending_map.keys())[-1])
+                else:
+                    pending = getattr(self, '_pending_delivery', None)
+                    if not isinstance(pending, dict):
+                        return None
+            if self._pending_delivery is pending:
+                self._pending_delivery = None
+            bound_req = str(pending.get('request_id') or '').strip()
+            if str(getattr(self, '_pending_recall_request_id', '') or '').strip() == (req_id or bound_req):
+                self._pending_recall_request_id = ''
+            pending['persisted'] = True
+            # Keep last-turn rollback marks for explicit post-delivery regenerate/undo compatibility.
+            self.last_recall_marks = pending.get('recall_marks')
+            self.last_association_marks = pending.get('association_marks')
+            self._has_association_rollback = bool(pending.get('has_association_rollback', False))
+            self._last_newly_surfaced = list(pending.get('newly_surfaced') or [])
             event = {
                 'request_id': req_id or bound_req,
                 'turn': pending.get('turn', self.rotation.turn),
@@ -1470,6 +1557,8 @@ class Memory:
                     lifecycle['delivered'] = True
                     lifecycle['rolled_back'] = False
             listeners = list(getattr(self, 'delivery_listeners', None) or [])
+        # Persist rotation & association cooldown only after confirmed delivery.
+        self._save_rotation()
         for listener in listeners:
             try:
                 listener(dict(event))
@@ -1505,28 +1594,34 @@ class Memory:
         from veil.brain.recall.brain_retrieval import HIDDEN_TYPES, VISIBLE_BUCKETS
         if not isinstance(cache, dict) or cache.get('sig') != sig:
             rows = []
-            conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
             try:
-                base_sql = (
-                    'SELECT id, title, created, importance, pinned, type '
-                    'FROM memories WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0'
-                )
+                conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
                 try:
-                    raw_rows = conn.execute(
-                        base_sql + " AND id NOT IN (SELECT memory_id FROM delete_requests "
-                                   "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
-                except sqlite3.OperationalError:
-                    raw_rows = conn.execute(base_sql, VISIBLE_BUCKETS).fetchall()
-                for row in raw_rows:
-                    if (row[5] or '') in HIDDEN_TYPES:
-                        continue
-                    rows.append({
-                        'id': row[0], 'title': row[1] or '',
-                        'created': row[2] or '', 'importance': int(row[3] or 5),
-                        'pinned': bool(row[4]),
-                    })
-            finally:
-                conn.close()
+                    base_sql = (
+                        'SELECT id, title, created, importance, pinned, type '
+                        'FROM memories WHERE bucket IN (?,?) AND is_tombstone=0 AND is_deleted=0'
+                    )
+                    try:
+                        raw_rows = conn.execute(
+                            base_sql + " AND id NOT IN (SELECT memory_id FROM delete_requests "
+                                       "WHERE status='pending')", VISIBLE_BUCKETS).fetchall()
+                    except sqlite3.OperationalError:
+                        raw_rows = conn.execute(base_sql, VISIBLE_BUCKETS).fetchall()
+                    for row in raw_rows:
+                        if (row[5] or '') in HIDDEN_TYPES:
+                            continue
+                        rows.append({
+                            'id': row[0], 'title': row[1] or '',
+                            'created': row[2] or '', 'importance': int(row[3] or 5),
+                            'pinned': bool(row[4]),
+                        })
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                self.retrieval_failure('association_pool', exc)
+                return [], {'source': 'db_error_fallback', 'refreshed': False,
+                            'error': type(exc).__name__,
+                            'long_tail': 0, 'recent': 0, 'ordinary': 0}
             self._assoc_pool_cache = {'sig': sig, 'rows': rows}
             refreshed = True
         rows = list(self._assoc_pool_cache.get('rows') or [])
@@ -1568,15 +1663,21 @@ class Memory:
 
         bodies = {}
         if picked_rows:
-            conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
             try:
-                for row_item in picked_rows:
-                    mid = row_item['id']
-                    rec = conn.execute('SELECT body FROM memories WHERE id = ?', (mid,)).fetchone()
-                    if rec is not None:
-                        bodies[mid] = rec[0] or ''
-            finally:
-                conn.close()
+                conn = sqlite3.connect('file:%s?mode=ro' % brain_db, uri=True)
+                try:
+                    for row_item in picked_rows:
+                        mid = row_item['id']
+                        rec = conn.execute('SELECT body FROM memories WHERE id = ?', (mid,)).fetchone()
+                        if rec is not None:
+                            bodies[mid] = rec[0] or ''
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                self.retrieval_failure('association_pool_bodies', exc)
+                return [], {'source': 'db_error_fallback', 'refreshed': refreshed,
+                            'error': type(exc).__name__,
+                            'long_tail': 0, 'recent': 0, 'ordinary': 0}
         blocks_list = [(r['id'], f"[bucket_id:{r['id']}] {r['title']}\n{bodies.get(r['id'], '')}")
                        for r in picked_rows]
         meta = {'source': 'bounded_multi_source', 'refreshed': refreshed,
@@ -2338,25 +2439,33 @@ class Memory:
         self.last_context_kinds = {item['id']: item.get('kind', 'search')
                                    for item in opening_items + recall_items}
         self.last_injected_refs = [item['id'] for item in recall_items]
+        existing_surfaced = set(getattr(self, 'surfaced_ids', []) or [])
+        newly_surfaced = [k for k in self.last_context_refs
+                          if isinstance(k, str) and k and k not in existing_surfaced]
         self.mark_surfaced(self.last_context_refs)
         injected_assoc = [item['id'] for item in recall_items if item.get('kind') == 'association']
         pending_assoc_key = pending.get('association_key') or ''
         req_id = str(request_id or getattr(self, '_pending_recall_request_id', '') or '').strip()
         with self.mutex:
             # Ticket 379: remember what each mark replaced, so a turn that delivers nothing can take it back.
-            self.last_recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
+            recall_marks = {key: self.rotation.last.get(key) for key in self.last_context_refs}
+            self.last_recall_marks = recall_marks
             self.rotation.mark(self.last_context_refs)
-            # P6-S5: commit association streak only when the association actually survived budget fitting.
-            self._has_association_rollback = False
-            self.last_association_marks = None
+            # P6-S5: commit association streak in memory only when the association actually survived budget fitting;
+            # disk persistence is deferred until confirm_delivery() so crashes/cancellations never pollute disk.
+            has_assoc_rollback = False
+            assoc_marks = None
             if pending_assoc_key and pending_assoc_key in injected_assoc and hasattr(self.rotation, 'mark_association'):
-                self.last_association_marks = (
+                assoc_marks = (
                     self.rotation.previous_association()
                     if hasattr(self.rotation, 'previous_association') else None)
-                self._has_association_rollback = True
+                has_assoc_rollback = True
                 self.rotation.mark_association(pending_assoc_key, self.rotation.turn)
+            self._has_association_rollback = has_assoc_rollback
+            self.last_association_marks = assoc_marks
+            self._last_newly_surfaced = list(newly_surfaced)
             self._pending_recall_request_id = req_id
-            self._pending_delivery = {
+            pending_entry = {
                 'request_id': req_id,
                 'turn': self.rotation.turn,
                 'injected_ids': [item['id'] for item in recall_items],
@@ -2365,8 +2474,21 @@ class Memory:
                                  if item.get('kind') in ('search', 'context', 'relevant', 'rotation')],
                 'association_ids': list(injected_assoc),
                 'carried_ids': [item['id'] for item in recall_items if item.get('source') == 'followup'],
+                'recall_marks': recall_marks,
+                'association_marks': assoc_marks,
+                'has_association_rollback': has_assoc_rollback,
+                'newly_surfaced': list(newly_surfaced),
+                'previous_injected_refs': list(self._previous_injected_refs),
+                'persisted': False,
             }
-        self._save_rotation()
+            self._pending_delivery = pending_entry
+            pending_map = getattr(self, '_pending_deliveries', None)
+            if not isinstance(pending_map, dict):
+                pending_map = {}
+                self._pending_deliveries = pending_map
+            pending_map[req_id] = pending_entry
+            while len(pending_map) > 32:
+                pending_map.pop(next(iter(pending_map)))
         if dropped:
             self.last_recall_skipped['budget'] = len(dropped)
         debug['injected'] = [item['id'] for item in recall_items]

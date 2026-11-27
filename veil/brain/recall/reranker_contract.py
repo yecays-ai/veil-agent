@@ -115,6 +115,8 @@ def validate_async_result(envelope: AsyncRerankEnvelope, *,
         return [], {'accepted': False, 'reason': 'topic_shifted'}
     if envelope.db_signature != current_db_signature:
         return [], {'accepted': False, 'reason': 'db_signature_stale'}
+    if not callable(is_visible_fn):
+        return [], {'accepted': False, 'reason': 'visibility_check_required'}
     accepted = []
     dropped = []
     versions = current_versions if isinstance(current_versions, dict) else {}

@@ -385,6 +385,89 @@ class TestDeliveryContractAndConfigRegistry(unittest.TestCase):
             self.assertEqual(r3['effective_mode'], 'disabled')
             self.assertFalse(make_mem().effective_recall_settings()['association_enabled'])
 
+    def test_five_safety_fixes_surfaced_db_persist_concurrency_and_visibility(self):
+        from veil.brain.memory_agent import Memory
+        from veil.brain.recall.reranker_contract import AsyncRerankEnvelope, validate_async_result
+
+        # 5. Async reranker without visibility checker must fail-closed.
+        env = AsyncRerankEnvelope(
+            request_id='r1', topic_hash='t1', db_signature='sig1',
+            ranked_ids=['m1'], memory_versions={'m1': 'v1'},
+        )
+        kept, meta = validate_async_result(
+            env, current_request_id='r1', current_topic_hash='t1',
+            current_db_signature='sig1', current_versions={'m1': 'v1'},
+            is_visible_fn=None,
+        )
+        self.assertEqual(kept, [])
+        self.assertFalse(meta['accepted'])
+        self.assertEqual(meta['reason'], 'visibility_check_required')
+
+        # 1, 3, 4. Deferred disk persistence, surfaced rollback, and concurrent request isolation.
+        mem = object.__new__(Memory)
+        mem.mutex = __import__('threading').RLock()
+        mem.rotation = recall_rotation.Cooldown()
+        mem.rotation.turn = 1
+        mem.surfaced_ids = {'m_prior': True}
+        mem.last_injected_refs = []
+        mem._previous_injected_refs = []
+        mem.last_context_refs = []
+        mem.last_context_kinds = {}
+        mem.last_recall_skipped = {'cooldown': 0, 'same_event': 0, 'stage_cap': 0, 'budget': 0}
+        mem.last_recall_debug = {}
+        mem.delivery_listeners = []
+        mem.budget = SimpleNamespace(clock=lambda: '2026-11-27T20:30:00+08:00')
+        save_calls = []
+        mem._save_rotation = lambda: save_calls.append(dict(mem.rotation.snapshot()))
+
+        def run_finish(req_id, mid, assoc_key=''):
+            mem._pending_recall = {
+                'include_opening': False,
+                'blocks': [{'id': mid, 'text': f'记忆 {mid}', 'group': 'recall',
+                            'kind': 'association' if assoc_key else 'search',
+                            'source': 'association' if assoc_key else 'judge', 'priority': 1,
+                            'event_id': '', 'pointer': ''}],
+                'association_key': assoc_key,
+            }
+            mem.finish_recall(request_id=req_id)
+
+        run_finish('req-A', 'm_a', assoc_key='m_a')
+        run_finish('req-B', 'm_b', assoc_key='')
+        # Neither request confirmed yet -> zero disk writes!
+        self.assertEqual(len(save_calls), 0)
+        self.assertIn('m_a', mem.surfaced_ids)
+        self.assertIn('m_b', mem.surfaced_ids)
+
+        # Rollback req-A -> removes m_a edit permission, keeps m_prior and m_b, still no disk write.
+        self.assertTrue(mem.rollback_recall('req-A'))
+        self.assertNotIn('m_a', mem.surfaced_ids)
+        self.assertIn('m_prior', mem.surfaced_ids)
+        self.assertIn('m_b', mem.surfaced_ids)
+        self.assertEqual(len(save_calls), 0)
+
+        # Confirming req-A after rollback returns None; confirming req-B delivers req-B and persists once.
+        self.assertIsNone(mem.confirm_delivery('req-A'))
+        ev_b = mem.confirm_delivery('req-B')
+        self.assertIsNotNone(ev_b)
+        self.assertEqual(ev_b['request_id'], 'req-B')
+        self.assertEqual(ev_b['injected_ids'], ['m_b'])
+        self.assertEqual(len(save_calls), 1)
+
+        # 2. Corrupted brain.db in _association_pool degrades safely without raising.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'peter').mkdir()
+            (root / 'peter' / 'brain.db').write_bytes(b'not-a-valid-sqlite-db')
+            mem.store = SimpleNamespace(root=root)
+            mem.cfg = SimpleNamespace(id='peter')
+            mem.brain_authority = None
+            failures = []
+            mem.retrieval_failure = lambda stage, exc: failures.append((stage, type(exc).__name__))
+            blocks, pool_meta = mem._association_pool(limit=8)
+            self.assertEqual(blocks, [])
+            self.assertEqual(pool_meta['source'], 'db_error_fallback')
+            self.assertTrue(failures)
+
 
 if __name__ == '__main__':
     unittest.main()
