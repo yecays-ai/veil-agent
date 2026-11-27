@@ -173,13 +173,50 @@
     };
     var source = document.createElement('span');
     source.textContent = ({ lan: '你确认的', evidence: '有来源可查', peter: '他自己的理解（未确认）' })[item.source] || '';
-    // Review fix: the smallest evidence a relationship item keeps is visible, not implicit.
     if (item.sources && item.sources.length) source.title = '来源：' + item.sources.join('、');
+    if (item.stale_ref || item.evidence_degraded) {
+      var staleTag = document.createElement('span');
+      staleTag.className = 'muted';
+      staleTag.textContent = item.evidence_degraded ? ' · 证据失效已降级' : ' · 部分引用失效';
+      if (item.missing_refs && item.missing_refs.length) staleTag.title = '失效引用：' + item.missing_refs.join(', ');
+      source.append(staleTag);
+    }
+    var lockBtn = document.createElement('button');
+    lockBtn.type = 'button';
+    lockBtn.textContent = item.locked ? '已锁定（解锁）' : '锁定';
+    lockBtn.onclick = async function () {
+      item.locked = !item.locked;
+      mark('relationship');
+      renderRelationship(state.learned.relationship.items);
+      await save('relationship');
+    };
+    meta.append(status, source, lockBtn);
+    if (item.status === 'outdated') {
+      var restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.textContent = '恢复为当前';
+      restoreBtn.onclick = async function () {
+        restoreBtn.disabled = true;
+        try {
+          var updated = await request({
+            action: 'restore_relationship',
+            id: item.id,
+            expected_updated_at: state.learned.relationship.updated_at,
+          });
+          render(updated);
+          $p('peter-status').textContent = '已恢复';
+        } catch (err) {
+          showError(err.message);
+          restoreBtn.disabled = false;
+        }
+      };
+      meta.append(restoreBtn);
+    }
     var remove = document.createElement('button');
     remove.type = 'button';
     remove.textContent = '删除';
     remove.onclick = function () { removeRelationship(item, remove); };
-    meta.append(status, source, remove);
+    meta.append(remove);
     return meta;
   }
   async function removeRelationship(item, button) {
@@ -295,28 +332,30 @@
   }
   function renderCounts() {
     var facts = $p('peter-facts'), growth = $p('peter-growth');
-    count($p('peter-facts-count'), facts.value, null);
-    count($p('peter-growth-count'), growth.value, null);
-    var hasDirtyLearned = dirty.has('facts') || dirty.has('growth') || dirty.has('ongoing') || dirty.has('relationship');
-    var backendBudget = (!hasDirtyLearned && state && state.learned && state.learned.budget && typeof state.learned.budget.used_bytes === 'number')
-      ? state.learned.budget : null;
-    var used = 0;
-    if (backendBudget) {
-      used = backendBudget.used_bytes;
-    } else {
-      used = new TextEncoder().encode((facts.value || '') + (growth.value || '')).length;
-      if (state && state.learned) {
-        state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
-          used += new TextEncoder().encode(item.text || '').length;
-        });
-        // Ticket 422: outdated relationship rows are history; only current ones take the budget.
-        ((state.learned.relationship && state.learned.relationship.items) || []).forEach(function (item) {
-          if (item.status !== 'outdated') used += new TextEncoder().encode(item.text || '').length;
-        });
-      }
+    var budgets = (state && state.learned && state.learned.section_budgets) || {
+      facts: 1800, growth: 2000, relationship: 1500, ongoing: 900,
+    };
+    var factsBytes = new TextEncoder().encode(facts.value || '').length;
+    var growthBytes = new TextEncoder().encode(growth.value || '').length;
+    count($p('peter-facts-count'), facts.value, budgets.facts);
+    count($p('peter-growth-count'), growth.value, budgets.growth);
+    var ongoingBytes = 0;
+    var relBytes = 0;
+    if (state && state.learned) {
+      state.learned.ongoing.items.filter(isOpen).forEach(function (item) {
+        ongoingBytes += new TextEncoder().encode(item.text || '').length;
+      });
+      ((state.learned.relationship && state.learned.relationship.items) || []).forEach(function (item) {
+        if (item.status !== 'outdated') relBytes += new TextEncoder().encode(item.text || '').length;
+      });
     }
-    var max = backendBudget ? backendBudget.max_bytes : (state && state.learned ? state.learned.max_bytes : 4000);
-    $p('peter-learned-total').textContent = used + ' / ' + max + ' 字节';
+    var used = factsBytes + growthBytes + ongoingBytes + relBytes;
+    var max = state && state.learned ? state.learned.max_bytes : 6200;
+    $p('peter-learned-total').textContent =
+      'facts ' + factsBytes + '/' + budgets.facts + 'B · '
+      + 'growth ' + growthBytes + '/' + budgets.growth + 'B · '
+      + 'relationship ' + relBytes + '/' + budgets.relationship + 'B · '
+      + 'ongoing ' + ongoingBytes + '/' + budgets.ongoing + 'B（合计 ' + used + ' / ' + max + ' 字节）';
     var bar = $p('peter-budget-bar');
     if (bar) bar.style.width = Math.min(100, max ? used / max * 100 : 0) + '%';
   }

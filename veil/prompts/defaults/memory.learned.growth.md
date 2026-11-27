@@ -1,1 +1,1 @@
-RELATIONSHIP GROWTH (what he learned, especially after conflicts):
+RELATIONSHIP GROWTH (what Peter learned from experience; not shared relationship rules):

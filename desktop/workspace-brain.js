@@ -1254,7 +1254,7 @@
     // Shared budget summary card
     const budgetCard = el('article', 'veil-card');
     const bHead = el('div', 'veil-card-head');
-    bHead.append(el('h3', '', '关系底座与习得认知 · 共享预算'), pill(`${usedBytes} / ${maxBytes} B (${pct}%)`, pct > 90 ? 'warn' : 'good'));
+    bHead.append(el('h3', '', '关系底座与习得认知 · 四区独立预算'), pill(`${usedBytes} / ${maxBytes} B (${pct}%)`, pct > 90 ? 'warn' : 'good'));
     const meter = el('div', 'budget-meter');
     const fill = el('div');
     fill.style.width = `${pct}%`;
@@ -1264,7 +1264,16 @@
     const fullProfileBtn = btn('在 Peter 档案中编辑', 'sm');
     fullProfileBtn.addEventListener('click', () => window.veilWorkspace?.go('peter'));
     bMeta.append(el('span', 'muted', `最后更新：${formatTime(learned.updated_at || (learned.relationship && learned.relationship.updated_at)) || '未知'}`), fullProfileBtn);
-    budgetCard.append(bHead, meter, bMeta);
+    const bSections = el('div', 'layer-list');
+    for (const [key, label] of [['facts', '习得认知'], ['growth', '成长记录'], ['relationship', '关系底座'], ['ongoing', '进行中事项']]) {
+      const budget = learned.budgets?.sections?.[key];
+      if (!budget) continue;
+      const row = el('div', 'layer-item');
+      row.append(el('strong', '', label), el('small', '',
+        `${budget.used_bytes} / ${budget.max_bytes} B${budget.degraded ? '（超限，待整理）' : ''}`));
+      bSections.append(row);
+    }
+    budgetCard.append(bHead, meter, bSections, bMeta);
 
     const grid = el('div', 'cognition-grid');
 
@@ -1279,9 +1288,13 @@
       for (const it of activeRel) {
         const row = el('div', 'layer-item');
         row.append(el('div', 'reader-prose', it.text || ''));
-        if (it.updated_at || it.source) {
+        if (it.updated_at || it.source || it.locked || it.stale_ref || it.evidence_degraded || it.status) {
           const srcLabel = ({ lan: '你确认的', evidence: '有来源可查', peter: '角色自述' })[it.source] || it.source || '';
-          row.append(el('small', 'muted', `${formatTime(it.updated_at)} ${srcLabel ? '· ' + srcLabel : ''}`.trim()));
+          const status = ({ confirmed: '已确认', uncertain: '未确认' })[it.status];
+          const badges = [formatTime(it.updated_at), srcLabel, status, it.locked && '已锁定',
+            it.evidence_degraded ? '证据失效已降级' : it.stale_ref && '部分引用失效'].filter(Boolean);
+          row.append(el('small', 'muted', badges.join(' · ')));
+          if (it.sources?.length) row.append(el('small', 'muted', `证据：${it.sources.join('、')}`));
         }
         list.append(row);
       }
@@ -1540,6 +1553,15 @@
           else if (st.state === 'not_run') { badgeText = '未执行'; }
           else if (st.state === 'hit' || (st.count != null && st.count > 0)) { badgeText = `命中 ${st.count}`; badgeTone = 'good'; }
           cell.append(el('span', '', st.label), pill(badgeText, badgeTone));
+          const base = st.key === 'relationship_base' ? st.detail : null;
+          if (base && typeof base === 'object') {
+            const size = value => Array.isArray(value) ? value.length : '?';
+            cell.append(el('small', 'muted',
+              `存储 ${base.stored_count ?? '?'} / 有效 ${base.active_count ?? '?'} / 初选 ${size(base.preselected_items)} / 选中 ${size(base.selected_items)} / 注入 ${st.count ?? '?'}`));
+            if (base.reason) cell.append(el('small', 'muted', base.reason));
+            if (base.dropped?.length) cell.append(el('small', 'muted',
+              base.dropped.map(row => `${row.id}（${row.reason}）`).join('；')));
+          }
           chainGrid.append(cell);
         }
       } else {

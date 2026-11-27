@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -605,7 +606,8 @@ class Hub(ScreenPopMixin):
         user = chat.user_persona.status() if getattr(chat, 'user_persona', None) else None
         learned = chat.profile.status(with_text=True) if getattr(chat, 'profile', None) and hasattr(chat.profile, 'status') else None
         if learned is not None:
-            learned['versions'] = self._page_versions(chat.profile.versions)
+            learned['versions'] = (chat.profile.read_version_history()
+                                   if hasattr(chat.profile, 'read_version_history') else [])
         return {
             'persona': {'text': persona_text, 'chars': len(persona_text),
                         'bytes': len(persona_text.encode('utf-8')),
@@ -674,6 +676,30 @@ class Hub(ScreenPopMixin):
                                            expected_updated_at=body.get('expected_updated_at'),
                                            force=body.get('force') is True)
             return self.peter_page()
+        if action == 'lock_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'set_relationship_lock'):
+                raise UserError('这个角色没有启用关系锁定。')
+            chat.profile.set_relationship_lock(body.get('id'), bool(body.get('locked')),
+                                               expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'restore_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'restore_relationship_item'):
+                raise UserError('这个角色没有启用关系恢复。')
+            chat.profile.restore_relationship_item(body.get('id'),
+                                                   expected_updated_at=body.get('expected_updated_at'))
+            return self.peter_page()
+        if action == 'reverify_relationship':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'reverify_relationship_evidence'):
+                raise UserError('这个角色没有启用证据核验。')
+            chat.profile.reverify_relationship_evidence()
+            return self.peter_page()
+        if action == 'migrate_learned':
+            if not getattr(chat, 'profile', None) or not hasattr(chat.profile, 'migrate_storage'):
+                raise UserError('这个角色没有启用认知迁移。')
+            plan = chat.profile.migrate_storage(dry_run=body.get('apply') is not True)
+            page = self.peter_page()
+            page['migration'] = plan
+            return page
         if action == 'restore':
             section = body.get('section')
             version = body.get('version')
@@ -2439,6 +2465,16 @@ def make_handler(hub, token):
                 self._send(503, {'error': '预算账本尚未就绪。'})
                 return
             from veil.system.ledger_recovery import is_unverified
+            cfg = getattr(hub.chat, 'cfg', None)
+            role_id = getattr(cfg, 'id', None)
+            settings = getattr(cfg, 'models', None)
+            semantic = None
+            read_semantic = getattr(settings, 'semantic_verification', None)
+            if role_id and read_semantic is not None:
+                try:
+                    semantic = read_semantic()
+                except SettingsError:
+                    pass  # Don't hide working totals if the configuration transaction is blocked.
             try:
                 with budget.mutex:
                     stamp = budget.clock()
@@ -2451,11 +2487,25 @@ def make_handler(hub, token):
                         used, reserved = budget.category_totals(stamp=stamp, category=key)
                         categories.append({'id': key, 'spent_cny': str(used), 'pending_cny': str(reserved),
                                            'limit_cny': str(caps[key]) if key in caps else None})
+                    if semantic is not None:
+                        used, reserved = budget.category_totals(role_id, stamp=stamp, category='relationship_semantic')
+                        cap = Decimal(semantic['daily_cap_cny'])
+                        semantic.update(spent_cny=str(used), pending_cny=str(reserved),
+                                        remaining_cny=str(max(Decimal(0), cap - used - reserved)))
                     models = budget.model_display(stamp)
                     unverified = is_unverified(budget.store.root)
             except (UserError, OSError, UnicodeError):
                 self._send(503, {'error': '暂时无法核对费用账本。'})
                 return
+            # Profile storage has its own lock; never hold the budget mutex while accessing it.
+            if semantic is not None:
+                summary = getattr(getattr(hub.chat, 'profile', None), 'relationship_semantic_summary', None)
+                semantic['verification'] = None
+                if summary is not None:
+                    try:
+                        semantic['verification'] = summary()
+                    except (UserError, OSError, UnicodeError):
+                        pass  # Unknown, not a fabricated zero.
             self._send(200, {
                 'schema_version': 1, 'day': stamp[:10], 'month': stamp[:7],
                 # limit_cny is the effective cap (base + today's approved raise); the form must
@@ -2467,7 +2517,7 @@ def make_handler(hub, token):
                             'base_limit_cny': str(budget.monthly), 'raise_cny': str(monthly_cap - budget.monthly),
                             'remaining_cny': str(monthly_cap - month - pending)},
                 'pending_cny': str(pending), 'ledger_unverified': unverified,
-                'categories': categories, 'model_summary': models,
+                'categories': categories, 'model_summary': models, 'relationship_semantic': semantic,
             })
 
         def _health_context(self):
@@ -2703,16 +2753,22 @@ def make_handler(hub, token):
                 if not getattr(cfg, 'id', None):
                     self._send(503, {'error': '角色配置尚未就绪。'})
                     return
-                from veil.core.config_registry import model_config_overview
+                from veil.core.config_registry import model_config_overview, semantic_config_overview
                 models = getattr(cfg, 'models', None)
                 try:
                     settings = models.public() if models is not None else None
                 except SettingsError:
                     settings = None
-                self._send(200, model_config_overview(
-                    role_id=cfg.id, settings=settings,
-                    background_model=hub.background_running,
-                ))
+                view = model_config_overview(role_id=cfg.id, settings=settings,
+                                             background_model=hub.background_running)
+                observe = getattr(models, 'semantic_verification_observation', None)
+                if observe is not None:
+                    try:
+                        observation = observe()
+                    except SettingsError:
+                        observation = None
+                    view['entries'].extend(semantic_config_overview(role_id=cfg.id, observation=observation))
+                self._send(200, view)
             elif url.path == '/api/config/inventory':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -3385,6 +3441,8 @@ def make_handler(hub, token):
                 self._send(500, {'error': f'保存指令失败：{exc}'})
 
         def _get_peter_page(self):
+            if not self._guard(self.headers.get('X-Token')):
+                return
             try:
                 data = hub.peter_page()
                 if isinstance(data, dict) and isinstance(data.get('learned'), dict):
@@ -4059,7 +4117,6 @@ def main(argv=None):
             budget.daily, budget.monthly = cfg.models.limits()
             acceptance_limits = None
             if args.acceptance:
-                from decimal import Decimal
                 acceptance_limits = (Decimal('2'), Decimal('20'))
                 budget.daily = min(budget.daily, acceptance_limits[0])
                 budget.monthly = min(budget.monthly, acceptance_limits[1])

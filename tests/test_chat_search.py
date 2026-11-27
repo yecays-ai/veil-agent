@@ -32,6 +32,22 @@ class ChatSearchTests(unittest.TestCase):
         self.assertIn('[*]', first)
         self.assertIn('Did they give a date?', first)
 
+    def test_relationship_evidence_refs_are_only_for_saved_user_messages(self):
+        log = [
+            row('user', 'A shared habit with a badge.', '2026-10-01T12:00:00+00:00', message_id='source_1'),
+            row('assistant', 'I guessed a badge habit.', '2026-10-01T12:01:00+00:00', message_id='not-a-source'),
+            row('user', 'Withdrawn badge habit.', '2026-10-01T12:02:00+00:00', message_id='withdrawn', recalled=True),
+            row('user', 'Bad badge identifier.', '2026-10-01T12:03:00+00:00', message_id='unsafe id'),
+        ]
+        for keywords, dates in [(['badge'], {}), ([], {'since': '2026-09-30'})]:
+            with self.subTest(keywords=keywords):
+                text, found = search_chat(log, keywords, **dates)
+                self.assertTrue(found)
+                self.assertIn('[chat:source_1] A shared habit', text)
+                self.assertNotIn('chat:not-a-source', text)
+                self.assertNotIn('chat:withdrawn', text)
+                self.assertNotIn('chat:unsafe id', text)
+
     def test_single_word_match_is_ranked_after_pairs_and_still_returned(self):
         text, found = search_chat(LOG, ['factory', 'badge'])
         self.assertLess(text.index('factory still has not'), text.index('badge colours are lovely'))

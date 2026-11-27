@@ -1,19 +1,39 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T14:10:00+08:00 · 基线 `main` = `2a264a7` · 当前分支 `feat/p4-p5-brain-rework`（PR #459 已按独立复审 P0–P3 集中修复并补充 12 项后端 + 15 项前端回归测试，待 CI 与人工验收；未合并、未部署正式目录）
+> 更新：2026-11-27 +08:00 · 工单 459 / PR #460 · 复审基线 `de2cc06`，接入 `main` `2b03006`；未部署。
 
 ## 当前停点
 
-- **本单（PR #459 · P4/P5 记忆中心返工与复审修复）**：
-  - 已合并 `origin/main`（含 PR #458 `veil/` 新目录结构），改动落位在 `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/workspace-brain.js`、`desktop/workspace-shell.css`、`desktop/workspace-shell.js`、`desktop/peter-page.js`、`desktop/main.cjs`。
-  - **P0 修复**：`growth_analysis` 区分累计创建量、活跃存量、归档/删除存量与活跃净增长（`added + restored - archived - deleted`），排除失败/未完成事务并标记不完整历史；`recall_turns` 不再将缺失缓存显示为 `0`、区分召回证据缺失/未执行/未命中/命中、不再推测未入选原因、修复 `costs.jsonl` 中 `type=settle` 的 `amount` 结算统计，并明确标注 Prompt 分区估算来源。
-  - **P1 修复**：`generate_growth_report`（`full` 模式）取消 20 条/600 字符静默截断，补齐修改前/后内容、Diff、事件 ID/阶段变化与仅事件更新日明细，关闭正文时保留非正文技术明细；`recall_turns` 单遍索引支持全量分页与多步去重，`recall_turn_report` 按 `request_id` 直查；健康报告合并严格校验日期范围匹配并读取 `warn_count`/`error_count` 与 `incomplete`。
-  - **P2/P3 修复**：六层开关持久化落盘（`brain-layer-switches.json` / `experience-memory.json`）并对未就绪模块返回真实错误；`peter-page.js` 与 `workspace-brain.js` 共享后端 `_compute_cognition_budget` 同源预算；清理 `_legacyRenderRecallUnused`；消除 `brain_p4_api.py` 动态 SQL 拼接（改为静态白名单查询）；新增 4 组专项回归测试（共 12 项 Python + 15 项 Node 测试全通过）。
-- **状态**：已推送 `feat/p4-p5-brain-rework`，等待 CI 与人工验收，不自行合并。
+- 独立语义核验、费用热配置与费用管理状态已完成开发，待 PR 审核；未合并、未部署。用户明确否决可在原始证据层拦截：来源与否决正文或其中明确引用的锚点匹配时，不发送核验请求，也不应用旧的模型结论。无明确锚点的任意跨语言改写仍依赖语义判断，不能视为完整的等价判定。
+- VEIL Lab 合成快照 `459-sem-synthetic/r1`（manifest `ef1e50ff…`）。最终真实模型矩阵 9/9：4 条晋升并实际注入、5 条未注入；其中跨语言否决在程序层拦截，无对应模型调用。最后一轮本地账本 ¥0.043138，五轮累计 ¥0.227000（含 mock 探针，低于 ¥2）。合成候选由脚本提交到生产入口，未测主聊天模型自行提取候选。
+
+- **本单（工单 459 · P6-S3 关系底座解耦、证据链晋升与认知治理）**：
+  - `veil/brain/learned_context.py`：实现四区独立 UTF-8 预算（`facts 1800 / growth 2000 / relationship 1500 / ongoing 900 B`，合计 6200B），读校验与容量校验解耦（超限分区进入 `capacity_degraded` 且不影响读写其他分区），无损幂等迁移（`migrate_storage(dry_run=True/False)` + `rollback_migration`）。
+  - 统一严格证据核验入口（`_evaluate_sources`）：支持 `chat:` 与经 `brain.db` `event_ledger(stage-evidence, chat, user)` / `quotes(speaker='user')` 追溯的 `event:`/`memory:` 间接晋升，含同源证据去重、内容支持性核验、Lan 否决防复活、`stale_ref` 失效检测与模型认知安全降级。
+  - 用户主权与写入一致性：`locked` 锁定保护、删除/否决防复活（`vetoed`）、历史条目恢复（`restore_relationship_item`）、`_commit_with_version` 正文与版本支持进程中断恢复，按角色与写入及备份互斥。
+  - `veil/brain/relationship_base.py` & `veil/core/veil_agent.py`：`locked` 最高优先、预算不足时省略整条并说明原因；隔离失效认知和跨区冲突、`debug['relationship_base']` 区分存储/有效/选中/实际注入。
+  - `veil/tools/learned_tools.py`、`veil/prompts/defaults/`、`veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`desktop/peter-page.js`、`desktop/workspace-brain.js`、`desktop/chat.js` 同步接入四区预算、锁定/恢复/核验与诊断展示。
+  - 收口：只允许恢复历史条目，同一版本链只保留一条当前认知；重复恢复不再写正文或版本日志。GET `/api/peter-page` 使用现有 Host、Origin、Token 防护。
+  - 收口前 `d5f8591` 的 GitHub 检查为 14 通过、1 跳过；收口提交查对应的新运行。开发侧联合回归 128 项、桌面 Node 56 项通过，Lan 真机体验未验收。
+  - 旧本机失败对照 `2b03006` / `d5f8591` 均复现：Maintenance 在 CRLF 测试文件的暂存区检查失败（改 LF 后通过）；OpenCode 原用例缺输出文件，GitHub CI 因未安装而跳过；冷备份仅在 APPDATA 有桌面配置时增加 `desktop-data`，空 APPDATA 的两个用例均通过。本轮不改这些模块。
+  - 未触碰正式运行目录 `veil-agent/` 及正式 `data/peter`。
+
+## S6 开工门禁与证据边界
+
+1. [聊天历史全量读取](veil/brain/learned_context.py#L455)：日志变化后全量扫描和常驻缓存会增加长历史请求耗时与内存。验收：长历史连续追加不反复全扫、有明确缓存上限；旧引用按需核验，删除或替换后不命中旧缓存。
+2. [数据库读连接](veil/brain/learned_context.py#L481)与[实时核验](veil/brain/learned_context.py#L1195)：多条引用的串行 SQLite 等待会累加。验收：锁库加多引用场景验证整次核验的统一墙钟预算，超限不误晋升、不阻断聊天。
+3. [认知追加](veil/brain/learned_context.py#L1895)与[待办新增](veil/brain/learned_context.py#L2130)：提交后丢响应时，重试可能重复写入。验收：持久化幂等键在丢回包、并发和重启场景下均返回原结果与原 ID，只落一条正文及相应版本。
+4. [反证长期积累](veil/brain/learned_context.py#L806)：以长期历史验证载荷与查询有界，不裁掉相关否决；证据不足时不晋升并标记原因。
+5. [任意跨语言同义否决](veil/brain/learned_context.py#L164)：现有原文锚点不是完整语义保证；验证无共享锚点的译写拒绝、无关正例与明确恢复路径。以上五项均是 S6 开工门禁，本单不重构。
+
+### 既有边界与反例
+
+- [间接证据查询](veil/brain/learned_context.py#L535-L563)：每次解析至多读取 200 条匹配的 stage-evidence（账本序号倒序）、50 条用户引述及 50 条聊天来源（ord 顺序）；不分页。有效证据可能位于窗口外；若其余来源也无法证实，保持或降为 uncertain，不以截断、无命中或来源缺失断言证据不存在，也不放宽原话匹配。此为当前能力边界，未改查询。
+- [迁移回滚反例](tests/test_pr460_storage.py#L161-L215)从缺少 vetoed 的旧格式实际迁移，断言 applied 并无条件调用 rollback；验证无用字段撤销、迁移后编辑/删除/锁定/完成状态及版本历史保留。[原有 CI 日志](https://github.com/yecays-ai/veil-agent/actions/runs/45967164223/job/140398494254)两例通过，本轮未重跑。
 
 ## 下一个窗口第一步
 
-1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，先在该分支的隔离副本运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --check`，确认无目标冲突后再运行 `--all --move --rewrite`；工具会先改写、再移动、生成兼容入口，并在失败时恢复原文件。
+1. 复核 PR #460 收口提交与对应 CI；不要合并或部署。S6 接入前读[证据与否决的能力边界](docs/tickets/459-p6-s3-relationship-governance.md#供-s6-使用的能力边界)。
 2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
 3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 

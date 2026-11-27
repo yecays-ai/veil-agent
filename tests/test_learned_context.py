@@ -116,13 +116,20 @@ class LearnedContextTests(unittest.TestCase):
         result, state, _ = small.invoke('ongoing_update', {'action': 'add', 'text': 'b' * 40})
         self.assertEqual(state, '成功', result)
 
-    def test_shared_budget_rejects_without_changing(self):
+    def test_section_budget_rejects_without_changing_and_isolates_sections(self):
         small = LearnedContext(self.root, 'test', {
-            'file': 'learned-context.json', 'legacy_file': 'about-lan.md', 'max_bytes': 60})
+            'file': 'learned-context.json', 'legacy_file': 'about-lan.md',
+            'section_budgets': {'facts': 1800, 'growth': 40, 'relationship': 1500, 'ongoing': 900},
+        })
         result, state, _ = small.invoke('profile_append', {'text': 'x' * 60, 'section': 'growth'})
         self.assertEqual(state, '被拒绝')
-        self.assertIn('shared limit', result)
+        self.assertIn('growth limit is 40', result)
         self.assertEqual(small.read()['growth']['text'], '')
+        # Another section with available budget still succeeds.
+        _, rel_state, _ = small.invoke('profile_append', {
+            'text': 'Agree to keep things concise.', 'section': 'relationship', 'status': 'uncertain',
+        })
+        self.assertEqual(rel_state, '成功')
 
     def test_replace_only_within_section(self):
         self.ctx.invoke('profile_append', {'text': 'growth only', 'section': 'growth'})

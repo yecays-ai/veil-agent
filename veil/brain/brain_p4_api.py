@@ -567,13 +567,13 @@ def overview(hub):
             'id': 'cognition',
             'name': '关系底座与习得认知',
             'enabled': bool(learned_status.get('available', True)),
-            'ready': bool(learned_status.get('available', True)),
+            'ready': bool(learned_status.get('available', True)) and not learned_status.get('capacity_degraded'),
             'running': True,
             'protected': True,
             'protected_reason': '每轮人格与关系上下文底座，受保护不可关闭',
-            'tone': 'good',
+            'tone': 'warn' if learned_status.get('capacity_degraded') else 'good',
             'status_text': '已启用 · 就绪 · 每轮注入',
-            'detail': f"共享预算 {cognition_budget['used_bytes']} / {cognition_budget['max_bytes']} B",
+            'detail': f"四区独立预算 {cognition_budget['used_bytes']} / {cognition_budget['max_bytes']} B",
             'budget_used': cognition_budget['used_bytes'],
             'budget_max': cognition_budget['max_bytes'],
         },
@@ -614,30 +614,10 @@ def overview(hub):
 
 
 def learned_versions(hub):
-    chat = getattr(hub, 'chat', None)
-    cfg = getattr(chat, 'cfg', None)
-    store = getattr(chat, 'store', None)
-    if cfg is None or store is None:
-        return []
-    path = Path(store.root) / cfg.id / 'learned-context.versions.jsonl'
-    if not path.is_file():
-        return []
-    rows = []
-    try:
-        with path.open(encoding='utf-8', errors='replace') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    if isinstance(obj, dict):
-                        rows.append(obj)
-                except ValueError:
-                    continue
-    except OSError:
-        return []
-    return list(reversed(rows[-20:]))
+    profile = getattr(getattr(hub, 'chat', None), 'profile', None)
+    if hasattr(profile, 'read_version_history'):
+        return profile.read_version_history()
+    return []
 
 
 def _utf8_bytes(text):
@@ -645,9 +625,18 @@ def _utf8_bytes(text):
 
 
 def _compute_cognition_budget(learned_status):
-    """Compute shared byte budget consistently with peter-page.js (growth + facts + open ongoing + current relationship)."""
+    """Use the same stored section usage as admission and the Peter editor."""
     if not isinstance(learned_status, dict):
         return {'used_bytes': 0, 'max_bytes': 4000, 'by_section': {}}
+    budget = learned_status.get('budgets') or {}
+    by_section = budget.get('sections')
+    if by_section:
+        return {
+            'used_bytes': sum(row['used_bytes'] for row in by_section.values()),
+            'max_bytes': sum(row['max_bytes'] for row in by_section.values()),
+            'by_section': {key: row['used_bytes'] for key, row in by_section.items()},
+            'sections': by_section,
+        }
     max_bytes = int(learned_status.get('max_bytes') or 4000)
     sections = learned_status.get('sections') or {}
     growth_text = (sections.get('growth') or {}).get('text') or ''
