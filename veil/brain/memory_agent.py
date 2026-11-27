@@ -51,6 +51,29 @@ class MemoryToolError(RuntimeError):
         super().__init__(messages[code])
 
 
+class _QueryVectorCapture:
+    """Proxy that keeps ``embedder.embed()`` and records the query vector.
+
+    Brain retrieval calls ``.embed()`` on a provider object. A bare function wrapper is not
+    an embedder: retrieval raises TypeError before the real embedding runs, so leisure
+    association never sees the vector and the keyword fallback records the wrong error.
+    """
+
+    def __init__(self, inner, remember):
+        self._inner = inner
+        self._remember = remember
+
+    def embed(self, text):
+        method = getattr(self._inner, 'embed', None)
+        vector = method(text) if callable(method) else self._inner(text)
+        if vector is not None:
+            self._remember(vector)
+        return vector
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 # The exact line Ombre appends to a search result when the vector query was unavailable or failed.
 DEGRADED_NOTICE = '[检索降级：语义索引暂不可用'
 
@@ -1215,15 +1238,11 @@ class Memory:
                             'embedding_wait_ms': embedding_wait_ms, **meta}
                         return text
                 embedder = self.embedder()
-                # P6-S6-2: capture the query vector produced by the non-prefetched Brain search path
-                # so leisure/contextual association can reuse it without a second embedding call
-                # even when the recall judge is disabled or its circuit breaker is open.
-                def _capturing_embedder(text_arg):
-                    vec = embedder(text_arg)
-                    if vec is not None:
-                        self._turn_query_vector = vec
-                    return vec
-
+                # P6-S6-2: keep the query vector from the non-prefetched Brain search path
+                # so leisure association can reuse it when the judge is off or breaker-open,
+                # without a second embedding call. The proxy must still look like an embedder.
+                capturing = _QueryVectorCapture(
+                    embedder, lambda vector: setattr(self, '_turn_query_vector', vector))
                 tokens = max(512, len(query.encode('utf-8')))
                 rate = Decimal(str(self.cfg.memory['input_cny_per_million']))
                 if getattr(self, 'budget', None) is not None:
@@ -1232,9 +1251,9 @@ class Memory:
                     settled_amount = Decimal(tokens) * rate / Decimal(1_000_000)
                 try:
                     text, meta = brain_retrieval_search(
-                        brain_db, query, limit=asked, embedder=_capturing_embedder,
+                        brain_db, query, limit=asked, embedder=capturing,
                         settings=settings, model=model)
-                    reported = getattr(embedder, 'usage_tokens', None)
+                    reported = getattr(capturing, 'usage_tokens', None)
                     if type(reported) is int and reported > 0:
                         amount = Decimal(reported) * rate / Decimal(1_000_000)
                         if reservation is not None and amount <= reservation[1]:
@@ -2044,14 +2063,26 @@ class Memory:
                 judge_limit = (max(3, recall_cfg['rotation_candidates']) if wake
                                else max(int(ret_cfg.get('candidate_k', 8) or 8),
                                         int(judge.settings.get('ombre_candidates', 8))))
+                # Choose kwargs from the callable's signature. Catching TypeError and retrying
+                # can run the judge twice after it has already spent the embedding or mutated state.
+                import inspect
+                legacy_limit = max(3, recall_cfg['rotation_candidates']) if wake else None
                 try:
-                    normal = judge.choose(query, pool, prefetched, wake=wake,
-                                          candidate_limit=judge_limit,
-                                          recent=recent, context_signal=signal)
-                except TypeError:
-                    # Compatibility with minimal test fake judges that only accept the legacy signature.
-                    normal = judge.choose(query, pool, prefetched, wake=wake,
-                                          candidate_limit=max(3, recall_cfg['rotation_candidates']) if wake else None)
+                    params = inspect.signature(judge.choose).parameters
+                    var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                except (TypeError, ValueError):
+                    params, var_kw = {}, False
+                choose_kwargs = {'wake': wake}
+                modern = var_kw or 'recent' in params or 'context_signal' in params
+                if var_kw or 'candidate_limit' in params:
+                    choose_kwargs['candidate_limit'] = judge_limit if modern else legacy_limit
+                if modern and (var_kw or 'recent' in params):
+                    choose_kwargs['recent'] = recent
+                if modern and (var_kw or 'context_signal' in params):
+                    choose_kwargs['context_signal'] = signal
+                if not var_kw and not params:
+                    choose_kwargs['candidate_limit'] = legacy_limit
+                normal = judge.choose(query, pool, prefetched, **choose_kwargs)
                 judged = True
                 self.last_recall_debug['judge'] = dict(getattr(judge, 'last_choice', {}) or {})
                 self._merge_embedding_wait(self.last_recall_debug, judge)

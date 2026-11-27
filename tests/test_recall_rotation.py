@@ -164,7 +164,7 @@ class RecallRotationTests(unittest.TestCase):
         self.assertEqual(self.recall(restarted, 'cooking dumplings')[1], [])
         saved = self.store.read('fake/memory/_agent/recall-rotation.jsonl')[-1]
         # IDs and turn numbers only, no memory text (ticket 422 adds which association surfaced last).
-        self.assertLessEqual(set(saved), {'turn', 'last', 'time', 'association'})
+        self.assertLessEqual(set(saved), {'turn', 'last', 'time', 'association', 'leisure_association'})
         self.assertNotIn('dumplings', json.dumps(saved))
 
     def test_rollback_gives_back_the_cooldown_of_a_turn_that_delivered_nothing(self):
@@ -493,7 +493,8 @@ class HelperTests(unittest.TestCase):
     def test_cooldown_ignores_damaged_state(self):
         state = Cooldown({'turn': 'x', 'last': {'a': 99, 'b': 'y'}})
         self.assertEqual(state.snapshot(), {'turn': 0, 'last': {},
-                                            'association': {'key': '', 'turn': -1, 'repeat': 0}})
+                                            'association': {'key': '', 'turn': -1, 'repeat': 0},
+                                            'leisure_association': {'key': '', 'turn': -1, 'repeat': 0}})
 
     def test_reply_row_carries_kinds_only_for_its_refs(self):
         chat = Mock(turn_memory_refs=['a'], turn_memory_kinds={'a': 'random', 'b': 'search'})

@@ -1400,7 +1400,11 @@ class AutonomyController:
             from veil.brain.recall.leisure_association import audit_autonomy_output
             snaps = getattr(self.chat, '_autonomy_snapshots', None)
             run_snap = snaps.pop(started_at, None) if isinstance(snaps, dict) else None
-            snap_tools = run_snap['tools'] if isinstance(run_snap, dict) else self.chat.last_tool_summaries
+            if isinstance(run_snap, dict):
+                snap_tools = list(run_snap.get('tools') or [])
+            else:
+                snap_tools = list(self.chat.last_tool_summaries or [])
+            record['tools'] = snap_tools
             record['output_audit'] = audit_autonomy_output(answer, snap_tools)
             if isinstance(run_snap, dict) and isinstance(run_snap.get('leisure_association'), dict):
                 record['leisure_association'] = dict(run_snap['leisure_association'])
@@ -1433,7 +1437,6 @@ class AutonomyController:
                     record['next_step'] = value.strip()[:300]
                 elif separator and key in ('原因', 'reason'):
                     record['reason'] = value.strip()[:500]
-            record['tools'] = self.chat.last_tool_summaries
             record['lab_files_changed'] = [item.get('path') for item in record['tools']
                                            if item.get('state') == '成功' and self.chat.canonical_tool_name(item.get('tool')) in
                                            ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file')]

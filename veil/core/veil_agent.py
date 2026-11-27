@@ -3996,6 +3996,7 @@ class Chat:
 
     def _finalize_recall_delivery(self, autonomy: bool):
         """Finalize recall delivery or rollback while still inside the serialized send lock."""
+        self._recall_delivery_finalized = True
         delivered = bool(
             self.sent_messages
             or getattr(self, 'reply_row_saved', False)
@@ -4010,10 +4011,30 @@ class Chat:
             elif (getattr(self.memory, 'last_recall_marks', None)
                   or getattr(self.memory, 'last_association_marks', None)
                   or getattr(self.memory, '_has_association_rollback', False)):
-                try:
-                    self.memory.rollback_recall(req_id)
-                except TypeError:
-                    self.memory.rollback_recall()
+                self._rollback_undelivered_recall(req_id)
+
+    def _rollback_undelivered_recall(self, req_id):
+        """Roll back this turn's recall. Check the signature first so an internal TypeError is not retried."""
+        rollback = self.memory.rollback_recall
+        import inspect
+        try:
+            params = inspect.signature(rollback).parameters
+            kinds = {item.kind for item in params.values()}
+            accepts_id = (
+                inspect.Parameter.VAR_POSITIONAL in kinds
+                or inspect.Parameter.VAR_KEYWORD in kinds
+                or 'request_id' in params
+                or any(item.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                ) for item in params.values())
+            )
+        except (TypeError, ValueError):
+            accepts_id = False
+        if accepts_id:
+            rollback(req_id)
+        else:
+            rollback()
 
     def _capture_autonomy_snapshot(self):
         """Capture per-run tool summaries and recall diagnostics before releasing the send lock."""
@@ -4047,9 +4068,16 @@ class Chat:
             snaps.pop(next(iter(snaps)))
 
     def send(self, text, *, autonomy=False, **kwargs):
-        # Ticket 379 / P6-S6-2: recall delivery/rollback finalization runs inside the model lock
-        # so concurrent sends cannot clobber per-turn delivery state before finalization.
-        return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
+        # Ticket 379: a turn that delivers nothing gives recall marks back.
+        # The inner path finalizes while it still holds the model lock (P6-S6-2), so a
+        # concurrent send cannot clobber this turn. This outer finally only covers a
+        # replaced _send_under_model_lock; it does not finalize a second time.
+        self._recall_delivery_finalized = False
+        try:
+            return self._send_under_model_lock(text, autonomy=autonomy, **kwargs)
+        finally:
+            if not self._recall_delivery_finalized:
+                self._finalize_recall_delivery(autonomy)
 
     def _send_under_model_lock(self, text, *, autonomy=False, **kwargs):
         models = getattr(self.cfg, 'models', None)
