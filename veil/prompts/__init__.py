@@ -1,7 +1,7 @@
 """Ticket 400: every piece of text that reaches the model is registered here.
 
 The registry is the single list of instructions Peter can receive. Defaults ship with the code
-(in prompts/defaults); Lan's edits live outside the repository (in persona/instructions) and win.
+(in veil/prompts/defaults); Lan's edits live outside the repository (in persona/instructions) and win.
 Nothing in a request path writes prose inline any more: call text(entry_id) instead.
 """
 import re

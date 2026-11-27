@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import core
 from .judge import (JudgeClient, PROMPT_CONSERVATIVE, PROMPT_RELAXED, build_messages,
-                    parse_picked, threshold_gate)
+                    parse_picked, prompt_defaults_dir, threshold_gate)
 from .retrieval import (RetrievalConfig, association_choice, judge_candidate_pool,
                         stratified_long_tail_pool, tokenize)
 from .runtime import budget_snapshot, snapshot_fingerprint
@@ -749,7 +749,12 @@ def run_c2a(ctx):
                               variable='tool_step>0 省略空提示 关 vs 开', fixed='完整多步工具循环切片 + deepseek-flash 真实生成盲评')
     rows = _context_log_rows(ctx)
     empty_prompt = ''
-    for path in (Path(__file__).resolve().parent.parent.parent / 'prompts' / 'defaults').glob('memory.*.empty.md'):
+    prompt_defaults = prompt_defaults_dir()
+    empty_paths = sorted(prompt_defaults.glob('memory.*.empty.md'))
+    if not empty_paths:
+        raise RuntimeError(
+            f'recall-lab needs memory.*.empty.md prompt defaults under {prompt_defaults}; found none')
+    for path in empty_paths:
         empty_prompt += path.read_text(encoding='utf-8')
     prompt_bytes = len(empty_prompt.encode('utf-8'))
     non_first = [row for row in rows if (row.get('step') or 0) > 0]

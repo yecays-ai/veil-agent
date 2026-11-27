@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const vm = require('node:vm');
-const { readEndpoint, connect } = require('../backend.cjs');
+const { readEndpoint, connect, validRoot, launchArgs } = require('../backend.cjs');
 
 test('a slow screen-pop discovery cannot erase a newer chat connection', async () => {
   const source = await fs.readFile(path.join(__dirname, '..', 'main.cjs'), 'utf8');
@@ -48,6 +48,27 @@ test('the updater migrates the old desktop shortcut to the hidden entry', async 
   assert.match(migration, /\$oldTarget = Join-Path \$root 'start-desktop\.bat'/i);
   assert.match(migration, /\$shortcut\.TargetPath = Join-Path \$env:SystemRoot 'System32\\wscript\.exe'/i);
   assert.match(migration, /\$shortcut\.Arguments = '\"' \+ \$script \+ '\"'/i);
+});
+
+test('detects the package layout and prefers the module launcher', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-package-layout-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'veil/server'), { recursive: true });
+  await fs.mkdir(path.join(root, '.venv/Scripts'), { recursive: true });
+  for (const file of ['veil/server/web_launcher.py', 'veil/server/web_agent.py', '.venv/Scripts/python.exe'])
+    await fs.writeFile(path.join(root, file), 'fake fixture');
+  assert.equal(await validRoot(root), true);
+  assert.deepEqual(await launchArgs(root), ['-m', 'veil.server.web_launcher', '--no-browser']);
+});
+
+test('uses the legacy launcher for an old flat layout', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'veil-legacy-layout-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, '.venv/Scripts'), { recursive: true });
+  for (const file of ['web_launcher.py', 'web_agent.py', '.venv/Scripts/python.exe'])
+    await fs.writeFile(path.join(root, file), 'fake fixture');
+  assert.equal(await validRoot(root), true);
+  assert.deepEqual(await launchArgs(root), [path.join(root, 'web_launcher.py'), '--no-browser']);
 });
 
 test('reuses a ready authenticated service without launching or writing Agent data', async t => {

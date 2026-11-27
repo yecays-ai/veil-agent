@@ -364,10 +364,10 @@ class RepairTests(unittest.TestCase):
         store = Store(self.root / 'data')
         with self.assertRaises(UserError) as caught:
             store.read('fixture/chat.jsonl')
-        self.assertIn('data_repair.py diagnose --file', str(caught.exception))
+        self.assertIn('veil.system.data_repair diagnose --file', str(caught.exception))
         with self.assertRaises(UserError) as caught:
             store.append('fixture/chat.jsonl', {'n': 9})
-        self.assertIn('data_repair.py diagnose --file', str(caught.exception))
+        self.assertIn('veil.system.data_repair diagnose --file', str(caught.exception))
 
 
 if __name__ == '__main__':

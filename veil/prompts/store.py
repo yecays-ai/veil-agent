@@ -74,7 +74,7 @@ class PromptStore:
         try:
             return self.default_path(entry_id).read_text(encoding='utf-8').rstrip('\n')
         except FileNotFoundError:
-            raise UserError('指令默认文本缺失：' + entry_id + '（prompts/defaults/' + entry_id + '.md）。') from None
+            raise UserError('指令默认文本缺失：' + entry_id + '（veil/prompts/defaults/' + entry_id + '.md）。') from None
         except OSError as exc:
             raise UserError('读不到指令默认文本：' + entry_id + '（' + str(exc) + '）。') from exc
 

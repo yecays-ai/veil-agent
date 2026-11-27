@@ -52,10 +52,14 @@ async function readEndpoint(root, { requireReady = true } = {}) {
   } catch { return null; }
 }
 
-async function launch(root) {
-  const args = (await hasPackageLayout(root))
+async function launchArgs(root) {
+  return (await hasPackageLayout(root))
     ? ['-m', 'veil.server.web_launcher', '--no-browser']
     : [path.join(root, 'web_launcher.py'), '--no-browser'];
+}
+
+async function launch(root) {
+  const args = await launchArgs(root);
   return new Promise((resolve, reject) => {
     const child = spawn(pythonPath(root), args, {
         cwd: root, windowsHide: true, stdio: 'ignore', shell: false,
@@ -81,4 +85,4 @@ async function connect(root, launcher = launch) {
   return endpoint;
 }
 
-module.exports = { validRoot, readEndpoint, connect };
+module.exports = { validRoot, readEndpoint, connect, launchArgs };

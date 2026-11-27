@@ -1,5 +1,5 @@
 """Compatibility entrypoint kept at repository root for legacy desktop builds."""
-import runpy
+from veil.server import web_agent
 
 if __name__ == '__main__':
-    runpy.run_module('veil.server.web_agent', run_name='__main__')
+    raise SystemExit(web_agent.main())

@@ -955,7 +955,7 @@ class MaintenanceManager:
         shown = str(self.token_file) if self.token_file else 'the secrets folder'
         return ('GitHub is not ready: ' + _short(err or 'gh is not signed in', 200) + ' Tell Lan: install GitHub CLI '
                 '(winget install GitHub.cli) and save a fine-grained token for ' + self.github_repo +
-                f' (Contents and Pull requests: read and write) into {shown} by running github-token.cmd.')
+                f' (Contents and Pull requests: read and write) into {shown} by running scripts/windows/github-token.cmd.')
 
     def _task(self, args, *, require_id=False):
         task_id = str(args.get('task_id') or '')

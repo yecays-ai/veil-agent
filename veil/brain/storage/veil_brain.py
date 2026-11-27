@@ -15,9 +15,11 @@ Layout expected under --source (an isolated copy):
 
 Commands:
 
-    python veil_brain.py import --source DIR --db FILE [--snapshot DIR] [--report FILE]
-    python veil_brain.py check --db FILE
-    python veil_brain.py inspect --db FILE [--id ID] [--limit N]
+    python -m veil.brain.storage.veil_brain import --source DIR --db FILE [--snapshot DIR] [--report FILE]
+    python -m veil.brain.storage.veil_brain check --db FILE
+    python -m veil.brain.storage.veil_brain inspect --db FILE [--id ID] [--limit N]
+
+The root veil_brain.py compatibility entrypoint forwards to this module for saved commands.
 """
 from __future__ import annotations
 

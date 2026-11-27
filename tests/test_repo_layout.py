@@ -56,6 +56,18 @@ class RepoLayoutGuardTests(unittest.TestCase):
                 self.assertNotIn('git fetch', stripped, f'{label} must never run git fetch')
                 self.assertNotIn('git pull', stripped, f'{label} must never run git pull')
 
+    def test_rollback_script_guards_local_paths_and_offline_dependencies(self):
+        ps1 = (ROOT / 'scripts' / 'rollback_version.ps1').read_text(encoding='utf-8')
+        for marker in ('--untracked-files=all', '--ignored=matching',
+                       'local untracked/ignored paths conflict',
+                       'AllowOnlineDeps', 'rollback-dist-', 'Move-Item'):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, ps1)
+        # Dependency installation is only reachable after explicit online consent.
+        self.assertIn('if (-not $AllowOnlineDeps)', ps1)
+        self.assertIn('if ($needsPythonSync)', ps1)
+        self.assertNotIn('Write-Warning "Python dependency sync failed', ps1)
+
     def test_root_python_files_and_legacy_imports(self):
         if not STRICT_LAYOUT:
             self.skipTest('Strict layout assertions activate in batch B7 after all batches migrate')

@@ -1148,11 +1148,11 @@ def links(root, role, cfg=None):
         {'id': 'memory', 'name': '记忆维护（VEIL Brain）',
          'state': 'ready' if usable else 'not_ready', 'url': url if usable else '',
          'hint': '' if usable else '记忆组提供维护页后自动出现在这里；现在可以用 '
-                                  'veil_brain.py inspect --db <brain.db> --id <记忆 id> 查。'},
+                                  'python -m veil.brain.storage.veil_brain inspect --db <brain.db> --id <记忆 id> 查。'},
         {'id': 'mcp', 'name': 'MCP 服务', 'state': 'page', 'page': 'mcp',
          'hint': '启停服务、看重试状态。'},
         {'id': 'data_repair', 'name': '数据修复诊断', 'state': 'command',
-         'hint': 'python data_repair.py diagnose --file <账本文件>（只读）'},
+         'hint': 'python -m veil.system.data_repair diagnose --file <账本文件>（只读）'},
         {'id': 'update', 'name': '更新代码', 'state': 'command',
          'hint': 'update-main.cmd（诊断页不会自己更新或重启）'},
     ]

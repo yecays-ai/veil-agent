@@ -29,13 +29,26 @@ def _prompts_module():
     return prompts
 
 
+def prompt_defaults_dir():
+    """The production prompt defaults, whether imported as a package or run from research/."""
+    try:
+        from veil import prompts
+        return Path(prompts.DEFAULTS)
+    except Exception:
+        return Path(__file__).resolve().parents[3] / 'veil' / 'prompts' / 'defaults'
+
+
 def production_prompt(wake=False):
     try:
         return _prompts_module().text('memory.judge.wake' if wake else 'memory.judge.prompt')
     except Exception:
-        path = Path(__file__).resolve().parent.parent.parent / 'prompts' / 'defaults'
+        path = prompt_defaults_dir()
         name = 'memory.judge.wake.md' if wake else 'memory.judge.prompt.md'
-        return (path / name).read_text(encoding='utf-8').strip()
+        target = path / name
+        if not target.is_file():
+            raise FileNotFoundError(
+                f'recall-lab could not read the production prompt default: {target}') from None
+        return target.read_text(encoding='utf-8').strip()
 
 
 def card_300(raw):

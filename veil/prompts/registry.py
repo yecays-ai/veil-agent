@@ -2,7 +2,7 @@
 
 Every entry here is visible in the instructions page. Kind decides how it is shown and stored:
 
-- text   default text in prompts/defaults/<id>.md; Lan's override in persona/instructions/<id>.md
+- text   default text in veil/prompts/defaults/<id>.md; Lan's override in persona/instructions/<id>.md
 - marker a block the program fills in at request time; visible, never editable
 
 Persona, background, talking samples and his notes are NOT registered here: each already has its own

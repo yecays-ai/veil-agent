@@ -148,7 +148,7 @@ def repair(root, file, *, confirm=input, notice=print):
         notice(f'被隔离的 {len(serious)} 行（原样保留）：{quarantine}')
         if cost:
             notice('费用账本里有被隔离的行，已暂停所有付费请求。请核对供应商账单后运行 '
-                   'data_repair.py ledger-verify 确认。')
+                   'python -m veil.system.data_repair ledger-verify 确认。')
         return {'quarantined': len(serious), 'original_copy': str(original_copy), 'quarantine': str(quarantine)}
 
 
@@ -165,7 +165,7 @@ def ledger_status(root):
             continue
         out.append(f"  - {item.get('kind')}：{item.get('count')} 项，证据文件 data/{item.get('evidence')}"
                    + (f"，原文件 data/{item['original_copy']}" if item.get('original_copy') else ''))
-    out.append('请对照供应商账单，确认保留的账本金额合理；确认后运行 data_repair.py ledger-verify。')
+    out.append('请对照供应商账单，确认保留的账本金额合理；确认后运行 python -m veil.system.data_repair ledger-verify。')
     return out
 
 

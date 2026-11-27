@@ -439,7 +439,7 @@ class Store:
 
     def _repair_hint(self, path):
         return ('请保留 data 文件夹；先完全关闭 VEIL，再运行 '
-                f'.venv\\Scripts\\python.exe data_repair.py diagnose --file {_ps_literal(path)} 查看，'
+                f'.venv\\Scripts\\python.exe -m veil.system.data_repair diagnose --file {_ps_literal(path)} 查看，'
                 '确认后运行同一命令的 repair 修复（会先保存原文件，不删除任何东西）。')
 
     def _damaged_message(self, path):
@@ -1366,7 +1366,7 @@ class Budget:
         """After a restore or repair left cost records unverified, no new paid request starts."""
         if ledger_recovery.is_unverified(self.store.root):
             raise BudgetExceeded('费用账本有待核实的记录，已暂停所有付费请求，未发送。请先关闭 VEIL，对照供应商账单后运行 '
-                                 '.venv\\Scripts\\python.exe data_repair.py ledger-status / ledger-verify。')
+                                 '.venv\\Scripts\\python.exe -m veil.system.data_repair ledger-status / ledger-verify。')
 
     @contextmanager
     def autonomous(self, character, daily=None):
@@ -1503,7 +1503,7 @@ class Budget:
             raise UserError(self._LEDGER_UNREADABLE) from exc
 
     _LEDGER_UNREADABLE = ('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 '
-                          '.venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。')
+                          '.venv\\Scripts\\python.exe -m veil.system.data_repair diagnose --file data\\costs.jsonl 查看。')
 
     def _totals_full(self, stamp):
         reservations, settlements = {}, {}
@@ -1824,7 +1824,7 @@ class Budget:
                             prompt += event['prompt_tokens']
                             cached += event['cached_tokens']
         except (KeyError, TypeError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe -m veil.system.data_repair diagnose --file data\\costs.jsonl 查看。') from exc
         if not prompt and not unknown:
             return '今天 VEIL 直连模型缓存命中率暂无可核对用量。'
         if not prompt:
@@ -1852,7 +1852,7 @@ class Budget:
         delegate = (all_delegate if character is None else
                     self.category_totals(character, stamp, 'delegate')[0])
         chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience - all_judge - all_calendar
-        warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 data_repair.py ledger-status】'
+        warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 python -m veil.system.data_repair ledger-status】'
                    if ledger_recovery.is_unverified(self.store.root) else '')
         return (warning + f'今天 ¥{day:.6f} / {self.daily_limit()}；本月 ¥{month:.6f} / {self.monthly_limit()}；'
                 f'待核对预留 ¥{pending:.6f}；其中聊天 ¥{chat:.6f}，自主 ¥{autonomy:.6f} / '
@@ -1880,7 +1880,7 @@ class Budget:
                 amount, count = totals.get(event.get('model', '?'), (Decimal(0), 0))
                 totals[event.get('model', '?')] = (amount + Decimal(settlements[key]['amount']), count + 1)
         except (KeyError, ValueError, TypeError, ArithmeticError) as exc:
-            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe data_repair.py diagnose --file data\\costs.jsonl 查看。') from exc
+            raise UserError('花费账本无法核对，已停止；请保留 data 文件夹，关闭 VEIL 后运行 .venv\\Scripts\\python.exe -m veil.system.data_repair diagnose --file data\\costs.jsonl 查看。') from exc
         if not totals:
             return ''
         return '今天按模型：' + '；'.join(f'{model} ¥{amount:.4f}（{count} 次）'

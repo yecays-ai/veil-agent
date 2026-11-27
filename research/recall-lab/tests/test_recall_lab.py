@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    python -m unittest discover -s recall-lab/tests -v
+    python -m unittest discover -s research/recall-lab/tests -v
 """
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ for path in (str(LAB), str(ROOT)):
         sys.path.insert(0, path)
 
 from recall_lab import core  # noqa: E402
-from recall_lab.judge import card_300, card_500, parse_picked  # noqa: E402
+from recall_lab.judge import (card_300, card_500, parse_picked, production_prompt,  # noqa: E402
+                                prompt_defaults_dir)
 from recall_lab.retrieval import (AhoCorasick, RetrievalConfig, Retriever,  # noqa: E402
                                   STOPWORDS, association_choice, build_alias_dictionary,
                                   stratified_long_tail_pool, tokenize)
@@ -261,6 +262,13 @@ class CardTests(unittest.TestCase):
         self.assertIn('why:', text)
         self.assertIn('importance: 8', text)
         self.assertLessEqual(len(text), 500)
+
+    def test_production_prompt_defaults_are_reachable_after_the_research_move(self):
+        defaults = prompt_defaults_dir()
+        self.assertTrue(defaults.is_dir(), defaults)
+        self.assertTrue(list(defaults.glob('memory.*.empty.md')), defaults)
+        self.assertTrue(production_prompt())
+        self.assertTrue(production_prompt(wake=True))
 
     def test_judge_parse(self):
         class Record:

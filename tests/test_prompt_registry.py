@@ -17,14 +17,23 @@ class ScanCoverageTests(unittest.TestCase):
         '         "like prompt text, so the scanner has to catch it before it ships.")\n'
     )
 
+    @staticmethod
+    def _all_source_files():
+        files = list(inline.ROOT.glob('*.py'))
+        veil_dir = inline.ROOT / 'veil'
+        if veil_dir.is_dir():
+            files.extend(path for path in veil_dir.rglob('*.py') if path.name != '__init__.py')
+        return files
+
     def test_every_module_that_imports_prompts_is_scanned(self):
-        importing = {path.relative_to(inline.ROOT).as_posix() for path in inline.iter_source_files()
+        importing = {path.relative_to(inline.ROOT).as_posix() for path in self._all_source_files()
                      if inline._imports_prompts(path)}
         self.assertTrue(importing)
+        self.assertIn('veil/prompts/instructions.py', importing)
         self.assertEqual(sorted(importing - set(inline.modules())), [])
 
     def test_every_module_that_builds_requests_is_scanned(self):
-        builders = {path.relative_to(inline.ROOT).as_posix() for path in inline.iter_source_files()
+        builders = {path.relative_to(inline.ROOT).as_posix() for path in self._all_source_files()
                     if inline.builds_requests(path)}
         self.assertTrue(builders)
         self.assertEqual(sorted(builders - set(inline.modules())), [],

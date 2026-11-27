@@ -14,17 +14,19 @@
 ### 付费请求被暂停了怎么办
 
 1. 完全关闭 VEIL。
-2. `.venv\Scripts\python.exe data_repair.py ledger-status` 查看是哪些项目、证据文件在哪里。
+2. `.venv\Scripts\python.exe -m veil.system.data_repair ledger-status` 查看是哪些项目、证据文件在哪里。
 3. 对照供应商后台账单，确认账本里保留的金额合理。
-4. `.venv\Scripts\python.exe data_repair.py ledger-verify`，输入 `VERIFIED` 确认。标记文件会改名保留为 `costs-unverified.verified-<时间>.json`，证据文件也都还在。
+4. `.venv\Scripts\python.exe -m veil.system.data_repair ledger-verify`，输入 `VERIFIED` 确认。标记文件会改名保留为 `costs-unverified.verified-<时间>.json`，证据文件也都还在。
+
+> 根目录 `data_repair.py` 是兼容入口，旧命令同样可用；新命令统一使用 `-m veil.system.data_repair`。
 
 ## 二、聊天或账本文件损坏（例如断电时最后一行写到一半）
 
 症状：启动或聊天时提示「本机账本损坏，已停止」，里面写着要运行的命令。
 
 1. 完全关闭 VEIL（修复工具会检查服务是否还在运行）。
-2. 先只查看：`.venv\Scripts\python.exe data_repair.py diagnose --file data\fixture\chat.jsonl`（换成提示里的路径）。它会写明第几行、从第几个字节起、是什么问题、这一行的开头内容；不会改动任何东西。
-3. 确认后修复：`.venv\Scripts\python.exe data_repair.py repair --file ...`，输入 `REPAIR`。它会：
+2. 先只查看：`.venv\Scripts\python.exe -m veil.system.data_repair diagnose --file data\fixture\chat.jsonl`（换成提示里的路径）。它会写明第几行、从第几个字节起、是什么问题、这一行的开头内容；不会改动任何东西。
+3. 确认后修复：`.venv\Scripts\python.exe -m veil.system.data_repair repair --file ...`，输入 `REPAIR`。它会：
    - 先把原文件完整保存成 `<原名>.corrupt-<时间>`（并校验一致）；
    - 把有问题的行**原样**移到 `<名字>.quarantine-<时间>.jsonl`，其余记录一字不动；
    - 只缺末尾换行的文件，只补一个换行，不改任何记录（这种情况不会生成 `.corrupt-` 副本，也不会暂停付费请求）。

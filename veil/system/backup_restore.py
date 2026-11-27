@@ -620,7 +620,7 @@ def _reconcile_ledger(target, sources, notice):
             notice(
                 f"有 {len(result.evidence)} 处无法确认（两份账本不一致或有损坏的行）：已原样保存在 data/{name}，"
                 "没有按零元处理，也没有丢弃；所有付费请求已暂停。请核对供应商账单后运行 "
-                "data_repair.py ledger-verify。"
+                "python -m veil.system.data_repair ledger-verify。"
             )
 
 

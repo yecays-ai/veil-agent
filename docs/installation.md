@@ -67,7 +67,16 @@ EMBED_API_KEY=你的硅基流动密钥      # 记忆向量召回用
 .\scripts\windows\rollback-version.cmd <目标提交或标签>
 ```
 
-脚本绝不执行 `git fetch` 或 `git pull`，回滚前自动建立本地恢复分支，切回目标提交并本地重新打包 `VEIL.exe`，不触碰本机数据。其他低频工具（如 GitHub Token、小红书登录、工作台开关、人设版本还原、隔离预览）也统一存放在 `scripts/windows/`。
+脚本绝不执行 `git fetch` 或 `git pull`，回滚前自动建立本地恢复分支，切回目标提交并本地重新打包 `VEIL.exe`，不触碰本机数据。
+
+默认流程是**离线**的：
+
+- 回滚前检查**所有未跟踪和被忽略文件**与目标提交的路径冲突（包括父子目录）；有覆盖风险立即中止，不丢本机文件。
+- 目标提交的 Python 依赖或桌面依赖/Electron 缓存不足时，默认中止，不会在后台联网安装。
+- 确需联网同步依赖时，显式加 `--allow-online-deps`；只回滚代码可加 `--skip-package`。
+- 重新打包前会把现有 `desktop\dist` 移到 `.local-tmp`；打包失败会恢复原桌面程序。
+
+其他低频工具（如 GitHub Token、小红书登录、工作台开关、人设版本还原、隔离预览）也统一存放在 `scripts/windows/`。
 
 ## 6. 模型与预算
 

@@ -26,7 +26,7 @@ def _row(entry):
         item['bytes'] = status['bytes']
         item['overridden'] = status['overridden']
         item['default_changed'] = status.get('default_changed', False)
-        item['source'] = 'prompts/defaults/' + entry.id + '.md'
+        item['source'] = 'veil/prompts/defaults/' + entry.id + '.md'
     else:
         item['text'] = ''
         item['source'] = '程序每轮生成，没有固定原文'

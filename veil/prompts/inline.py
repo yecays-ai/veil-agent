@@ -153,13 +153,21 @@ def builds_requests(path):
 
 
 def iter_source_files():
-    """Yield repository-relative source files across root and veil/ (excluding veil/prompts/)."""
+    """Yield root and veil/ source files, including the prompt-management UI module.
+
+    veil/prompts/instructions.py used to live at the repository root and was part of the
+    scanner's coverage.  Prompt defaults and package plumbing stay out, but the UI module
+    that imports prompts must remain visible so an inline model-facing sentence there is
+    still caught.
+    """
     files = list(ROOT.glob('*.py'))
     veil_dir = ROOT / 'veil'
     if veil_dir.is_dir():
         for path in sorted(veil_dir.rglob('*.py')):
             rel = path.relative_to(ROOT).as_posix()
-            if rel.startswith('veil/prompts/') or path.name == '__init__.py':
+            if path.name == '__init__.py':
+                continue
+            if rel.startswith('veil/prompts/') and path.name != 'instructions.py':
                 continue
             files.append(path)
     return files
@@ -213,7 +221,7 @@ def feedback():
 def update_feedback():
     lines = ['# Ticket 402/404: runtime feedback, tool-parameter text and user-facing errors still inline.',
              '# NOT preset prompts: these are short program messages. New prompt prose belongs in',
-             '# prompts/defaults (call prompts.text) or in a tool description (managed by prompts/tools.py).',
+             '# veil/prompts/defaults (call prompts.text) or in a tool description (managed by prompts/tools.py).',
              '# Format: <sha1-12> <reason:...> <file>:<line> <preview>']
     seen = set()
     for row in sorted(collect(), key=lambda item: (item['file'], item['line'])):

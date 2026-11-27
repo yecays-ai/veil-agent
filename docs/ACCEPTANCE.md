@@ -429,9 +429,9 @@
 | --- | --- | --- | --- |
 | 212 说话规则 | 已通过（Windows 使用过） | `persona/peter.backup-2026-11-04-before-voice-rules.md` 存在，说明当年按工单改过人设并留了改前副本；现在 `peter.md` 里已没有 `VEIL-VOICE-RULES` 标记块（0 命中），人设声音改由 `persona/peter.voice.md`（11-20）承担 | 「撤回脚本」这条路径没单独验，且规则块已被后续声音方案替换 |
 | 213 表单报错 | 已通过（Windows 使用过） | `models.json` 里 5 个模型、4 个接口都保存成功，说明「更多 → 模型」的保存通道可用 | 「保存失败时卡片顶部红字」这个错误态没专门制造过 |
-| 214 人设版本 | 已通过（Windows 使用过） | `persona/versions/` 有 **11 份**，最新 `lan.20261123-072810.md`（11-23），说明启动自动留版本一直在跑 | 「双击 `restore-persona.cmd` 选编号还原」没专门验 |
+| 214 人设版本 | 已通过（Windows 使用过） | `persona/versions/` 有 **11 份**，最新 `lan.20261123-072810.md`（11-23），说明启动自动留版本一直在跑 | 「双击 `scripts\windows\restore-persona.cmd` 选编号还原」没专门验 |
 
-- **步骤（想做时）**：214 改一句人设 → 重开 → 看 `versions/` 多一份 → 双击 `restore-persona.cmd` 选旧编号还原。
+- **步骤（想做时）**：214 改一句人设 → 重开 → 看 `versions/` 多一份 → 双击 `scripts\windows\restore-persona.cmd` 选旧编号还原。
 - [ ] 212 通过
 - [ ] 213 通过
 - [ ] 214 通过

@@ -159,6 +159,8 @@
     "web_launcher.py",
     "setup_fetch.py",
     "backup_restore.py",
-    "veil_agent.py"
+    "veil_agent.py",
+    "data_repair.py",
+    "veil_brain.py"
   ]
 }

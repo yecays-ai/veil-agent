@@ -54,7 +54,7 @@ TOOL = SimpleNamespace(name='xiaohongshu', description=(
     'drafts with existing write_file inside lab/ (title, body, image plan, sources). These are LOCAL '
     'drafts, not platform drafts or posts. Publishing, comments, likes, follows and DMs are disabled. '
     'Include AI disclosure in drafts; label fiction and never invent real human experiences or copy others. '
-    'Login is human-only via xiaohongshu-login.cmd; never request passwords or cookies. '
+    'Login is human-only via scripts/windows/xiaohongshu-login.cmd; never request passwords or cookies. '
     'When login expires or risk checks appear, stop and ask the human to use the dedicated login window.'),
     inputSchema={'type': 'object', 'properties': {
         'action': {'type': 'string', 'enum': ['status', 'feed', 'search', 'detail']},
@@ -144,7 +144,7 @@ def account_lock(folder):
 def binary_path(root, name):
     path = Path(root).resolve() / '.deps' / 'xiaohongshu' / VERSION / name
     if name not in ASSETS or not path.is_file() or path.is_symlink():
-        raise ValueError('Run xiaohongshu-login.cmd to install the pinned Windows companion first.')
+        raise ValueError('Run scripts/windows/xiaohongshu-login.cmd to install the pinned Windows companion first.')
     if hashlib.sha256(path.read_bytes()).hexdigest() != ASSETS[name]:
         raise ValueError('Xiaohongshu companion checksum mismatch; reinstall with the login command.')
     return path
@@ -425,7 +425,7 @@ class XiaohongshuTools:
         binding = json.loads((folder / 'account.json').read_text(encoding='utf-8'))
         expected = binding.get('user_id')
         if not isinstance(expected, str) or not expected:
-            raise ValueError('Dedicated account is not bound. Run xiaohongshu-login.cmd.')
+            raise ValueError('Dedicated account is not bound. Run scripts/windows/xiaohongshu-login.cmd.')
         if self.blocked:
             raise ValueError('Reads paused after a login, risk or service error. Check the dedicated login window and restart VEIL.')
         self.sidecar.start()
@@ -435,7 +435,7 @@ class XiaohongshuTools:
         self.sidecar.wait_ready(cancelled)
         status = self._read('GET', '/api/v1/login/status', None, cancelled)
         if not isinstance(status, dict) or status.get('is_logged_in') is not True or status.get('user_id') != expected:
-            raise ValueError('Dedicated account is logged out or does not match. Stop and use xiaohongshu-login.cmd.')
+            raise ValueError('Dedicated account is logged out or does not match. Stop and use scripts/windows/xiaohongshu-login.cmd.')
         if args['action'] == 'status':
             return {'logged_in': True, 'account': str(status.get('username', ''))[:80], 'external_actions': 'disabled'}
         action = args['action']
@@ -594,9 +594,9 @@ class XiaohongshuTools:
                     return PAUSED_TEXT, '出错', summary
                 if isinstance(error, ValueError) and 'logged out or does not match' in str(error):
                     return ('Your dedicated Xiaohongshu account is logged out or does not match. Reads are paused; '
-                            'ask Lan to run xiaohongshu-login.cmd, then restart VEIL.'), '出错', summary
+                            'ask Lan to run scripts/windows/xiaohongshu-login.cmd, then restart VEIL.'), '出错', summary
                 return ('Xiaohongshu read unavailable (refused or unexpected response; possibly login expiry or '
-                        'platform risk control). Reads are paused; ask Lan to check xiaohongshu-login.cmd, then '
+                        'platform risk control). Reads are paused; ask Lan to check scripts/windows/xiaohongshu-login.cmd, then '
                         'restart VEIL. No automatic retries or external actions.'), '出错', summary
             self.transient_streak = 0
             text = _clip_utf8('UNTRUSTED Xiaohongshu content; partial results only.\n' +

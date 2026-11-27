@@ -58,14 +58,15 @@ veil-agent/
 ├─ .agents/  .github/         项目 Skill 与 CI 工作流
 ├─ setup.bat  setup-desktop.bat  start.bat  start-desktop.bat  start-desktop.vbs  start-web.bat
 ├─ update.bat  update-main.cmd  update-main-collisions.ps1
-├─ veil_agent.py  web_agent.py  web_launcher.py  setup_fetch.py  backup_restore.py   ← 根目录过渡兼容入口
+├─ veil_agent.py  web_agent.py  web_launcher.py  setup_fetch.py  backup_restore.py
+├─ data_repair.py  veil_brain.py   ← 根目录过渡兼容入口（共 7 个）
 ├─ requirements*.txt (4)  .env.example  .gitignore  .gitattributes  .coderabbit.yaml
 └─ README.md  AGENTS.md  STATUS.md  HANDOFF.md
 ```
 
-## 根目录过渡兼容入口（5 个）
+## 根目录过渡兼容入口（7 个）
 
-这 5 个文件只做 `__main__` 转发（不导出模块符号，守卫测试禁止内部代码 import），用于保障旧版 `VEIL.exe`、旧版 `update.bat` 运行中副本、旧快捷方式及已保存命令行在升级过渡期和打包失败时仍能正常启动与恢复：
+这 7 个文件只做入口转发（不导出模块符号，守卫测试禁止内部代码 import），用于保障旧版 `VEIL.exe`、旧版 `update.bat` 运行中副本、旧快捷方式及已保存命令行在升级过渡期和打包失败时仍能正常启动与恢复：
 
 | 根目录文件 | 转发目标 | 兼容场景 |
 | --- | --- | --- |
@@ -74,6 +75,8 @@ veil-agent/
 | `setup_fetch.py` | `veil.integrations.setup_fetch` | 旧 `update.bat` 副本在 `git pull` 之后执行 `setup_fetch.py` |
 | `backup_restore.py` | `veil.system.backup_restore` | 旧 `update.bat` 预更新备份及已保存的备份/恢复命令 |
 | `veil_agent.py` | `veil.core.veil_agent` | 旧 `start.bat` 及 `--cost` 命令行 |
+| `data_repair.py` | `veil.system.data_repair` | 已保存的账本修复/诊断命令与 `docs/data-repair-and-ledger.md` |
+| `veil_brain.py` | `veil.brain.storage.veil_brain` | 已保存的 Brain 导入/检查/诊断命令 |
 
 ## 104 个原根目录 Python 模块归属对照
 
@@ -112,9 +115,11 @@ veil-agent/
 该脚本的行为：
 1. 确认 `VEIL.exe` 已退出且 `data\session.lock` 未被占用。
 2. 校验目标提交在本地存在，**绝不执行 `git fetch` 或 `git pull`**。
-3. 自动创建本地恢复分支 `backup/before-rollback-<时间戳>` 保存当前 `HEAD`。
-4. 将工作区切回目标提交（不触碰 `data/`、`characters/`、`persona/`、`.env`）。
-5. 本地重新执行 `npm run package` 重建 `VEIL.exe` 并更新 `desktop\dist\built-from.txt`。
+3. 检查所有未跟踪和被忽略的本地文件与目标提交的路径冲突（含父子目录）；有覆盖风险立即中止。
+4. 检查目标提交的 Python/桌面依赖与 Electron 缓存；默认离线，缺少依赖时中止，只有显式 `-AllowOnlineDeps` 才允许联网同步。
+5. 自动创建本地恢复分支 `backup/before-rollback-<时间戳>` 保存当前 `HEAD`。
+6. 将工作区切回目标提交（不触碰 `data/`、`characters/`、`persona/`、`.env`）。
+7. 本地重新执行 `npm run package` 重建 `VEIL.exe`；失败时恢复原有 `desktop\dist`，再报告错误。
 
 ## 并行开发分支迁移工具
 
