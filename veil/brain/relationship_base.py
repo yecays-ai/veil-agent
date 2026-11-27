@@ -66,6 +66,7 @@ def _compress_line(line, budget_chars):
     """Compress a high-priority presentation line without cutting mid-clause or dropping negations."""
     if budget_chars < 24 or len(line) <= budget_chars:
         return None
+    has_boundary = bool(_BOUNDARY_HINT.search(line))
     target = budget_chars - 1  # reserve 1 char for '…'
     clauses = [c.strip() for c in _CLAUSE_SPLIT.split(line) if c.strip()]
     if len(clauses) > 1:
@@ -78,7 +79,6 @@ def _compress_line(line, budget_chars):
                 used += sep + len(clause)
             else:
                 break
-        # If the next skipped clause carries a negation/exception boundary, prefer keeping it if it fits
         if kept and len(kept) < len(clauses):
             for idx in range(len(kept), len(clauses)):
                 if _BOUNDARY_HINT.search(clauses[idx]):
@@ -88,14 +88,15 @@ def _compress_line(line, budget_chars):
                     break
         if kept:
             joined = (' '.join(kept) if kept[0].isascii() else ''.join(kept)).rstrip('，,;； ')
-            if len(joined) >= 16:
+            if len(joined) >= 16 and (not has_boundary or _BOUNDARY_HINT.search(joined)):
                 return joined + '…'
-    # Word/char boundary fallback (never break inside an ASCII word)
     cut = line[:target]
     if ' ' in cut and cut[-1].isascii() and line[target:target + 1].isascii():
         cut = cut.rsplit(' ', 1)[0]
     cut = cut.rstrip('，,;； ')
     if len(cut) < 16:
+        return None
+    if has_boundary and not _BOUNDARY_HINT.search(cut):
         return None
     return cut + '…'
 

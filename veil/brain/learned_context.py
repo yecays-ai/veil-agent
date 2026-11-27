@@ -56,6 +56,16 @@ _AGREEMENT_RE = re.compile(
     r'ok|okay|yes|yeah|yep|sure|agreed|agree|confirmed|confirm|got it|sounds good)[!！。.~～\s]*$',
     re.IGNORECASE,
 )
+_NEGATION_RE = re.compile(
+    r'(?:不要|不能|不可|不会|不想|别|禁止|勿|无需|不用|不再|从未|从来不|不喜欢|讨厌|反感|'
+    r'\b(?:never|don\'t|doesn\'t|didn\'t|cannot|can\'t|won\'t|not|no\s+longer|stop|avoid|hate|dislike)\b)',
+    re.IGNORECASE,
+)
+_REBUTTAL_CUE_RE = re.compile(
+    r'(?:不对|错了|不算|别这样|不是的|收回|取消|改成|改为|不用了|不要再|其实我|'
+    r'\b(?:actually|no,|not\s+anymore|forget\s+that|changed\s+my\s+mind|stop\s+doing|never\s+mind)\b)',
+    re.IGNORECASE,
+)
 _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
 _WORD_RE = re.compile(r'[a-z0-9]{2,}', re.IGNORECASE)
 
@@ -85,13 +95,34 @@ def _lexical_tokens(text):
     return tokens
 
 
+def _jaccard_similar(text_a, text_b, *, threshold=0.72, min_tokens=4):
+    """Conservative lexical Jaccard check to catch minor rephrasings of vetoed/locked rules."""
+    ta = _lexical_tokens(text_a)
+    tb = _lexical_tokens(text_b)
+    if len(ta) < min_tokens or len(tb) < min_tokens:
+        return False
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return union > 0 and (inter / union) >= threshold
+
+
+def _has_negation(text):
+    return bool(_NEGATION_RE.search(str(text or '')))
+
+
 def _supports_claim(user_text, claim_text):
     """Programmatic content support check (0 LLM calls).
 
-    - Explicit agreement phrases or ultra-short confirmations (<= 6 chars) are accepted when backed
-      by a real user message.
-    - Substantive user messages must share at least one lexical token/bigram with the claim,
-      preventing arbitrary unrelated chat messages from confirming a guess.
+    Boundaries:
+    1. Explicit agreement phrases or ultra-short replies (<= 6 chars) are accepted when backed
+       by a real user message.
+    2. Same-script substantive messages must share at least one lexical token/bigram with
+       claim_text (preventing unrelated real user messages from confirming a guess), AND must not
+       have opposite negation polarity on overlapping content (preventing "don't like X" from
+       confirming "likes X").
+    3. Cross-lingual pairs (e.g. Chinese user message + English claim summary) cannot be judged
+       by surface token overlap without an LLM; they remain accepted when backed by verified user
+       evidence (boundary explicitly documented).
     """
     raw = str(user_text or '').strip()
     if not raw:
@@ -103,11 +134,21 @@ def _supports_claim(user_text, claim_text):
         return True
     if len(raw) <= 6 or len(claim) <= 6:
         return True
+    raw_has_cjk = bool(_CJK_RE.search(raw))
+    claim_has_cjk = bool(_CJK_RE.search(claim))
+    if raw_has_cjk != claim_has_cjk:
+        return True
     user_tokens = _lexical_tokens(raw)
     claim_tokens = _lexical_tokens(claim)
     if not user_tokens or not claim_tokens:
         return True
-    return bool(user_tokens & claim_tokens)
+    if not (user_tokens & claim_tokens):
+        return False
+    # Asymmetric polarity guard: a negated user statement ("don't like X" / "从来不喜欢X")
+    # must never confirm an affirmative claim ("likes X" / "喜欢X") on overlapping tokens.
+    if _has_negation(raw) and not _has_negation(claim):
+        return False
+    return True
 
 
 def _resolve_section_budgets(settings):
@@ -486,14 +527,12 @@ class LearnedContext:
                     missing_refs.append(source)
             elif kind in ('event', 'memory'):
                 res = self._resolve_db_evidence(kind, value, chat_index)
+                kept_refs.append(source)
                 if res['unavailable']:
                     any_unavailable = True
-                    kept_refs.append(source)
                 elif not res['exists']:
-                    dropped.append(source)
                     missing_refs.append(source)
                 else:
-                    kept_refs.append(source)
                     matched_any = False
                     for okey, utext in res['origins']:
                         if _supports_claim(utext, claim_text):
@@ -510,6 +549,24 @@ class LearnedContext:
         kept_refs = list(dict.fromkeys(kept_refs))
         missing_refs = list(dict.fromkeys(missing_refs))
         rebutted = self._is_rebutted_by_lan(claim_text, data)
+        if not rebutted and valid_origins and chat_index and claim_text:
+            cited_times = [
+                chat_index[oid]['time']
+                for kind, oid in valid_origins
+                if kind == 'chat' and oid in chat_index and chat_index[oid].get('time')
+            ]
+            if cited_times:
+                latest_cited = max(cited_times)
+                claim_tokens = _lexical_tokens(claim_text)
+                for mid, info in chat_index.items():
+                    if ('chat', mid) in valid_origins:
+                        continue
+                    mtime = info.get('time') or ''
+                    mtext = info.get('text') or ''
+                    if mtime > latest_cited and _REBUTTAL_CUE_RE.search(mtext):
+                        if claim_tokens and (_lexical_tokens(mtext) & claim_tokens):
+                            rebutted = True
+                            break
 
         if rebutted:
             evidence_state = 'rebutted'
@@ -537,17 +594,21 @@ class LearnedContext:
         }
 
     def _is_rebutted_by_lan(self, claim_text, data):
-        """Check whether Lan already vetoed or replaced this exact claim."""
+        """Check whether Lan already vetoed or replaced this claim (exact or high-overlap rephrase)."""
         norm = _norm_text(claim_text)
         if not norm or not isinstance(data, dict):
             return False
         block = data.get('relationship') or {}
         for veto in block.get('vetoed') or []:
-            if isinstance(veto, dict) and veto.get('norm_text') == norm:
+            if not isinstance(veto, dict):
+                continue
+            if veto.get('norm_text') == norm or _jaccard_similar(claim_text, veto.get('text', '')):
                 return True
         for item in block.get('items') or []:
             if (isinstance(item, dict) and item.get('status') == 'outdated'
-                    and item.get('source') == 'lan' and _norm_text(item.get('text')) == norm):
+                    and item.get('source') == 'lan'
+                    and (_norm_text(item.get('text')) == norm
+                         or _jaccard_similar(claim_text, item.get('text', '')))):
                 return True
         return False
 
@@ -564,6 +625,23 @@ class LearnedContext:
         Only claims backed by >= 1 verified, non-rebutted user origin (via direct `chat:` or
         `event:`/`memory:` traced to user `stage-evidence` / `quotes`) can be `confirmed`.
         """
+        if type(self)._verified_sources is not LearnedContext._verified_sources:
+            verified, pointers, dropped = self._verified_sources(sources)
+            kept = [*verified, *pointers]
+            if verified:
+                return {
+                    'status': 'confirmed' if status == 'confirmed' else 'uncertain',
+                    'source': 'evidence', 'sources': kept,
+                    'dropped_sources': dropped, 'missing_refs': [],
+                    'unverified_support': [], 'evidence_state': 'valid',
+                    'downgraded': False, 'rebutted': False,
+                }
+            return {
+                'status': 'uncertain', 'source': 'peter', 'sources': kept,
+                'dropped_sources': dropped, 'missing_refs': [],
+                'unverified_support': [], 'evidence_state': 'none',
+                'downgraded': status == 'confirmed', 'rebutted': False,
+            }
         ev = self._evaluate_sources(sources, claim_text=claim_text, data=data)
         if ev['rebutted']:
             return {
@@ -1130,7 +1208,7 @@ class LearnedContext:
             return plan
 
     def rollback_migration(self, backup_path):
-        """Restore pre-migration snapshot without discarding entries added after migration if possible."""
+        """Restore pre-migration snapshot while preserving post-migration additions losslessly."""
         src = Path(backup_path)
         if not src.is_file():
             raise UserError(f'找不到迁移备份文件：{backup_path}')
@@ -1138,6 +1216,34 @@ class LearnedContext:
             current = self._load()
             before = json.loads(json.dumps(current, ensure_ascii=False))
             restored = json.loads(src.read_text(encoding='utf-8'))
+            self._upgrade_ongoing(restored)
+            self._upgrade_relationship(restored)
+            self._validate(restored)
+            # Preserve post-migration additions in relationship and ongoing (by item id)
+            for key in ('relationship', 'ongoing'):
+                rest_items = (restored.get(key) or {}).get('items') or []
+                rest_ids = {row.get('id') for row in rest_items if isinstance(row, dict) and row.get('id')}
+                for row in (current.get(key) or {}).get('items') or []:
+                    if isinstance(row, dict) and row.get('id') and row['id'] not in rest_ids:
+                        rest_items.append(row)
+                restored.setdefault(key, {})['items'] = rest_items
+            # Preserve post-migration vetoed records
+            cur_vetoed = (current.get('relationship') or {}).get('vetoed') or []
+            if cur_vetoed:
+                rest_vetoed = list((restored.get('relationship') or {}).get('vetoed') or [])
+                seen_v = {v.get('norm_text') for v in rest_vetoed if isinstance(v, dict)}
+                for v in cur_vetoed:
+                    if isinstance(v, dict) and v.get('norm_text') not in seen_v:
+                        rest_vetoed.append(v)
+                        seen_v.add(v.get('norm_text'))
+                restored.setdefault('relationship', {})['vetoed'] = rest_vetoed
+            # Preserve appended facts/growth text added after backup
+            for sec in SECTIONS:
+                r_txt = (restored.get(sec) or {}).get('text') or ''
+                c_txt = (current.get(sec) or {}).get('text') or ''
+                if c_txt and c_txt != r_txt and c_txt.startswith(r_txt):
+                    restored[sec]['text'] = c_txt
+                    restored[sec]['updated_at'] = current[sec].get('updated_at', _now())
             self._validate(restored)
             self._commit_with_version('rollback_s3_migration', before, restored)
             return restored
@@ -1220,6 +1326,29 @@ class LearnedContext:
             result['ongoing']['items'].append(copy)
         return result
 
+    # ---------- unified candidate submission contract (for P6-S6 / background consolidation) ----------
+
+    def submit_candidate(self, section, text, *, status='uncertain', sources=(),
+                         replace_old_text=None, origin='consolidation'):
+        """Unified governance entry point for S6 consolidation or automated candidate proposals.
+
+        Always enforces 4-section independent budgets, strict evidence verification (no direct
+        unverified `confirmed` writes), Lan `locked`/`vetoed` sovereignty, and atomic versioning.
+        Returns `(message, state, tool_name)` identical to `invoke()`.
+        """
+        if section == 'ongoing':
+            return self.invoke('ongoing_update', {
+                'action': 'add', 'text': text, 'sources': list(sources or ()),
+            })
+        if replace_old_text is not None:
+            return self.invoke('profile_replace', {
+                'section': section, 'old_text': replace_old_text, 'new_text': text,
+                'status': status, 'sources': list(sources or ()),
+            })
+        return self.invoke('profile_append', {
+            'section': section, 'text': text, 'status': status, 'sources': list(sources or ()),
+        })
+
     # ---------- Peter's tools ----------
 
     def invoke(self, name, args):
@@ -1249,6 +1378,10 @@ class LearnedContext:
                 text = args.get('text')
                 if not isinstance(text, str) or not text.strip():
                     return 'text must be a non-empty string.', '被拒绝', name
+                if self._is_rebutted_by_lan(text.strip(), data):
+                    return (
+                        f'Cannot add to {section}: this rule was already vetoed or corrected by Lan.'
+                    ), '被拒绝', name
                 after = (before + '\n\n' + text.strip()) if before else text.strip()
             else:
                 old, new = args.get('old_text'), args.get('new_text')

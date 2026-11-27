@@ -26,9 +26,19 @@
 - **现状**：`relationship_base.select()` 按 `(status, source, updated_at, id)` 排序，超长单条整条丢弃，未优先保护 `locked`，未排除证据完全失效的模型认知，未记录“已存储 / 当前有效 / 本轮选中 / 实际注入 / 未注入原因”的完整分层诊断。
 - **缺口**：补齐 `locked` 最高优先、超长高优先级条目的保义压缩呈现（仅作用于呈现层）、失效认知隔离、跨区冲突提示及真实请求快照后的注入状态回填。
 
+## S6 统一认知治理接口契约
+
+`LearnedContext` 对 P6-S6（夜间/空闲认知巩固）提供以下统一入口（零旁路，强制经过四区独立预算、严格证据核验、Lan 锁定/否决主权与原子版本提交）：
+
+- `submit_candidate(section, text, *, status='uncertain', sources=(), replace_old_text=None, origin='consolidation') -> (message, state, tool_name)`：提交新增或修订候选，禁止无用户证据直接写入 `confirmed`。
+- `reverify_relationship_evidence() -> {'changed': bool, 'items': list}`：复核在库关系认知证据链并安全降级失效模型条目（不自动改写 `source='lan'` 或 `locked=True`）。
+- `set_relationship_lock(item_id, locked, expected_updated_at=None)`：Lan 锁定/解锁单条关系认知。
+- `restore_relationship_item(item_id, expected_updated_at=None)`：从 `outdated` 历史条目恢复为 Lan 确认的新当前版本（保留 `restored_from` 与完整历史链）。
+- `migrate_storage(dry_run=True)` / `rollback_migration(backup_path)`：幂等无损迁移与保新回滚（回滚自动保留迁移后新增的 `relationship`/`ongoing`/`vetoed` 与追加文本）。
+
 ## 当前状态
 
-- 已完成开发与隔离回归验证（分支 `ticket/459-p6-s3-relationship-governance`，待 Lan 审核与合并；未部署正式目录）。
+- 已完成开发、十二项复审证据补齐与全量回归验证（分支 `ticket/459-p6-s3-relationship-governance`，待独立源码复审与 Lan 审核；未合并、未部署正式目录）。
 
 ## 验收步骤
 

@@ -345,6 +345,114 @@ class ProductionPipelineAndCompressionTests(unittest.TestCase):
             self.assertIn('CURRENT BETWEEN YOU AND LAN', joined)
             self.assertIn('不要急着给安慰或空话', joined)
 
+    def test_negation_polarity_and_newer_user_rebuttal_block_promotion(self):
+        lc = LearnedContext(self.root / 'data', self.cfg.id, self.cfg.profile)
+        chat_path = self.root / 'data' / self.cfg.id / 'chat.jsonl'
+        chat_path.parent.mkdir(parents=True, exist_ok=True)
+        chat_path.write_text(
+            json.dumps({'role': 'user', 'message_id': 'u_neg_zh', 'time': '2026-11-26T10:00:00+08:00',
+                        'content': '我从来不喜欢每天早起打卡提醒。'}) + '\n'
+            + json.dumps({'role': 'user', 'message_id': 'u_neg_en', 'time': '2026-11-26T10:01:00+08:00',
+                          'content': "I don't like daily morning reminders."}) + '\n'
+            + json.dumps({'role': 'user', 'message_id': 'u_orig', 'time': '2026-11-26T10:02:00+08:00',
+                          'content': '以后晚上十点提醒我喝水。'}) + '\n'
+            + json.dumps({'role': 'user', 'message_id': 'u_rebut', 'time': '2026-11-26T10:05:00+08:00',
+                          'content': '不对，晚上十点提醒我喝水那个取消吧，不用了。'}) + '\n',
+            encoding='utf-8',
+        )
+        # Opposite polarity (ZH & EN) must stay uncertain
+        lc.invoke('profile_append', {
+            'section': 'relationship', 'status': 'confirmed',
+            'text': '她喜欢每天早起打卡提醒。', 'sources': ['chat:u_neg_zh'],
+        })
+        lc.invoke('profile_append', {
+            'section': 'relationship', 'status': 'confirmed',
+            'text': 'She likes daily morning reminders.', 'sources': ['chat:u_neg_en'],
+        })
+        # Rebutted by newer user message must stay uncertain
+        lc.invoke('profile_append', {
+            'section': 'relationship', 'status': 'confirmed',
+            'text': '晚上十点提醒她喝水。', 'sources': ['chat:u_orig'],
+        })
+        for item in lc.read()['relationship']['items']:
+            self.assertEqual(item['status'], 'uncertain')
+            self.assertEqual(item['source'], 'peter')
+
+    def test_cross_section_veto_rephrase_s6_contract_and_lossless_rollback(self):
+        lc = LearnedContext(self.root / 'data', self.cfg.id, self.cfg.profile)
+        lc.save_section('facts', 'Lan likes oolong.')
+        plan = lc.migrate_storage(dry_run=False)
+        # Add post-migration cognition
+        lc.save_relationship([
+            {'id': 'post1', 'text': '晚上十一点以后不谈工作排期和代码问题。', 'status': 'confirmed', 'locked': True},
+            {'id': 'veto1', 'text': '每天早上八点准时发送新闻摘要提醒。', 'status': 'confirmed'},
+        ])
+        lc.invoke('ongoing_update', {'action': 'add', 'text': '迁移后新增的待办事项'})
+        # Lan deletes veto1 -> recorded in vetoed
+        lc.save_relationship([
+            {'id': 'post1', 'text': '晚上十一点以后不谈工作排期和代码问题。', 'status': 'confirmed', 'locked': True},
+        ])
+        # Rephrased resurrection in relationship OR cross-section into facts/growth must be blocked
+        _, st_rephrase, _ = lc.submit_candidate(
+            'relationship', '每天早上八点准时发送新闻摘要提醒！', status='confirmed', sources=[],
+        )
+        self.assertEqual(st_rephrase, '被拒绝')
+        _, st_cross, _ = lc.submit_candidate('growth', '每天早上八点准时发送新闻摘要提醒。')
+        self.assertEqual(st_cross, '被拒绝')
+        # Rollback migration MUST preserve post-migration relationship & ongoing items
+        if plan['backup_path']:
+            restored = lc.rollback_migration(plan['backup_path'])
+            rel_ids = {r['id'] for r in restored['relationship']['items']}
+            ong_texts = {r['text'] for r in restored['ongoing']['items']}
+            self.assertIn('post1', rel_ids)
+            self.assertIn('迁移后新增的待办事项', ong_texts)
+
+    def test_concurrent_writes_and_five_modes_plus_correction_diff(self):
+        import threading
+        lc = LearnedContext(self.root / 'data', self.cfg.id, self.cfg.profile)
+        lc.save_relationship([
+            {'id': 'r1', 'text': '不要在她忙的时候连发消息。', 'status': 'confirmed', 'locked': True},
+        ])
+        errors = []
+
+        def worker(idx):
+            try:
+                lc.invoke('profile_append', {
+                    'section': 'relationship', 'status': 'uncertain',
+                    'text': f'并发猜测规则编号 {idx}',
+                })
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertGreaterEqual(len(lc.read()['relationship']['items']), 7)
+
+        # Verify normal chat, follow-up, new session, autonomy, and user correction before/after
+        chat = Chat(self.cfg, self.store, self.budget, self.model, output=lambda _: None)
+        chat.send('普通闲聊第一句')
+        chat.send('连续追问第二句')
+        chat2 = Chat(self.cfg, self.store, self.budget, self.model, output=lambda _: None)
+        chat2.send('新会话第一句')
+        chat2.send('自主唤醒测试', autonomy=True)
+        # Before correction: r1 is in all 4 requests
+        self.assertEqual(len(self.model.requests), 4)
+        for req in self.model.requests:
+            sys_txt = '\n'.join(m['content'] for m in req['messages'] if m.get('role') == 'system')
+            self.assertIn('不要在她忙的时候连发消息。', sys_txt)
+        # Lan corrects r1 -> next request immediately uses corrected text and drops old text
+        lc.save_relationship([
+            {'id': 'r1', 'text': '忙的时候可以发一条简短留言，但不要催回复。', 'status': 'confirmed', 'locked': True},
+        ])
+        chat2.send('纠正后的下一轮对话')
+        last_sys = '\n'.join(m['content'] for m in self.model.requests[-1]['messages'] if m.get('role') == 'system')
+        self.assertIn('忙的时候可以发一条简短留言，但不要催回复。', last_sys)
+        self.assertNotIn('不要在她忙的时候连发消息。', last_sys)
+
 
 if __name__ == '__main__':
     unittest.main()
