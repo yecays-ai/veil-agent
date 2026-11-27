@@ -2582,12 +2582,20 @@ def make_handler(hub, token):
             to_date = str(body.get('to') or '')
             experience = getattr(chat, 'experience', None)
             judge = getattr(getattr(chat, 'memory', None), 'judge', None)
+            authority = getattr(getattr(chat, 'memory', None), 'brain_authority', None)
+            configured_model = ''
+            if authority is not None and hasattr(authority, 'embedding_model'):
+                try:
+                    configured_model = authority.embedding_model() or ''
+                except Exception:
+                    configured_model = ''
             try:
                 report = run_health_scan(
                     data_root, role_id, db_path,
                     from_date=from_date, to_date=to_date,
                     experience_status=experience.status() if experience else None,
                     judge_status=judge.status() if judge else None,
+                    configured_embedding_model=configured_model,
                 )
             except RuntimeError as exc:
                 if str(exc) == 'health_scan_in_progress':

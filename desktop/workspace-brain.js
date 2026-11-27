@@ -1693,9 +1693,10 @@
       statusBadge.append(el('span', `health-badge-dot ${iconCls}`));
       lead.append(statusBadge);
       const leadText = el('div');
+      const scopeLabel = report.scope?.label || (report.from_date || report.to_date ? '全库当前 + 指定期间' : '全库当前');
       leadText.append(
         el('h3', '', sum.status_label || '状态正常'),
-        el('small', '', `检查时间: ${formatTime(report.scanned_at)} · 耗时 ${report.duration_ms ?? 0}ms · 只读核验 · 零模型消耗`),
+        el('small', '', `检查时间: ${formatTime(report.scanned_at)} · 耗时 ${report.duration_ms ?? 0}ms · 数据范围: ${scopeLabel} · 只读核验 · 零模型消耗`),
       );
       lead.append(leadText);
 
@@ -1721,6 +1722,44 @@
       toInp.ariaLabel = '巡检结束日期';
       const rangeScanBtn = btn('按日期范围巡检', 'sm');
       rangeBar.append(el('small', 'muted', '指定日期范围：'), fromInp, el('span', '', '至'), toInp, rangeScanBtn);
+
+      // Period slice: shown separately from whole-database health so a filtered run is never
+      // mistaken for "this was the database's state back then". Missing history is stated, not guessed.
+      const period = report.period || {};
+      let periodCard = null;
+      if (period.requested) {
+        periodCard = el('article', 'veil-card');
+        const pHead = el('div', 'veil-card-head');
+        pHead.append(el('h3', '', '指定期间变化与异常（与全库当前分开）'),
+          pill(`${report.from_date || '最早'} 至 ${report.to_date || '最新'}`, 'warn'));
+        const growth = period.growth || {};
+        const pBody = el('div', 'health-kv');
+        pBody.append(
+          el('div', '', `期间新增：记忆 ${growth.memories_created ?? 0} 条 · 事件 ${growth.events_created ?? 0} 个 · 阶段 ${growth.event_stages ?? 0} 个 · 版本 ${growth.versions ?? 0} 条 · 认知版本变更 ${growth.learned_context_changes ?? 0} 条`),
+          el('div', '', `期间重复：${period.duplicates?.count ?? 0} 组 · 碎片：${period.fragments?.count ?? 0} 条 · 悬空引用：${period.dangling?.count ?? 0} 处 · 索引异常：${period.index_anomalies?.count ?? 0} 条`),
+        );
+        const coverage = period.coverage || {};
+        if (coverage.note) pBody.append(el('div', 'muted', `证据边界：${coverage.note}`));
+        const hist = period.historical_state || {};
+        if (hist.available) {
+          const delta = hist.delta || {};
+          pBody.append(el('div', '', `历史快照：${hist.observations || 0} 次 · 活跃记忆变化 ${delta.active_memories ?? '—'} · 事件变化 ${delta.events_total ?? '—'}`));
+          pBody.append(el('div', 'muted', hist.limit || '快照只记录每日总量。'));
+          if (hist.coverage === 'partial') pBody.append(el('div', 'muted', `快照覆盖不完整：${hist.reason || ''}`));
+        } else {
+          pBody.append(el('div', 'muted', '该时间段没有巡检历史快照；只报告有库内时间字段支持的期间变化，不推断当时整体健康状态。'));
+        }
+        const samples = [];
+        for (const [key, label] of [['duplicates', '重复'], ['fragments', '碎片'], ['dangling', '悬空引用'], ['index_anomalies', '索引异常']]) {
+          for (const ev of (period[key]?.evidences || []).slice(0, 4)) samples.push(`${label}｜${ev.label || ''}：${ev.note || ''}`);
+        }
+        if (samples.length) {
+          const ul = el('ul', 'model-list');
+          for (const line of samples) ul.append(el('li', '', line));
+          pBody.append(ul);
+        }
+        periodCard.append(pHead, pBody);
+      }
 
       let lastHealthReportText = '';
 
@@ -1816,11 +1855,13 @@
           el('div', '', `数据来源：${chk.source || '主记忆库'}`),
           el('div', '', `可信度：${chk.confidence || '高可信'}`),
         );
+        const scopeNames = { current: '全库当前', 'current+range': '全库当前 + 指定期间', range: '指定期间', 'range (all logs)': '日志当前窗口' };
+        kv.append(el('div', '', '数据范围：' + (scopeNames[chk.scope] || '全库当前')));
         tech.append(kv);
         if (Array.isArray(chk.evidences) && chk.evidences.length) {
           const evList = el('ul', 'model-list');
           for (const ev of chk.evidences) {
-            const li = el('li', '', `${ev.label || ''}: ${ev.note || ''}`);
+            const li = el('li', '', `${ev.label || ''}: ${ev.note || ''}${ev.basis ? `（依据：${ev.basis}）` : ''}`);
             if (ev.memId) {
               const jump = btn('查看记忆', 'sm ghost');
               jump.addEventListener('click', () => window.veilWorkspace?.openMemory(ev.memId));
@@ -1917,7 +1958,7 @@
         });
       });
 
-      wrap.append(banner, rangeBar, kpis, schedBar, checksWrap);
+      wrap.append(banner, rangeBar, ...(periodCard ? [periodCard] : []), kpis, schedBar, checksWrap);
       host.replaceChildren(wrap);
     }
 

@@ -1206,6 +1206,19 @@ def generate_growth_report(hub, from_date='', to_date='', include_content=True, 
             )
             if incomplete:
                 lines.append('- 缺失检查提示：该次巡检因超时未完成全部检查项，未执行项不等同通过。')
+            period = latest.get('period') or {}
+            if period.get('requested'):
+                growth = period.get('growth') or {}
+                lines.append(
+                    f"- 指定期间（{latest.get('from_date') or '最早'} 至 {latest.get('to_date') or '最新'}）："
+                    f"新增记忆 {growth.get('memories_created', 0)} 条 / 事件 {growth.get('events_created', 0)} 个 / "
+                    f"重复 {period.get('duplicates', {}).get('count', 0)} 组 / 碎片 {period.get('fragments', {}).get('count', 0)} 条 / "
+                    f"悬空引用 {period.get('dangling', {}).get('count', 0)} 处 / 索引异常 {period.get('index_anomalies', {}).get('count', 0)} 条")
+                hist = period.get('historical_state') or {}
+                lines.append(
+                    '- 期间历史证据：' + ('有巡检快照可对照'
+                                        if hist.get('available') else
+                                        '缺少该时间段的历史快照；只报告有库内时间字段支持的期间变化'))
         else:
             lines.append('- 暂无健康巡检报告（尚未执行过只读巡检）。')
 

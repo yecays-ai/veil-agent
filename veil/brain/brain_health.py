@@ -26,6 +26,12 @@ _SCAN_LOCK = threading.Lock()
 _ACTIVE_SCAN = False
 _SETTINGS_LOCK = threading.Lock()
 ALL_CHECK_IDS = ('H-1', 'H-2', 'H-3', 'H-4', 'H-5', 'H-6', 'H-7', 'H-8', 'H-9')
+# The health scan must not assume one embedding size: the model identity and the dimensions the
+# database actually stores are the source of truth (same rule as P6-S1 G-A14 in recall).
+VECTOR_MODEL_META = 'embedding_model'
+# Sanitized report sample limits; totals are always counted separately and never implied by a sample.
+ORPHAN_SAMPLE_LIMIT = 15
+PERIOD_EVIDENCE_LIMIT = 30
 # Ticket 456 review: the daily-night slot follows the same 01:00-06:00 window the repository
 # already uses for autonomy quiet hours, unless the role configures its own.
 DEFAULT_NIGHT_WINDOW = ((1, 0), (6, 0))
@@ -258,7 +264,7 @@ def _cosine(a, b):
 def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                     experience_status=None, judge_status=None,
                     learned_status=None, timeout_s=5.0, vector_sample_limit=300,
-                    persist=True):
+                    configured_embedding_model='', persist=True):
     """Execute deterministic, strictly read-only P5 inspection against brain.db and logs."""
     global _ACTIVE_SCAN
     with _SCAN_LOCK:
@@ -270,6 +276,7 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
     deadline = started + max(1.0, float(timeout_s))
     try:
         dt_from, dt_to = _range_bounds(from_date, to_date)
+        range_requested = bool(dt_from or dt_to)
         db = Path(db_path)
         checks = []
         timed_out = False
@@ -277,6 +284,19 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         event_total = 0
         event_rows = []
         events_sampled = False
+        period = {
+            'requested': range_requested,
+            'from_date': from_date,
+            'to_date': to_date,
+            'status': 'unavailable' if range_requested else 'not_requested',
+            'growth': {},
+            'duplicates': {'count': 0, 'evidences': []},
+            'fragments': {'count': 0, 'evidences': []},
+            'dangling': {'count': 0, 'evidences': []},
+            'index_anomalies': {'count': 0, 'evidences': []},
+            'coverage': {},
+            'historical_state': {'available': False, 'reason': 'not_requested'},
+        }
         stats = {
             'active_memories': 0,
             'pinned_memories': 0,
@@ -286,16 +306,22 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
             'event_stages_total': 0,
             'versions_total': 0,
             'vectors_total': 0,
+            'embedding_model': str(configured_embedding_model or ''),
+            'vector_dimensions': {},
         }
 
         if not db.is_file():
             report = {
-                'schema_version': 1,
+                'schema_version': 2,
                 'scanned_at': _now_iso(),
                 'duration_ms': 0,
                 'read_only': True,
                 'from_date': from_date,
                 'to_date': to_date,
+                'scope': {'current_state': True, 'requested_range': range_requested,
+                          'from_date': from_date, 'to_date': to_date,
+                          'label': '全库当前 + 指定期间' if range_requested else '全库当前'},
+                'period': period,
                 'stats': stats,
                 'summary': {'status': 'attention', 'status_label': '尚未生成 brain.db', 'total_checks': 1, 'good_count': 0, 'warn_count': 1, 'error_count': 0},
                 'checks': [{
@@ -348,9 +374,44 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'SELECT memory_id, dim, content_hash, length(vector) AS bytes FROM vectors').fetchall() if 'vectors' in tables else []
             _guard(deadline)
             sample_vector_rows = conn.execute(
-                'SELECT memory_id, vector FROM vectors WHERE vector IS NOT NULL LIMIT ?',
+                'SELECT memory_id, dim, vector FROM vectors WHERE vector IS NOT NULL LIMIT ?',
                 (max(1, int(vector_sample_limit)) * 2,)).fetchall() if 'vectors' in tables else []
             tomb_rows = conn.execute('SELECT memory_id, deleted_at FROM tombstones').fetchall() if 'tombstones' in tables else []
+
+            # Vector identity: never assume a dimension. `meta.embedding_model` is what the writer
+            # recorded; the configured model comes from the live role settings. Dimensions are
+            # reported as stored, and a dimension only counts as unexpected relative to the rest of
+            # this database (or the configured model identity), not against a constant.
+            stored_embedding_model = ''
+            if 'meta' in tables:
+                try:
+                    meta_row = conn.execute(
+                        'SELECT value FROM meta WHERE key=?', (VECTOR_MODEL_META,)).fetchone()
+                    stored_embedding_model = str((meta_row[0] if meta_row else '') or '').strip()
+                except sqlite3.Error:
+                    stored_embedding_model = ''
+            configured_model = str(configured_embedding_model or '').strip()
+            dim_counts = {}
+            for vr in vector_rows:
+                try:
+                    dim = int(vr['dim'] or 0)
+                except (TypeError, ValueError):
+                    dim = 0
+                dim_counts[dim] = dim_counts.get(dim, 0) + 1
+            dominant_dim = (max(dim_counts, key=lambda key: (dim_counts[key], key)) if dim_counts else 0)
+            mixed_dims = len([dim for dim, count in dim_counts.items() if dim > 0 and count > 0]) > 1
+            vector_identity = {
+                'configured_model': configured_model,
+                'stored_model': stored_embedding_model,
+                'model_mismatch': bool(configured_model and stored_embedding_model
+                                       and configured_model != stored_embedding_model),
+                'model_recorded': bool(stored_embedding_model),
+                'dimensions': {str(dim): count for dim, count in sorted(dim_counts.items())},
+                'dominant_dim': dominant_dim,
+                'mixed_dimensions': mixed_dims,
+            }
+            stats['embedding_model'] = stored_embedding_model or configured_model
+            stats['vector_dimensions'] = vector_identity['dimensions']
 
             active_mems = [r for r in mem_rows if not r['is_tombstone'] and not r['is_deleted'] and r['bucket'] != 'archive']
             archived_mems = [r for r in mem_rows if not r['is_tombstone'] and not r['is_deleted'] and r['bucket'] == 'archive']
@@ -436,16 +497,29 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                     if mid not in active_ids or not vr['vector']:
                         continue
                     blob = vr['vector']
+                    try:
+                        dim = int(vr['dim'] or 0)
+                    except (TypeError, ValueError):
+                        dim = 0
                     # A malformed BLOB used to abort the whole scan; record it for H-7 and keep going.
-                    if len(blob) != 1024 * 4:
+                    # The recorded `dim` is authoritative; float32 means dim * 4 bytes.
+                    if dim <= 0 or len(blob) != dim * 4:
                         vector_decode_issues.append({
                             'memId': mid,
                             'label': _safe_title(active_title_map.get(mid, mid), mid),
-                            'note': f'向量字节数 {len(blob)}，与 1024 维（4096 字节）不符',
+                            'note': (f'向量字节数 {len(blob)}，与记录的 {dim or "未知"} 维'
+                                     f'（{dim * 4 if dim > 0 else "未知"} 字节）不符'),
                         })
                         continue
                     arr = array.array('f')
                     arr.frombytes(blob)
+                    if len(arr) != dim:
+                        vector_decode_issues.append({
+                            'memId': mid,
+                            'label': _safe_title(active_title_map.get(mid, mid), mid),
+                            'note': f'向量元素数 {len(arr)} 与记录维度 {dim} 不符',
+                        })
+                        continue
                     sample_vecs.append((mid, arr))
                     if len(sample_vecs) >= vector_sample_limit:
                         break
@@ -484,9 +558,13 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'evidences': h2_evidences,
             })
 
-            # H-3: Orphan & dangling links
+            # H-3: Dangling references vs genuinely unlinked records.
+            # Dangling means a pointer to a missing/deleted object. Unlinked means no event, source,
+            # quote, sidecar link, merge pointer or relation at all. The second kind is information,
+            # not an error: it is reported with its basis and never deleted, merged or archived here.
             _guard(deadline)
-            orphan_evidences = []
+            dangling_evidences = []
+            sidecar_linked_ids = set()
             for r in sidecar_rows:
                 mid = r['memory_id']
                 if mid not in live_ids:
@@ -494,22 +572,144 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 links = _json_load(r['links_json'], [])
                 if isinstance(links, list):
                     for target in links:
+                        if not isinstance(target, str):
+                            continue
+                        sidecar_linked_ids.update((mid, target))
                         if target not in live_ids:
-                            orphan_evidences.append({'memId': mid, 'label': f"{mid} → {target}", 'note': '关联目标不存在或已删除'})
+                            dangling_evidences.append({
+                                'category': 'dangling', 'memId': mid,
+                                'label': f"{mid} → {target}",
+                                'note': 'sidecar 关联目标不存在或已删除（悬空引用，仅报告）',
+                                'basis': 'sidecar_state.links_json vs memories.id',
+                            })
                 merged_into = r['merged_into']
-                if merged_into and (merged_into == mid or merged_into not in live_ids):
-                    orphan_evidences.append({'memId': mid, 'label': f"{mid} (merged_into={merged_into})", 'note': '合并目标无效或自环'})
+                if merged_into:
+                    sidecar_linked_ids.add(mid)
+                    if merged_into in live_ids:
+                        sidecar_linked_ids.add(merged_into)
+                    if merged_into == mid or merged_into not in live_ids:
+                        dangling_evidences.append({
+                            'category': 'dangling', 'memId': mid,
+                            'label': f"{mid} (merged_into={merged_into})",
+                            'note': '合并目标无效或自环（悬空引用，仅报告）',
+                            'basis': 'sidecar_state.merged_into vs memories.id',
+                        })
+            relation_linked_ids = set()
+            if 'relations' in tables:
+                relation_rows = conn.execute(
+                    'SELECT memory_id, target_id FROM relations LIMIT 5000').fetchall()
+                for rel in relation_rows:
+                    src, target = rel['memory_id'], rel['target_id']
+                    if isinstance(src, str) and src in live_ids:
+                        relation_linked_ids.add(src)
+                    if isinstance(target, str):
+                        if target in live_ids:
+                            relation_linked_ids.add(target)
+                        elif src in live_ids:
+                            dangling_evidences.append({
+                                'category': 'dangling', 'memId': src,
+                                'label': f"{src} → {target}",
+                                'note': 'relations 目标不存在或已删除（悬空引用，仅报告）',
+                                'basis': 'relations.target_id vs memories.id',
+                            })
+            _guard(deadline)
+            # Exact-side queries with NOT EXISTS keep the count independent of the event sample.
+            unlinked_memes = []
+            unlinked_mem_total = 0
+            unlinked_mem_truncated = False
+            if 'events' in tables or 'sources' in tables or 'quotes' in tables:
+                clauses = []
+                if 'events' in tables:
+                    clauses.append('NOT EXISTS (SELECT 1 FROM events e WHERE e.memory_id=m.id)')
+                else:
+                    clauses.append('1=1')
+                if 'sources' in tables:
+                    clauses.append('NOT EXISTS (SELECT 1 FROM sources s WHERE s.memory_id=m.id)')
+                else:
+                    clauses.append('1=1')
+                if 'quotes' in tables:
+                    clauses.append('NOT EXISTS (SELECT 1 FROM quotes q WHERE q.memory_id=m.id)')
+                else:
+                    clauses.append('1=1')
+                sql = ('SELECT m.id, m.title, m.name, m.created, m.pinned FROM memories m '
+                       'WHERE m.is_tombstone=0 AND m.is_deleted=0 AND m.bucket!=\'archive\' AND '
+                       + ' AND '.join(clauses) + ' ORDER BY m.created DESC LIMIT 501')
+                candidates = conn.execute(sql).fetchall()
+                for row in candidates:
+                    mid = row['id']
+                    if mid in sidecar_linked_ids or mid in relation_linked_ids:
+                        continue
+                    if len(unlinked_memes) < ORPHAN_SAMPLE_LIMIT:
+                        unlinked_memes.append({
+                            'category': 'unlinked', 'memId': mid,
+                            'label': _safe_title(row['title'] or row['name'], mid),
+                            'note': (f"创建于 {row['created'] or '未知时间'}；无事件、无来源、无引述、"
+                                     f"无 sidecar 关联或关系链接（仅提示，不代表无价值）"),
+                            'basis': 'memories × events/sources/quotes/sidecar_state/relations 反连接',
+                        })
+                    unlinked_mem_total += 1
+                unlinked_mem_truncated = len(candidates) > 500
+
+            unlinked_events = []
+            unlinked_event_total = 0
+            unlinked_event_truncated = False
+            if 'events' in tables:
+                event_clauses = ["(e.memory_id IS NULL OR e.memory_id='')"]
+                if 'event_sources' in tables:
+                    event_clauses.append(
+                        'NOT EXISTS (SELECT 1 FROM event_sources es WHERE es.event_id=e.event_id)')
+                if 'event_stages' in tables:
+                    event_clauses.append(
+                        'NOT EXISTS (SELECT 1 FROM event_stages st WHERE st.event_id=e.event_id)')
+                if 'event_ledger' in tables:
+                    event_clauses.append(
+                        "NOT EXISTS (SELECT 1 FROM event_ledger el WHERE el.event_id=e.event_id "
+                        "AND el.kind='stage-evidence')")
+                event_sql = ('SELECT e.event_id, e.title, e.first_at FROM events e WHERE '
+                             + ' AND '.join(event_clauses) + ' ORDER BY e.first_at DESC LIMIT 501')
+                event_candidates = conn.execute(event_sql).fetchall()
+                unlinked_event_total = len(event_candidates)
+                unlinked_event_truncated = unlinked_event_total > 500
+                for row in event_candidates[:ORPHAN_SAMPLE_LIMIT]:
+                    unlinked_events.append({
+                        'category': 'unlinked', 'eventId': row['event_id'],
+                        'label': _safe_title(row['title'], row['event_id']),
+                        'note': (f"起始 {row['first_at'] or '未知时间'}；无关联记忆、无来源、无阶段、"
+                                 f"无用户原话证据（仅提示，不代表无价值）"),
+                        'basis': 'events × event_sources/event_stages/event_ledger/memory_id 反连接',
+                    })
+
+            h3_evidences = (dangling_evidences[:ORPHAN_SAMPLE_LIMIT]
+                            + unlinked_memes + unlinked_events)
+            h3_dangling_count = len(dangling_evidences)
+            link_notes = []
+            if unlinked_mem_total:
+                link_notes.append(f"{unlinked_mem_total} 条活跃记忆无任何关联")
+            if unlinked_event_total:
+                link_notes.append(f"{unlinked_event_total} 个事件无任何关联")
+            if unlinked_mem_truncated or unlinked_event_truncated:
+                link_notes.append('计数达到单次取样上限 500，报告值可能低于实际')
             checks.append({
                 'id': 'H-3',
-                'title': '孤立记录与失效关联检查',
-                'severity': 'warn' if orphan_evidences else 'good',
-                'status_label': f"{len(orphan_evidences)} 处悬空关联" if orphan_evidences else '引用完整',
-                'impact': f"检测到 {len(orphan_evidences)} 条 sidecar 关联或合并指向不存在/已删除的记忆 ID。" if orphan_evidences else '所有 sidecar 链接与合并指针均指向有效记忆。',
-                'object': 'sidecar_state.links_json / merged_into vs memories.id',
-                'basis': '精确外键与拓扑环路校验',
+                'title': '孤立记录、悬空引用与无关联检查',
+                'severity': 'warn' if dangling_evidences else 'good',
+                'status_label': (f"{h3_dangling_count} 处悬空引用" if dangling_evidences
+                                 else ('引用完整' if not link_notes else '无悬空引用；存在无关联记录（仅提示）')),
+                'impact': ((f"发现 {h3_dangling_count} 处悬空引用（指向不存在/已删除对象）；"
+                            if dangling_evidences else '未发现悬空引用；')
+                           + ('；'.join(link_notes) + '。' if link_notes else '所有可解析引用均指向有效对象。')
+                           + ' 无关联只表示当前没有可追溯连接，不等于无价值；本检查只报告，不自动删除、合并或归档。'),
+                'object': ('sidecar_state.links_json/merged_into、relations、events.memory_id；'
+                           'memories × events/sources/quotes/sidecar_state/relations'),
+                'basis': ('悬空引用=精确外键核验；无关联=反连接核验（不看正文质量，不做价值判断）'
+                          + ('；事件取样上限 500' if unlinked_event_truncated else '')),
                 'source': 'brain.db (mode=ro)',
-                'confidence': '高可信（精确引用核验）',
-                'evidences': orphan_evidences[:15],
+                'confidence': '高可信（精确引用/反连接核验）；无关联为提示级',
+                'evidences': h3_evidences,
+                'scope': 'current',
+                'counts': {'dangling': h3_dangling_count,
+                           'unlinked_memories': unlinked_mem_total,
+                           'unlinked_events': unlinked_event_total},
             })
 
             # H-4: Event source broken links
@@ -623,10 +823,33 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'evidences': all_h6[:15],
             })
 
-            # H-7: Retrieval index consistency
+            # H-7: Retrieval index consistency, relative to the stored/configured embedding identity.
             _guard(deadline)
             vec_by_id = {vr['memory_id']: vr for vr in vector_rows}
             vec_issues = list(vector_decode_issues)
+            if vector_identity['model_mismatch']:
+                vec_issues.append({
+                    'label': 'Embedding 模型身份不一致',
+                    'note': (f"Embedding 模型身份不一致：角色配置为 {configured_model}，"
+                             f"库内记录为 {stored_embedding_model}；"
+                             f"旧向量不可与当前查询向量混用，需显式重建索引"),
+                    'basis': 'cfg.memory.model vs meta.embedding_model',
+                })
+            elif configured_model and not stored_embedding_model:
+                vec_issues.append({
+                    'label': '库内未记录 Embedding 模型身份',
+                    'note': (f"角色配置为 {configured_model}，但 meta.embedding_model 为空；"
+                             f"无法据此判断现存向量属于哪个模型"),
+                    'basis': 'meta.embedding_model 缺失',
+                })
+            if vector_identity['mixed_dimensions']:
+                vec_issues.append({
+                    'label': '库内向量维度不统一',
+                    'note': ('已存维度分布：' + ', '.join(
+                        f"{dim}维×{count}" for dim, count in sorted(dim_counts.items())) +
+                        f"；主导维度 {dominant_dim} 维（未假定固定维度）"),
+                    'basis': 'vectors.dim GROUP BY',
+                })
             for i, r in enumerate(active_mems):
                 if i % 500 == 0:
                     _guard(deadline)
@@ -634,33 +857,192 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 vr = vec_by_id.get(mid)
                 vstate = r['vector_state'] or 'ready'
                 if vstate != 'ready':
-                    vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': f"vector_state={vstate}（关键词检索可用）"})
+                    vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                       'note': f"vector_state={vstate}（关键词检索可用）",
+                                       'basis': 'memories.vector_state'})
                 elif vr is None:
-                    vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': '状态为 ready 但缺少向量行'})
+                    vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                       'note': '状态为 ready 但缺少向量行',
+                                       'basis': 'memories vs vectors 外键'})
                 else:
-                    if vr['dim'] != 1024:
-                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': f"向量维度 {vr['dim']} ≠ 1024"})
-                    elif vr['bytes'] is not None and vr['bytes'] != vr['dim'] * 4:
+                    dim = vr['dim']
+                    if dim <= 0:
                         vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
-                                           'note': f"向量字节数 {vr['bytes']} 与维度 {vr['dim']} 不符"})
+                                           'note': f"向量记录维度无效：{dim}",
+                                           'basis': 'vectors.dim'})
+                    elif dominant_dim and dim != dominant_dim:
+                        vec_issues.append({
+                            'memId': mid, 'label': _safe_title(r['title'], mid),
+                            'note': (f"向量维度 {dim} 与库内主导维度 {dominant_dim} 不一致"
+                                     f"（可能是换模型后尚未重建，不按固定 1024 维判断）"),
+                            'basis': 'vectors.dim vs 库内维度分布',
+                        })
+                    elif vr['bytes'] is not None and vr['bytes'] != dim * 4:
+                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                           'note': f"向量字节数 {vr['bytes']} 与记录维度 {dim} 不符",
+                                           'basis': 'length(vector) vs vectors.dim × 4'})
                     if vr['content_hash'] and r['body_sha256'] and vr['content_hash'] != r['body_sha256']:
-                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid), 'note': '正文修改后向量 content_hash 未同步'})
+                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                           'note': '正文修改后向量 content_hash 未同步',
+                                           'basis': 'vectors.content_hash vs memories.body_sha256'})
             residual_tomb_vecs = [vr['memory_id'] for vr in vector_rows if vr['memory_id'] not in live_ids]
             for tid in residual_tomb_vecs[:10]:
-                vec_issues.append({'label': f"残留向量 {tid}", 'note': '对应记忆已删除或成为墓碑'})
+                vec_issues.append({'label': f"残留向量 {tid}", 'note': '对应记忆已删除或成为墓碑',
+                                   'basis': 'vectors vs memories 活跃集合'})
+            parts = []
+            if stored_embedding_model or configured_model:
+                parts.append(f"Embedding 模型：库内 {stored_embedding_model or '未记录'}"
+                             f" / 配置 {configured_model or '未配置'}")
+            if dim_counts:
+                parts.append('维度分布：' + ', '.join(
+                    f"{dim}维×{count}" for dim, count in sorted(dim_counts.items())))
             checks.append({
                 'id': 'H-7',
                 'title': '检索索引与记忆数据一致性',
                 'severity': 'warn' if vec_issues else 'good',
-                'status_label': f"{len(vec_issues)} 条索引待同步" if vec_issues else '索引 100% 一致',
-                'impact': (f"发现 {len(vec_issues)} 项向量索引待补齐、哈希滞后或墓碑残留（仅提示，不自动重算付费向量）。"
-                           if vec_issues else f"全部 {len(active_mems)} 条活跃记忆向量维度与内容哈希一致，无墓碑残留。"),
-                'object': 'memories(vector_state, body_sha256) vs vectors(dim, content_hash)',
-                'basis': '逐条外键与哈希对账',
+                'status_label': f"{len(vec_issues)} 条索引待同步" if vec_issues else '索引一致',
+                'impact': ((f"发现 {len(vec_issues)} 项向量索引待补齐、维度/模型不一致、哈希滞后或墓碑残留"
+                            f"（仅提示，不自动重算付费向量）。" if vec_issues else
+                            f"全部 {len(active_mems)} 条活跃记忆向量维度自洽、模型身份一致、内容哈希一致，"
+                            f"无墓碑残留。")
+                           + (' ' + '；'.join(parts) + '。' if parts else '')),
+                'object': 'memories(vector_state, body_sha256) vs vectors(dim, content_hash, length) / meta.embedding_model',
+                'basis': '逐条外键、哈希与长度对账；维度以库内分布和记录值为准，不使用固定维度',
                 'source': 'brain.db (mode=ro)',
                 'confidence': '高可信（确定性对账）',
                 'evidences': vec_issues[:20],
+                'vector_identity': vector_identity,
             })
+            # Period slice: only facts that are actually dated by the database are claimed.
+            # Whole-database health above stays labelled "current"; this block answers what changed
+            # inside [from_date, to_date] without pretending to reconstruct an unrecorded past state.
+            if range_requested:
+                _guard(deadline)
+                period_mems = [r for r in mem_rows
+                               if not r['is_tombstone'] and not r['is_deleted']
+                               and _in_range(r['created'], dt_from, dt_to)]
+                period_ids = {r['id'] for r in period_mems}
+                period_events = [ev for ev in event_rows
+                                 if _in_range((ev['created_at'] or ev['first_at']) if 'created_at' in ev.keys()
+                                              else ev['first_at'], dt_from, dt_to)]
+                period_event_ids = {ev['event_id'] for ev in period_events}
+                stage_times = conn.execute(
+                    'SELECT at, event_id FROM event_stages LIMIT 20000').fetchall() if 'event_stages' in tables else []
+                period_stages = [row for row in stage_times if _in_range(row['at'], dt_from, dt_to)]
+                version_times = conn.execute(
+                    'SELECT time FROM versions ORDER BY seq DESC LIMIT 20000').fetchall() if 'versions' in tables else []
+                period_versions = [row for row in version_times if _in_range(row['time'], dt_from, dt_to)]
+
+                # Duplicates/fragments inside the period only, using the same deterministic rules.
+                p_sha = {}
+                p_norm = {}
+                for r in period_mems:
+                    body = r['body'] or ''
+                    sha = r['body_sha256'] or hashlib.sha256(body.encode('utf-8')).hexdigest()
+                    p_sha.setdefault(sha, []).append(r)
+                    norm = _norm_text(body)
+                    if len(norm) >= 12:
+                        p_norm.setdefault(norm, []).append(r)
+                p_dup_ids = set()
+                p_dups = []
+                for grp in (*p_sha.values(), *p_norm.values()):
+                    if len(grp) > 1:
+                        ids = tuple(sorted(x['id'] for x in grp))
+                        if ids in p_dup_ids:
+                            continue
+                        p_dup_ids.add(ids)
+                        p_dups.append(ids)
+                p_frags = [ev for ev in frag_evidences if ev.get('memId') in period_ids]
+                p_dangling = [ev for ev in dangling_evidences if ev.get('memId') in period_ids]
+                p_dangling.extend(ev for ev in ev_link_issues if ev.get('eventId') in period_event_ids)
+                p_index = []
+                for r in period_mems:
+                    mid = r['id']
+                    vr = vec_by_id.get(mid)
+                    if (r['vector_state'] or 'ready') != 'ready':
+                        p_index.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                        'note': f"vector_state={r['vector_state']}（关键词检索可用）"})
+                    elif vr is None:
+                        p_index.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                        'note': '状态为 ready 但缺少向量行'})
+                    else:
+                        dim = vr['dim'] or 0
+                        if dim <= 0 or (dominant_dim and dim != dominant_dim):
+                            p_index.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                            'note': (f"向量维度 {dim or '未知'} 与库内主导维度 "
+                                                     f"{dominant_dim or '未知'} 不一致")})
+                        elif vr['bytes'] is not None and vr['bytes'] != dim * 4:
+                            p_index.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                            'note': f"向量字节数 {vr['bytes']} 与记录维度 {dim} 不符"})
+                        if vr['content_hash'] and r['body_sha256'] and vr['content_hash'] != r['body_sha256']:
+                            p_index.append({'memId': mid, 'label': _safe_title(r['title'], mid),
+                                            'note': '正文修改后向量 content_hash 未同步'})
+
+                missing_mem_created = sum(
+                    1 for r in mem_rows
+                    if not r['is_tombstone'] and not r['is_deleted'] and _parse_dt(r['created']) is None)
+                missing_event_time = sum(
+                    1 for ev in event_rows if _parse_dt(ev['first_at'] or ev['created_at'] if 'created_at' in ev.keys()
+                                                        else ev['first_at']) is None)
+                period.update({
+                    'status': 'available',
+                    'growth': {
+                        'memories_created': len(period_mems),
+                        'events_created': len(period_events),
+                        'event_stages': len(period_stages),
+                        'versions': len(period_versions),
+                        'event_stages_total': stage_total,
+                        'versions_total': version_total,
+                    },
+                    'duplicates': {'count': len(p_dups),
+                                   'evidences': [{'label': ' / '.join(ids), 'note': '期间创建的记忆正文完全一致或规范化相同'}
+                                                 for ids in p_dups[:10]]},
+                    'fragments': {'count': len(p_frags), 'evidences': p_frags[:10]},
+                    'dangling': {'count': len(p_dangling), 'evidences': p_dangling[:10]},
+                    'index_anomalies': {'count': len(p_index), 'evidences': p_index[:10]},
+                    'coverage': {
+                        'memory_created_missing': missing_mem_created,
+                        'event_time_missing_in_sample': missing_event_time,
+                        'events_checked': len(event_rows),
+                        'events_total': event_total,
+                        'events_sampled': events_sampled,
+                        'event_stages_checked': len(stage_times),
+                        'event_stages_total': stage_total,
+                        'versions_checked': len(version_times),
+                        'versions_total': version_total,
+                        'time_basis': 'memories.created / events.created_at|first_at / event_stages.at / versions.time',
+                    },
+                })
+                if events_sampled or len(stage_times) < stage_total or len(version_times) < version_total:
+                    period['coverage']['partial'] = True
+                    period['coverage']['note'] = ('事件/阶段/版本超过单次取样上限，期间计数只覆盖已读取部分；'
+                                                  '未读取部分没有被当成“不存在”。')
+                # Attach period slices to the checks they qualify, so the page can show both scopes.
+                check_period = {c['id']: c for c in checks}
+                if 'H-1' in check_period:
+                    check_period['H-1']['period'] = {
+                        'memories_created': len(period_mems),
+                        'events_created': len(period_events),
+                        'event_stages': len(period_stages),
+                        'versions': len(period_versions),
+                    }
+                    check_period['H-1']['scope'] = 'current+range'
+                if 'H-2' in check_period:
+                    check_period['H-2']['period'] = {'duplicate_groups': len(p_dups), 'fragments': len(p_frags)}
+                    check_period['H-2']['scope'] = 'current+range'
+                if 'H-3' in check_period:
+                    check_period['H-3']['period'] = {'dangling': len(p_dangling)}
+                    check_period['H-3']['scope'] = 'current+range'
+                if 'H-4' in check_period:
+                    check_period['H-4']['period'] = {'dangling': sum(1 for ev in ev_link_issues
+                                                                     if ev.get('eventId') in period_event_ids)}
+                    check_period['H-4']['scope'] = 'current+range'
+                if 'H-7' in check_period:
+                    check_period['H-7']['period'] = {'index_anomalies': len(p_index)}
+                    check_period['H-7']['scope'] = 'current+range'
+            else:
+                for check in checks:
+                    check.setdefault('scope', 'current')
         except _ScanTimeout:
             timed_out = True
         finally:
@@ -703,6 +1085,8 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'source': 'role runtime jsonl',
                 'confidence': '高可信（真实日志计数）',
                 'evidences': [],
+                'scope': 'range' if range_requested else 'range (all logs)',
+                'period': {'from_date': from_date, 'to_date': to_date} if range_requested else None,
             })
 
         # H-9: Background maintenance & freeze status
@@ -724,7 +1108,55 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'source': 'live runtime components',
                 'confidence': '高可信（实时状态读数）',
                 'evidences': [],
+                'scope': 'current',
             })
+
+        if range_requested:
+            # Historical evidence is read from the existing daily snapshots. When it is absent the
+            # report says so explicitly instead of presenting today's numbers as that period's state.
+            snapshot_rows = [row for row in _read_jsonl(
+                health_reports_dir(root, role_id) / 'health-snapshots.jsonl', 400)
+                             if _in_range(row.get('scanned_at') or row.get('day'), dt_from, dt_to)]
+            learned_versions_path = rdir / 'learned-context.versions.jsonl'
+            learned_rows = [row for row in _read_jsonl(learned_versions_path, 5000)
+                            if _in_range(row.get('time'), dt_from, dt_to)]
+            period['growth']['learned_context_changes'] = len(learned_rows)
+            if snapshot_rows:
+                first_snap, last_snap = snapshot_rows[0], snapshot_rows[-1]
+                delta = {}
+                for key in ('active_memories', 'events_total', 'warn_count', 'error_count'):
+                    try:
+                        delta[key] = int(last_snap.get(key) or 0) - int(first_snap.get(key) or 0)
+                    except (TypeError, ValueError):
+                        delta[key] = None
+                period['historical_state'] = {
+                    'available': True,
+                    'observations': len(snapshot_rows),
+                    'first': {'at': first_snap.get('scanned_at') or first_snap.get('day'),
+                              'active_memories': first_snap.get('active_memories'),
+                              'events_total': first_snap.get('events_total')},
+                    'last': {'at': last_snap.get('scanned_at') or last_snap.get('day'),
+                             'active_memories': last_snap.get('active_memories'),
+                             'events_total': last_snap.get('events_total')},
+                    'delta': delta,
+                    'basis': 'health-snapshots.jsonl（每日只读快照）',
+                    'limit': '快照只记录当日总量与告警数，不能还原期间内部健康状态；'
+                             '期间内部状态只能依据库内时间字段判断。',
+                }
+                first_at = _parse_dt(first_snap.get('scanned_at') or first_snap.get('day'))
+                if dt_from is not None and (first_at is None or first_at.date() > dt_from.date()):
+                    period['historical_state']['coverage'] = 'partial'
+                    period['historical_state']['reason'] = 'range_starts_before_first_snapshot'
+            else:
+                period['historical_state'] = {
+                    'available': False,
+                    'reason': 'no_snapshot_in_range',
+                    'note': '该时间段没有巡检历史快照；仅能依据 memories.created / events / versions '
+                            '等带时间字段的库内记录判断“期间变化”，不能虚构当时整体健康状态。',
+                }
+            if timed_out:
+                period['status'] = 'incomplete'
+                period['reason'] = 'scan_timeout_before_period_complete'
 
         skipped_checks = []
         if timed_out:
@@ -749,13 +1181,26 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         good_count = sum(1 for c in checks if c['severity'] == 'good')
         elapsed_ms = round((time.monotonic() - started) * 1000)
 
+        if range_requested and not period.get('growth'):
+            period['status'] = period.get('status') if period.get('status') == 'incomplete' else 'incomplete'
+            period.setdefault('reason', 'scan_timeout_before_period_complete')
+        for check in checks:
+            check.setdefault('scope', 'current')
         report = {
-            'schema_version': 1,
+            'schema_version': 2,
             'scanned_at': _now_iso(),
             'duration_ms': elapsed_ms,
             'read_only': True,
             'from_date': from_date,
             'to_date': to_date,
+            'scope': {
+                'current_state': True,
+                'requested_range': range_requested,
+                'from_date': from_date,
+                'to_date': to_date,
+                'label': ('全库当前 + 指定期间' if range_requested else '全库当前'),
+            },
+            'period': period,
             'stats': stats,
             'incomplete': timed_out,
             'sampled_events': ({'checked': len(event_rows), 'total': event_total}
@@ -791,20 +1236,56 @@ def export_report(report, fmt='markdown'):
     if fmt == 'json':
         return json.dumps(report, ensure_ascii=False, indent=2)
     s = report.get('summary', {})
+    scope = report.get('scope') or {}
+    period = report.get('period') or {}
     lines = [
         '# VEIL Brain 记忆健康检查报告（严格只读脱敏摘要）',
         f"- 检查时间：{report.get('scanned_at', '未知')}",
         f"- 耗时：{report.get('duration_ms', 0)} ms（零写操作，零外部 Token 消耗）",
+        f"- 数据范围：{scope.get('label') or '全库当前'}",
         f"- 整体状态：{s.get('status_label', '未知')}（正常 {s.get('good_count', 0)} / 关注 {s.get('warn_count', 0)}）",
-        '',
-        '## 检查明细',
     ]
+    if report.get('from_date') or report.get('to_date'):
+        lines.append(f"- 指定期间：{report.get('from_date') or '最早'} 至 {report.get('to_date') or '最新'}")
+    lines.append('')
+    if period.get('requested'):
+        lines.append('## 指定期间变化与异常（与全库当前状态分开）')
+        growth = period.get('growth') or {}
+        lines.append(f"- 期间新增记忆：{growth.get('memories_created', 0)} 条；"
+                     f"事件：{growth.get('events_created', 0)} 个；阶段：{growth.get('event_stages', 0)} 个；"
+                     f"版本：{growth.get('versions', 0)} 条；认知版本变更：{growth.get('learned_context_changes', 0)} 条")
+        for key, label in (('duplicates', '重复'), ('fragments', '碎片'),
+                           ('dangling', '断链/悬空引用'), ('index_anomalies', '索引异常')):
+            section = period.get(key) or {}
+            lines.append(f"- 期间{label}：{section.get('count', 0)} 项")
+            for ev in (section.get('evidences') or [])[:5]:
+                lines.append(f"  - {ev.get('label')}: {ev.get('note')}")
+        coverage = period.get('coverage') or {}
+        if coverage.get('note'):
+            lines.append(f"- 期间证据边界：{coverage['note']}")
+        hist = period.get('historical_state') or {}
+        if hist.get('available'):
+            delta = hist.get('delta') or {}
+            lines.append(f"- 历史快照：{hist.get('observations', 0)} 次；"
+                         f"活跃记忆变化 {delta.get('active_memories')}，事件变化 {delta.get('events_total')}；"
+                         f"{hist.get('limit', '')}")
+            if hist.get('coverage') == 'partial':
+                lines.append(f"- 历史快照覆盖不足：{hist.get('reason', '')}")
+        else:
+            lines.append(f"- 历史快照：缺失（{hist.get('reason', 'no_snapshot_in_range')}）；"
+                         f"只报告有库内时间字段支持的期间变化，不推断当时整体健康状态。")
+        lines.append('')
+    lines.append('## 全库当前状态检查明细')
     for chk in report.get('checks', []):
+        scope_label = {'current': '全库当前', 'current+range': '全库当前 + 指定期间',
+                       'range': '指定期间', 'range (all logs)': '日志当前窗口'}.get(chk.get('scope'), '全库当前')
         lines.append(f"### [{chk.get('id')}] {chk.get('title')} — {chk.get('status_label')}")
+        lines.append(f"- 数据范围：{scope_label}")
         lines.append(f"- 影响范围：{chk.get('impact')}")
         lines.append(f"- 检查对象：{chk.get('object')} | 可信度：{chk.get('confidence')}")
         for ev in chk.get('evidences', [])[:10]:
-            lines.append(f"  - {ev.get('label')}: {ev.get('note')}")
+            basis = f"（依据：{ev['basis']}）" if ev.get('basis') else ''
+            lines.append(f"  - {ev.get('label')}: {ev.get('note')}{basis}")
         lines.append('')
     return '\n'.join(lines)
 
@@ -869,10 +1350,17 @@ def start_health_scheduler(hub, *, interval_seconds=600):
                 db_path = Path(auth.db_path) if auth is not None and getattr(auth, 'db_path', None) else Path(data_root) / cfg.id / 'brain.db'
                 experience = getattr(chat, 'experience', None)
                 judge = getattr(memory, 'judge', None)
+                configured_model = ''
+                if auth is not None and hasattr(auth, 'embedding_model'):
+                    try:
+                        configured_model = auth.embedding_model() or ''
+                    except Exception:
+                        configured_model = ''
                 run_health_scan(
                     data_root, cfg.id, db_path,
                     experience_status=experience.status() if experience else None,
                     judge_status=judge.status() if judge else None,
+                    configured_embedding_model=configured_model,
                     timeout_s=5.0,
                 )
                 last_run_at = time.time()
