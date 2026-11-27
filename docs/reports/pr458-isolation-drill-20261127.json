@@ -2,7 +2,7 @@
   "conflict_file_intact": true,
   "conflict_guard_aborted": true,
   "conflict_guard_exit": 1,
-  "conflict_head": "25c9b3553c4e7ec887c331d944f6d3e4637e011a",
+  "conflict_head": "19a428aad0e23df7889eb7d4a14de49ed28bac6a",
   "conflict_head_unchanged": true,
   "entrypoints": {
     "backup_restore.py": 0,
@@ -13,7 +13,7 @@
     "web_agent.py": 0,
     "web_launcher.py": 0
   },
-  "new_commit": "25c9b3553c4e7ec887c331d944f6d3e4637e011a",
+  "new_commit": "19a428aad0e23df7889eb7d4a14de49ed28bac6a",
   "new_layout_present": true,
   "old_commit": "d78a8b7bc1af4c60e99f67880bf809df3fd3e314",
   "old_layout_restored": true,
