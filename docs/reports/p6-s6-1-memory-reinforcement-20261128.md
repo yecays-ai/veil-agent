@@ -110,7 +110,7 @@
 
 - Run：`s6-1-activation-20261128T004338`（`veil-lab/runs/s6-1-activation-20261128T004338`，含回滚/重启/冷却长链）与最终干净 run `s6-1-final-20261128T023357`（`veil-lab/runs/s6-1-final-20261128T023357`，最终代码）
 - 快照：`peter-20261127T170245 / r3`（2026-11-28 00:42 刷新，正式目录无变化）
-- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；合流 S6-2 前 `code_sha256 = 44ddcdff...`，合流 `main = 81dba35` 后为 `8488cfb2...`，最终干净 run 为 `b59a57bb5dcc4c00a208eb87cbb99c4a40631967dd37ef7345339644c120452e`；四次 `run verify` 均通过。
+- 代码：branch worktree 的 `veil/` 复制到 run 内 `code/`，`run.json.code_root` 指向它；合流 S6-2 前 `code_sha256 = 44ddcdff...`，合流 `main = 81dba35` 后为 `8488cfb2...`，最终干净 run 为 `aa17c550df586b8abefbcea4db916c72b492d3b9672d7173aee521ba489e62f5`；五次 `run verify` 均通过。
 - 模式：mock（不调用模型、不花钱）；实验变量：`memory.recall_judge.enabled=false`、离线检索 `weight_vector=0.0 / weight_keyword=1.0`（让合成的 `S61LAB` 记忆可被检索；不影响送达/记账逻辑）
 - 合成数据（仅实验副本）：记忆 `s61laba`（imp5，事件+意义+为什么）、`s61labb`（imp8）、`s61labc`（imp5，无事件/意义）；事件 `s61lab-ev-a`；关系条目 `s61lab-rel`（`confirmed`，引用 `event:s61lab-ev-a`）
 - 代码版本漂移说明：快照钉住的代码是 `2a264a7`，早于 S3；本分支的 S3 证据校验不再注入快照里那条无来源的 `uncertain` 关系条目，导致首次 `run verify` 缺少 `relationship_base`。为让核验对照成立，在实验副本里额外加了一条 `source='lan'`、`locked=true` 的合成关系条目（`s61-lab-rel`），之后 `run verify` 通过。这是快照代码与当前分支的差异，不是本单引入的运行回归；详见第 7 节。
@@ -134,7 +134,7 @@
                              b 2.0（imp8 保护，不衰减）；重要度仍 6/8/5；当日无重复提案（冷却生效）
     新增真实记忆激活: activation 行 13→28，均只记 ID/计数，未读取或输出正文
 
-    最终干净 run s6-1-final-20261128T023357（code_sha256=b59a57bb...，verify 通过）:
+    最终干净 run s6-1-final-20261128T023357（code_sha256=aa17c550...，verify 通过）:
     digest_valid=true；duplicate 重放 status=duplicate、计数不变；proposal applied 5→6（version 287）；
     60 天后 s61fa/c score=0.2437 display=11 decayed=true，s61fb score=1.0 protected=true；
     重要度 6/8/5，is_deleted=0/is_tombstone=0，versions(s61fa)=1，receipts=9
