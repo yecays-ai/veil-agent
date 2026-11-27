@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import event_migration
+from veil.brain.storage import event_migration
 
 
 class MigrationPreviewTests(unittest.TestCase):

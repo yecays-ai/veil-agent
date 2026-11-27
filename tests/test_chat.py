@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
+from veil.core.veil_agent import (Chat, Budget, Store, build_self_description, conservative_token_ratio,
                         estimate_request_tokens, usage_status_for, reasoning_field_for,
                         copy_reasoning, message_field, message_request_bytes, MESSAGE_FRAMING_BYTES,
                         load_character, make_model, model_tool_result, run_chat, UserError,
@@ -60,7 +60,7 @@ class UsageAndProtocolTests(unittest.TestCase):
 
     def test_retry_turn_keeps_only_the_explicit_reasoning_field(self):
         message = SimpleNamespace(content='x', reasoning_content='legacy', reasoning='other')
-        from veil_agent import assistant_retry_turn
+        from veil.core.veil_agent import assistant_retry_turn
         self.assertEqual(assistant_retry_turn(message, 'again')['reasoning_content'], 'legacy')
         self.assertNotIn('reasoning', assistant_retry_turn(message, 'again'))
         self.assertEqual(assistant_retry_turn(message, 'again', 'reasoning')['reasoning'], 'other')
@@ -123,7 +123,7 @@ output_cny_per_million = "8"
         self.chat = Chat(self.cfg, self.store, self.budget, self.model)
 
     def test_send_writes_a_request_snapshot_with_labels(self):
-        import request_snapshots
+        from veil.system import request_snapshots
         self.chat.send('first message')
         self.chat.send('hello snapshot')
         items = request_snapshots.recent(self.store.root, 'test')
@@ -135,7 +135,7 @@ output_cny_per_million = "8"
         self.assertGreaterEqual(record['cache_prefix'], 1)
 
     def test_tool_loop_snapshot_records_every_model_request(self):
-        import request_snapshots
+        from veil.system import request_snapshots
         tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(
             name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
         first = SimpleNamespace(content=None, tool_calls=[tool_call],
@@ -211,7 +211,7 @@ output_cny_per_million = "8"
         self.assertEqual(rounds, 2)
 
     def test_send_message_can_send_a_sticker_as_its_text_marker(self):
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('丑猫', '打人', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         self.assertNotIn('sticker', send_message_schema()['function']['parameters']['properties'])
@@ -244,7 +244,7 @@ output_cny_per_million = "8"
         self.assertEqual(len(self.store.read('test/chat.jsonl')), before)  # nothing half-sent
 
     def test_stickers_tool_is_offered_only_with_a_library(self):
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         names = lambda chat: [s['function']['name'] for s in chat.tool_schemas()]
         chat = Chat(self.cfg, self.store, self.budget, self.model)
         self.assertNotIn('stickers', names(chat))
@@ -512,7 +512,7 @@ output_cny_per_million = "8"
                 self.assertNotIn('content', diagnostic)
 
     def test_plain_tool_name_mention_is_not_treated_as_raw_tool_call_text(self):
-        from veil_agent import raw_tool_call_text_format
+        from veil.core.veil_agent import raw_tool_call_text_format
 
         self.assertIsNone(raw_tool_call_text_format(
             'Peter explained that send_message can send up to three separate messages.'))
@@ -563,7 +563,7 @@ output_cny_per_million = "8"
         outputs = []
         store = Store(self.root / 'calendar-reminder-race')
         chat = Chat(replace(self.cfg, tools=None), store, Budget(store), Mock(), output=outputs.append)
-        with patch('life_records.now', return_value='2026-11-25T19:00:00+08:00'):
+        with patch('veil.life.life_records.now', return_value='2026-11-25T19:00:00+08:00'):
             event = chat.life_records.write({'kind': 'event', 'title': 'Movie', 'date': '2026-11-25',
                                              'time': '20:00', 'remind': True}, 'Lan')
         due = chat.life_records.claim_due_reminder(datetime(2026, 11, 25, 20, 0, tzinfo=timezone.utc))
@@ -589,7 +589,7 @@ output_cny_per_million = "8"
         self.assertTrue(any('还没有可用的聊天模型' in str(item) for item in outputs))
 
     def test_budget_exceeded_keeps_run_chat_alive_and_allows_next_message(self):
-        from agent_types import BudgetExceeded
+        from veil.core.agent_types import BudgetExceeded
         outputs = []
         self.chat.send = Mock(side_effect=[BudgetExceeded('本次费用上限会超过 ¥10/天，未发送。'), 'ok again'])
         self.chat.apply_pending_recall = Mock()
@@ -845,7 +845,7 @@ output_cny_per_million = "8"
         tools.consume_capability_event.assert_called_once_with(notice)
 
     def test_pending_capability_event_survives_restart_and_reaches_model(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
 
         def tools_after_startup():
             tools = FilesystemTools.__new__(FilesystemTools)
@@ -970,7 +970,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.budget.totals()[0], Decimal('0.000350'))
         self.assertIn('委派任务 ¥0.000350', self.budget.display(character='test'))
 
-        from agent_types import BudgetExceeded
+        from veil.core.agent_types import BudgetExceeded
         capped = Budget(self.store, Decimal('0.0001'), Decimal('300'))
         with self.assertRaises(BudgetExceeded):
             capped.reserve(self.cfg, category='delegate')
@@ -1015,7 +1015,7 @@ output_cny_per_million = "8"
         delegated.assert_called_once()
 
     def test_delegate_model_request_timeout_is_45_seconds(self):
-        from delegate_agent import DelegateResult, READ_ONLY_TOOLS
+        from veil.autonomy.delegate_agent import DelegateResult, READ_ONLY_TOOLS
         cfg = replace(self.cfg, tools={'enabled': True, 'max_steps': 2})
         chat = Chat(cfg, self.store, self.budget, self.model)
         chat.tools = SimpleNamespace(tools=[
@@ -1027,8 +1027,8 @@ output_cny_per_million = "8"
                     'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0)}
         client = SimpleNamespace(close=Mock())
         with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
-              patch('veil_agent.make_model', return_value=(client, Mock())) as make_model,
-              patch('delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功')) as run_delegate):
+              patch('veil.core.veil_agent.make_model', return_value=(client, Mock())) as make_model,
+              patch('veil.autonomy.delegate_agent.run', return_value=DelegateResult('Fixture result.', '成功')) as run_delegate):
             result = chat._run_delegate('Find a public article.', 'parent-request')
         self.assertEqual(result.text, 'Fixture result.')
         self.assertEqual(make_model.call_args.kwargs['timeout'], 45)
@@ -1045,7 +1045,7 @@ output_cny_per_million = "8"
                     'cny_per_call': Decimal('0.06'), 'input_cny_per_million': Decimal(0),
                     'cached_input_cny_per_million': Decimal(0), 'output_cny_per_million': Decimal(0)}
         with (patch.object(cfg.models, 'chosen', return_value=('fixture-id', 'fixture', provider)),
-              patch('veil_agent.make_model', side_effect=RuntimeError('fixture startup failure'))):
+              patch('veil.core.veil_agent.make_model', side_effect=RuntimeError('fixture startup failure'))):
             result = chat._run_delegate('Find a public article.', 'parent-request')
         self.assertEqual(result.state, '出错')
         self.assertIn('无法启动', result.text)
@@ -1066,9 +1066,9 @@ output_cny_per_million = "8"
         self.model.assert_not_called()
 
     def test_missing_tools_table_does_not_start_filesystem_server(self):
-        from tools_agent import FilesystemTools
+        from veil.tools.tools_agent import FilesystemTools
         self.assertIsNone(self.cfg.tools)
-        with patch('tools_agent._McpWorker') as worker:
+        with patch('veil.tools.tools_agent._McpWorker') as worker:
             tools = FilesystemTools(self.root, self.cfg, self.store)
         self.assertEqual(tools.tools, [])
         worker.assert_not_called()
@@ -1098,7 +1098,7 @@ output_cny_per_million = "8"
                          'saved before tool overflow')
 
     def test_media_completion_runs_once_on_storage_failures(self):
-        from web_agent import ChatInput
+        from veil.server.web_agent import ChatInput
         append = self.store.append
         for role, persisted in (('user', False), ('assistant', True)):
             with self.subTest(role=role):
@@ -1114,7 +1114,7 @@ output_cny_per_million = "8"
                 complete.assert_called_once_with(persisted)
 
     def test_invalid_photo_history_falls_back_without_blocking_text_chat(self):
-        from veil_agent import PHOTO_PLACEHOLDER
+        from veil.core.veil_agent import PHOTO_PLACEHOLDER
         for mime in ([], {}, None, 42, 'unsupported/type'):
             with self.subTest(mime=mime):
                 self.store.append(self.chat.path, {'role': 'user', 'content': 'caption',
@@ -1124,7 +1124,7 @@ output_cny_per_million = "8"
                 reopened.send('continue with text')
 
     def test_photo_file_limit_checked_before_read_and_read_is_bounded(self):
-        from veil_agent import MAX_PHOTO_BYTES, PHOTO_PLACEHOLDER
+        from veil.core.veil_agent import MAX_PHOTO_BYTES, PHOTO_PLACEHOLDER
         folder = self.store.root / self.cfg.id / 'media'
         folder.mkdir(parents=True)
         image = folder / 'fictional.png'
@@ -1143,7 +1143,7 @@ output_cny_per_million = "8"
         with patch.object(Path, 'stat', return_value=SimpleNamespace(st_size=1)):
             with self.assertRaises(UserError):
                 self.chat._photo_content('caption', media)
-        with patch('veil_agent.MAX_PHOTO_BYTES', 8):
+        with patch('veil.core.veil_agent.MAX_PHOTO_BYTES', 8):
             image.write_bytes(b'12345678')
             self.assertIsInstance(self.chat._photo_content('caption', media), list)
 
@@ -1233,9 +1233,9 @@ output_cny_per_million = "8"
                 return 2
             return 2 if 'OPTIONAL_CONTEXT' in content else 1
 
-        with patch('recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
-             patch('screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
-             patch('veil_agent.estimate_request_tokens', side_effect=estimate):
+        with patch('veil.brain.recent_experiences.recent_experience_context', return_value='OPTIONAL_CONTEXT'), \
+             patch('veil.windows.screen_pop.screen_pop_history_context', return_value='OPTIONAL_CONTEXT'), \
+             patch('veil.core.veil_agent.estimate_request_tokens', side_effect=estimate):
             self.chat.send('继续')
 
         self.assertIn('PROGRAM-RECORDED INVESTIGATION CHECKPOINT',
@@ -1293,7 +1293,7 @@ output_cny_per_million = "8"
         self.assertEqual(self.budget.totals(), (0, 0, 0))
 
     def test_process_lock_blocks_second_window_and_releases(self):
-        script = 'from pathlib import Path; from veil_agent import Store; import sys; s=Store(Path(sys.argv[1])); lock=s.lock(); lock.__enter__()'
+        script = 'from pathlib import Path; from veil.core.veil_agent import Store; import sys; s=Store(Path(sys.argv[1])); lock=s.lock(); lock.__enter__()'
         def another_window():
             return subprocess.run([sys.executable, '-c', script, str(self.store.root)], capture_output=True, text=True)
         with self.store.lock():

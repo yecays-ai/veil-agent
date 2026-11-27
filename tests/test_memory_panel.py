@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from memory_native import parse_frontmatter
+from veil.brain.memory_native import parse_frontmatter
 import test_native_memory
 
 PARCEL = """---

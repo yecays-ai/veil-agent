@@ -5,9 +5,9 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from desktop_icons import (DesktopIcon, DesktopIconsError, DesktopIconsManager, DisplayMetrics,
+from veil.windows.desktop_icons import (DesktopIcon, DesktopIconsError, DesktopIconsManager, DisplayMetrics,
                            FakeDesktopIconsBackend)
-from veil_agent import Budget, Store
+from veil.core.veil_agent import Budget, Store
 
 
 def reserve(store, request_id, amount='0.2', category='autonomy', accounting=None, character='fixture'):
@@ -105,7 +105,7 @@ class UsageOverBoundTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             budget = Budget(Store(Path(directory)))
             reservation = budget.estimate('fixture', 'embedding', 100, Decimal(2))
-            from veil_agent import UserError
+            from veil.core.veil_agent import UserError
             with self.assertRaises(UserError):
                 budget.settle_estimate(reservation, accounting='embedding-usage',
                                        settled_amount=Decimal('0.001'), usage_tokens=1000)
@@ -133,7 +133,7 @@ class UsageOverBoundTests(unittest.TestCase):
                         'cached_input_cny_per_million': Decimal(1), 'output_cny_per_million': Decimal(8)}
             cfg = type('Cfg', (), {'provider': provider, 'id': 'fixture', 'max_output_tokens': 100})()
             request_id, _ = budget.reserve(cfg)
-            from veil_agent import UserError
+            from veil.core.veil_agent import UserError
             with self.assertRaises(UserError):
                 budget.settle(request_id, cfg, 500, 5000, 0)
 
@@ -141,7 +141,7 @@ class UsageOverBoundTests(unittest.TestCase):
 class RecallExpiryTests(unittest.TestCase):
     def setUp(self):
         from unittest.mock import Mock
-        from veil_agent import Chat, load_character
+        from veil.core.veil_agent import Chat, load_character
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
         (root / 'characters' / 'test').mkdir(parents=True)
@@ -184,14 +184,14 @@ output_cny_per_million = "8"
 
     def test_storage_errors_are_not_mistaken_for_a_rejected_recall(self):
         from unittest.mock import patch
-        from veil_agent import UserError, RecallRejected
+        from veil.core.veil_agent import UserError, RecallRejected
         with patch.object(self.chat, '_chat_rows', side_effect=UserError('本机账本损坏')):
             with self.assertRaises(UserError) as caught:
                 self.chat.check_recallable('a_old', 'assistant')
         self.assertNotIsInstance(caught.exception, RecallRejected)
 
     def test_the_menu_path_still_reports_the_reason(self):
-        from veil_agent import UserError
+        from veil.core.veil_agent import UserError
         with self.assertRaisesRegex(UserError, '两分钟'):
             self.chat.recall_message('a_old', role='assistant')
 

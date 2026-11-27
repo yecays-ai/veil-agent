@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_types import UserError
-from veil_agent import Budget, Chat, Store, load_character
-from voice_style import FRAME, MAX_CHARS, VoiceStyle, clean, sample_count, voice_path
+from veil.core.agent_types import UserError
+from veil.core.veil_agent import Budget, Chat, Store, load_character
+from veil.persona.voice_style import FRAME, MAX_CHARS, VoiceStyle, clean, sample_count, voice_path
 
 SAMPLE = '# Rules\n\n- Short answers.\n\n# Samples\n\n> hello\nPeter: hi\nPeter： what now?\n\n\n\n> Lan: bye\nokay\n'
 

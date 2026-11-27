@@ -42,8 +42,8 @@ class UpdateBatTests(unittest.TestCase):
 
     def test_backs_up_before_pulling_and_stops_when_the_backup_fails(self):
         # Ticket 197: a failed backup stops the update before any code changes.
-        self.assertLess(self.commands.index('backup_restore.py pre-update'), self.commands.index('git pull'))
-        self.assertLess(self.commands.index('git fetch origin main'), self.commands.index('backup_restore.py pre-update'))
+        self.assertLess(self.commands.index('backup_restore pre-update'), self.commands.index('git pull'))
+        self.assertLess(self.commands.index('git fetch origin main'), self.commands.index('backup_restore pre-update'))
         self.assertRegex(self.commands, r'pre-update\s*\n\s*if errorlevel 1 goto backup_failed')
         failed = self.text[self.text.index(':backup_failed'):self.text.index(':pull_failed')]
         self.assertIn('goto stop', failed)

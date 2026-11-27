@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
-import guest_profiles as gp
+from veil.windows import guest_profiles as gp
 
 
 class FakeProcess:

@@ -2,9 +2,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
-from tools_agent import ALLOW, tool_policy
-from veil_agent import Budget, Chat, Character, Store, model_tool_result, raw_tool_call_text_format
+from veil.tools.tool_aliases import alias_system_messages, alias_tool_schemas, resolve_tool_name, validate_tool_aliases
+from veil.tools.tools_agent import ALLOW, tool_policy
+from veil.core.veil_agent import Budget, Chat, Character, Store, model_tool_result, raw_tool_call_text_format
 
 
 class ToolAliasTests(unittest.TestCase):
@@ -124,7 +124,7 @@ class ToolAliasTests(unittest.TestCase):
         result = alias_system_messages(messages, {'send_message': 'bubble_up'})
         self.assertEqual(result[0]['content'], messages[0]['content'])
         self.assertEqual(result[1]['content'], 'Use bubble_up when you want to reply.')
-        from tool_aliases import _replace_tool_references
+        from veil.tools.tool_aliases import _replace_tool_references
         self.assertEqual(_replace_tool_references('Open lab/read_text_file.txt and read_text_file.',
                                                   {'read_text_file': 'read_the_notes'}),
                          'Open lab/read_text_file.txt and read_the_notes.')

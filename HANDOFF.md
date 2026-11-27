@@ -1,18 +1,25 @@
 # HANDOFF
 
-> 更新时间：2026-11-27T07:20:00+08:00 · `main` = `95dc26a` · 正式目录已同版本部署
+> 更新时间：2026-11-27T13:25:00+08:00 · 基线 `main` = `d78a8b7` · 当前分支 `ticket/458-repo-layout`（已按 F1–F11 集中修复并补完隔离运行时验收，待独立复审；未合并、未部署正式目录）
 
 ## 当前停点
 
-- **本单（纯文档维护）**：统一了待验收归集（`docs/ACCEPTANCE.md`）、状态对齐（`STATUS.md`）、首页重构（`README.md` + `docs/installation.md`、`docs/usage.md`、`docs/README.md`）、施工规则同步（`AGENTS.md`、八个 Skill、PR 模板）。
-- 只改 Markdown，未改代码、测试、CI、审查平台配置；未启停正式 Peter；未写正式数据。
-- **状态：已提交 PR，停下等 Lan 确认，不自行合并。**
-- 进度与近期工单/部署事实统一看 [`STATUS.md`](STATUS.md)，待验收项统一看 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)；工单号 ≠ PR 号，引用时必须写全（例如「工单 451 · PR #456」）。
+- **本单（工单 458 · 仓库目录结构重整）**：
+  - 104 个原根目录 Python 模块与 `prompts/` 已分批迁入 `veil/`（`core`、`server`、`prompts`、`persona`、`brain/{storage,recall}`、`autonomy`、`life`、`chat`、`tools`、`integrations`、`windows`、`system`）。
+  - 根目录保留 7 个过渡兼容入口（`web_agent.py`、`web_launcher.py`、`setup_fetch.py`、`backup_restore.py`、`veil_agent.py`、`data_repair.py`、`veil_brain.py`）；所有入口改为导入真实模块后调用 `main()`，不再经 `runpy` 重复加载。
+  - 低频双击脚本移入 `scripts/windows/`，工作台验证移入 `scripts/workbench-verify/`，实验目录并入 `research/`，新增独立离线回滚与重打包脚本 `scripts/windows/rollback-version.cmd`（绝不执行 `git fetch`/`git pull`）。
+  - 守卫测试 `tests/test_repo_layout.py` 启用严格模式；完整对照文档见 `docs/architecture/repo-layout.md`。
+  - 回滚脚本已加固：切换前检查所有未跟踪/被忽略文件（含父子目录）冲突，默认离线，依赖不足即中止，`-AllowOnlineDeps` 才联网，打包失败恢复旧 `desktop\dist`。
+  - 迁移工具已修复 `prompts` 包冲突、半迁移、兼容入口生成和 CRLF 伪 diff；在含未提交修改的 P4/P5 临时副本上验证通过。
+  - 隔离升级/回滚演练证据见 [`docs/reports/pr458-isolation-drill-20261127.md`](docs/reports/pr458-isolation-drill-20261127.md)；运行时验收（旧 update.bat、旧/新桌面后端、Brain/API/聊天、权限审批、完整离线回滚、失败恢复）见 [`docs/reports/pr458-runtime-acceptance-20261127.md`](docs/reports/pr458-runtime-acceptance-20261127.md) 与同名 JSON；只使用合成数据。
+  - 验收中发现并修复：回滚在切换提交后若依赖同步/打包失败，原实现会留下目标代码+旧桌面；现在自动恢复原代码和原桌面。打包版 EXE 的图形界面在该非交互会话中未验证。
+  - 未修改功能逻辑、权限、记忆算法与提示词正文；未触碰正式运行目录及 `worktrees/p4-p5-brain-rework`。
+- **状态**：F1–F11 集中修复与运行时隔离验收完成，已提交待独立复审与 Lan 真机体验；未合并、未部署。
 
 ## 下一个窗口第一步
 
-1. 读 `docs/ACCEPTANCE.md`，等 Lan 勾选或口头确认；把通过项在清单里打勾、写日期，并回填对应工单。
-2. Lan 拍板 P6-S3/S5/S6/S7 方向后，从 `docs/reports/p6-s4-decision-table-20261126.md` 取第一张工单范围。
+1. 待本单 PR 合并后，若继续 `feat/p4-p5-brain-rework`，先在该分支的隔离副本运行 `.venv\Scripts\python.exe scripts/dev/migrate_layout.py --all --check`，确认无目标冲突后再运行 `--all --move --rewrite`；工具会先改写、再移动、生成兼容入口，并在失败时恢复原文件。
+2. 读 `docs/ACCEPTANCE.md`，按 Lan 体验结果更新验收勾选并推进 P6-S3/S5/S6/S7。
 3. 三项待授权操作（B-3 正式历史恢复、B-4 换 Embedding 重建、H-1 QQ 邮箱）只在 Lan 明确同意后做，且先 dry-run。
 
 ## 环境与工具注意

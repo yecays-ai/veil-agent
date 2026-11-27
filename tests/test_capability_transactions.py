@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from autonomy import AutonomyController
-from memory_native import NativeMemoryTools
-from tools_agent import FilesystemTools
-from veil_agent import ActivityState, Store, UserError
-from web_agent import Hub
+from veil.autonomy.autonomy import AutonomyController
+from veil.brain.memory_native import NativeMemoryTools
+from veil.tools.tools_agent import FilesystemTools
+from veil.core.veil_agent import ActivityState, Store, UserError
+from veil.server.web_agent import Hub
 
 
 class CapabilityTransactionTests(unittest.TestCase):

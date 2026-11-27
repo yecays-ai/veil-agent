@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
-import web_agent
+from veil.server import web_agent
 
 
 class WorkspaceInventoryRouteTests(TestCase):

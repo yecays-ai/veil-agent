@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import prompts
-import prompts.inline as inline
-from prompts.store import PromptStore
+from veil import prompts
+import veil.prompts.inline as inline
+from veil.prompts.store import PromptStore
 
 
 class ScanCoverageTests(unittest.TestCase):
@@ -17,14 +17,23 @@ class ScanCoverageTests(unittest.TestCase):
         '         "like prompt text, so the scanner has to catch it before it ships.")\n'
     )
 
+    @staticmethod
+    def _all_source_files():
+        files = list(inline.ROOT.glob('*.py'))
+        veil_dir = inline.ROOT / 'veil'
+        if veil_dir.is_dir():
+            files.extend(path for path in veil_dir.rglob('*.py') if path.name != '__init__.py')
+        return files
+
     def test_every_module_that_imports_prompts_is_scanned(self):
-        importing = {path.name for path in Path(inline.ROOT).glob('*.py')
+        importing = {path.relative_to(inline.ROOT).as_posix() for path in self._all_source_files()
                      if inline._imports_prompts(path)}
         self.assertTrue(importing)
+        self.assertIn('veil/prompts/instructions.py', importing)
         self.assertEqual(sorted(importing - set(inline.modules())), [])
 
     def test_every_module_that_builds_requests_is_scanned(self):
-        builders = {path.name for path in Path(inline.ROOT).glob('*.py')
+        builders = {path.relative_to(inline.ROOT).as_posix() for path in self._all_source_files()
                     if inline.builds_requests(path)}
         self.assertTrue(builders)
         self.assertEqual(sorted(builders - set(inline.modules())), [],
@@ -92,7 +101,7 @@ class PlaceholderTests(unittest.TestCase):
 
     def test_edited_guidance_reaches_the_next_gap_text(self):
         from datetime import datetime, timedelta, timezone
-        import life_state
+        from veil.life import life_state
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._store
             try:
@@ -152,7 +161,7 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(store.text('chat.send_message'), store.default('chat.send_message'))
 
     def test_save_instruction_replaces_whole_text(self):
-        import instructions
+        from veil.prompts import instructions
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._store
             try:
@@ -165,7 +174,7 @@ class RegistryTests(unittest.TestCase):
                 prompts._store = old
 
     def test_save_instruction_refuses_readonly_entry(self):
-        import instructions
+        from veil.prompts import instructions
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._store
             try:
@@ -176,7 +185,7 @@ class RegistryTests(unittest.TestCase):
                 prompts._store = old
 
     def test_tool_description_is_read_per_request(self):
-        import veil_agent
+        from veil.core import veil_agent
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._store
             try:
@@ -203,8 +212,8 @@ output_cny_per_million = "8"
 '''
 
     def test_page_lists_every_entry_with_text(self):
-        import instructions
-        from veil_agent import load_character
+        from veil.prompts import instructions
+        from veil.core.veil_agent import load_character
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'characters' / 'test').mkdir(parents=True)
@@ -353,8 +362,8 @@ class ToolRowTests(unittest.TestCase):
             return name
 
     def test_tool_rows_come_from_the_tool_list_and_are_editable(self):
-        import instructions
-        from prompts.tools import ToolText
+        from veil.prompts import instructions
+        from veil.prompts.tools import ToolText
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._tools
             try:
@@ -374,7 +383,7 @@ class ToolRowTests(unittest.TestCase):
                 prompts._tools = old
 
     def test_tool_override_cache_sees_edits_to_any_file(self):
-        from prompts.tools import ToolText
+        from veil.prompts.tools import ToolText
         with tempfile.TemporaryDirectory() as tmp:
             tools = ToolText(tmp)
             tools.save('read_text_file', 'first read text')
@@ -384,8 +393,8 @@ class ToolRowTests(unittest.TestCase):
             self.assertEqual(tools.text('write_file', ''), 'first write text')
 
     def test_alias_tool_rows_use_the_name_the_model_sees(self):
-        import instructions
-        from prompts.tools import ToolText
+        from veil.prompts import instructions
+        from veil.prompts.tools import ToolText
 
         class AliasChat(self.FakeChat):
             def tool_schemas(self, full=False):
@@ -408,8 +417,8 @@ class ToolRowTests(unittest.TestCase):
                 prompts._tools = old
 
     def test_save_tool_does_not_touch_registered_text(self):
-        import instructions
-        from prompts.tools import ToolText
+        from veil.prompts import instructions
+        from veil.prompts.tools import ToolText
         with tempfile.TemporaryDirectory() as tmp:
             old = prompts._tools
             try:

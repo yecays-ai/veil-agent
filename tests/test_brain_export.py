@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import brain_export
-import veil_brain
+from veil.brain.storage import brain_export
+from veil.brain.storage import veil_brain
 
 
 class ExportTests(unittest.TestCase):

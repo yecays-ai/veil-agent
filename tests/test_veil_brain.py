@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import veil_brain
+from veil.brain.storage import veil_brain
 
 
 def frontmatter(**fields):

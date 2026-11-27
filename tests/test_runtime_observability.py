@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from runtime_monitor import RuntimeMonitor
-from veil_agent import ActivityState, Store
-from web_agent import Hub
+from veil.system.runtime_monitor import RuntimeMonitor
+from veil.core.veil_agent import ActivityState, Store
+from veil.server.web_agent import Hub
 
 
 class RuntimeMonitorTests(unittest.TestCase):

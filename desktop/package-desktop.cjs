@@ -39,6 +39,15 @@ const cacheKey = createHash('sha256').update(downloadUrl.toString()).digest('hex
 const cachedZipDir = path.join(cacheRoot, cacheKey);
 const cachedZipPath = path.join(cachedZipDir, zipName);
 
+if (process.argv.includes('--check')) {
+  if (!fs.existsSync(cachedZipPath)) {
+    console.error('Electron package is not cached; offline packaging is unavailable.');
+    process.exit(2);
+  }
+  console.log('Electron package cache is ready.');
+  process.exit(0);
+}
+
 const packager = path.join(desktopDir, 'node_modules', '@electron', 'packager', 'bin', 'electron-packager.mjs');
 const args = [
   packager,

@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from memory_agent import Memory, MemoryToolError
-from memory_native import HOLD, NativeMemoryTools, ToolSet
-from long_tasks import LongTaskStore
+from veil.brain.memory_agent import Memory, MemoryToolError
+from veil.brain.memory_native import HOLD, NativeMemoryTools, ToolSet
+from veil.autonomy.long_tasks import LongTaskStore
 from test_memory import Backend
-from tools_agent import permitted_tools
-from veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
+from veil.tools.tools_agent import permitted_tools
+from veil.core.veil_agent import Budget, Character, Chat, RequestFailed, Store, build_self_description, memory_mode
 
 
 class MergingBackend(Backend):
@@ -681,7 +681,7 @@ class OmbreToolGuardTests(unittest.TestCase):
         self.assertIn('edit_reason', trace.inputSchema['properties'])
         for refused in ('hard_delete', 'deletion_request_id', 'deletion_decision', 'deletion_ai_reason'):
             self.assertNotIn(refused, trace.inputSchema['properties'])
-        from memory_native import ombre_tool_for_model
+        from veil.brain.memory_native import ombre_tool_for_model
         stripped = ombre_tool_for_model(SimpleNamespace(name='trace', description='上游', inputSchema={
             'title': 'traceArguments', 'type': 'object', 'properties': {
                 'bucket_id': {'title': 'Bucket Id', 'type': 'string'},
@@ -954,7 +954,7 @@ class DegradedNoticeTests(unittest.TestCase):
 
 class PendingDeletionChatTests(unittest.TestCase):
     def test_next_chat_message_asks_lan_and_tells_peter_the_outcome(self):
-        from veil_agent import pending_deletion_context
+        from veil.core.veil_agent import pending_deletion_context
         store = Store(Path(tempfile.mkdtemp()))
         native = SimpleNamespace(process_pending_deletions=Mock(return_value=[
             'The deletion request for memory a1 was approved and executed.']))

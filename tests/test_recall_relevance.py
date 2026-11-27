@@ -8,10 +8,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-from memory_agent import Memory, vault_path
-from recall_relevance import context_text, cosine, decode_vector, load_vectors
+from veil.brain.memory_agent import Memory, vault_path
+from veil.brain.recall.recall_relevance import context_text, cosine, decode_vector, load_vectors
 from test_memory import Backend
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class FakeEmbedder:
@@ -182,7 +182,7 @@ class AssistedRecallTests(unittest.TestCase):
 class HelperTests(unittest.TestCase):
     def test_query_embedder_keeps_provider_reported_usage(self):
         from types import SimpleNamespace
-        from recall_relevance import QueryEmbedder
+        from veil.brain.recall.recall_relevance import QueryEmbedder
 
         client = Mock()
         client.embeddings.create.return_value = SimpleNamespace(
@@ -195,7 +195,7 @@ class HelperTests(unittest.TestCase):
 
     def test_query_embedder_rejects_zero_reported_usage(self):
         from types import SimpleNamespace
-        from recall_relevance import QueryEmbedder
+        from veil.brain.recall.recall_relevance import QueryEmbedder
 
         client = Mock()
         client.embeddings.create.return_value = SimpleNamespace(

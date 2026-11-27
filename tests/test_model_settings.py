@@ -5,9 +5,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from model_settings import FOLLOW_CHAT, ModelSettings, SettingsError
-from veil_agent import Budget, Chat, Store, background_cfg, load_character, make_model
-from agent_types import UserError
+from veil.core.model_settings import FOLLOW_CHAT, ModelSettings, SettingsError
+from veil.core.veil_agent import Budget, Chat, Store, background_cfg, load_character, make_model
+from veil.core.agent_types import UserError
 
 TOML = '''name = "Test"
 provider = "fake"
@@ -447,7 +447,7 @@ max_input_tokens = 200000
         self.assertIn('没有可用的 API 模型', view['migration_notice'])
         self.assertTrue(path.with_name('models.json.cc-removal-backup').exists())
         from dataclasses import replace
-        from veil_agent import memory_available
+        from veil.core.veil_agent import memory_available
         self.assertFalse(memory_available(replace(cfg, memory={'enabled': True})))
         clients, call = make_model(self.root, cfg)
         with clients, self.assertRaises(UserError):
@@ -457,8 +457,8 @@ max_input_tokens = 200000
             Chat(cfg, store, Budget(store), Mock()).send('fake')
 
     def test_saving_first_endpoint_and_model_works_without_a_chat_model(self):
-        from veil_agent import ActivityState
-        from web_agent import Hub
+        from veil.core.veil_agent import ActivityState
+        from veil.server.web_agent import Hub
 
         toml = '''name = "Test"
 provider = "claude_agent"
@@ -566,8 +566,8 @@ model = "sonnet"
         self.assertEqual(errors, [])
 
     def test_reload_syncs_chat_provider_to_new_chat_model(self):
-        from veil_agent import ActivityState
-        from web_agent import Hub
+        from veil.core.veil_agent import ActivityState
+        from veil.server.web_agent import Hub
 
         first = load_character(self.root, 'test')
         second = load_character(self.root, 'test')
@@ -840,8 +840,8 @@ model = "sonnet"
         import socket
         import urllib.error
         import urllib.request
-        from veil_agent import ActivityState
-        from web_agent import Hub, start_server
+        from veil.core.veil_agent import ActivityState
+        from veil.server.web_agent import Hub, start_server
         cfg = load_character(self.root, 'test')
         store = Store(self.root / 'data')
         hub = Hub('Test', ActivityState(store.root / 'test' / 'resident-state.json'),
@@ -896,7 +896,7 @@ if __name__ == '__main__':
 class ProviderErrorTests(unittest.TestCase):
     def test_failure_says_status_and_logs_redacted_detail(self):
         import tempfile as _tempfile
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         tmp = _tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)

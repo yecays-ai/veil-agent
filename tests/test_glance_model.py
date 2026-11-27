@@ -6,8 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from model_settings import FOLLOW_CHAT, SettingsError
-from veil_agent import Budget, Chat, Store, load_character
+from veil.core.model_settings import FOLLOW_CHAT, SettingsError
+from veil.core.veil_agent import Budget, Chat, Store, load_character
 from test_model_settings import RELAY, TOML
 
 

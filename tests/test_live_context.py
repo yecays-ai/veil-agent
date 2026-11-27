@@ -7,10 +7,10 @@ from types import SimpleNamespace
 from decimal import Decimal
 from unittest.mock import Mock
 
-from agent_types import RequestFailed
-from short_term_notes import ShortTermNotes, COST_ACCOUNTING, MAX_REQUEST_BYTES
-from veil_agent import Budget, Character, Store
-from web_agent import Hub
+from veil.core.agent_types import RequestFailed
+from veil.brain.short_term_notes import ShortTermNotes, COST_ACCOUNTING, MAX_REQUEST_BYTES
+from veil.core.veil_agent import Budget, Character, Store
+from veil.server.web_agent import Hub
 
 
 class LiveContextTest(unittest.TestCase):
@@ -54,7 +54,7 @@ class LiveContextTest(unittest.TestCase):
         self.assertEqual(self.notes.snapshot()['recent'], [])
 
     def test_hub_lists_every_tool_with_size_group_and_recent_use(self):
-        from tool_groups import inventory
+        from veil.tools.tool_groups import inventory
         schemas = [{'type': 'function', 'function': {'name': name, 'description': 'x', 'parameters': {}}}
                    for name in ('hold', 'trace')]
         self.chat.tool_inventory_snapshot = inventory(schemas, ('memory_admin',))
@@ -71,7 +71,7 @@ class LiveContextTest(unittest.TestCase):
         self.assertNotIn('recent_calls', self.chat.tool_inventory_snapshot['rows'][0])  # the chat's copy is not touched
 
     def test_hub_shows_the_voice_reference_with_its_text_and_switch(self):
-        from voice_style import VoiceStyle
+        from veil.persona.voice_style import VoiceStyle
         path = Path(self.temp.name) / 'fake.voice.md'
         path.write_text('> hi\nFake: hello you\n', encoding='utf-8')
         self.chat.voice_style = VoiceStyle(self.store, 'peter', path, 'Fake')

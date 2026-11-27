@@ -15,7 +15,9 @@
 VEIL_BACKUP_DIR=X:\VEIL-backups
 ```
 
-手动备份：先退出 Peter，再运行 `.venv\Scripts\python.exe backup_restore.py create --destination "X:\VEIL-backups"`。
+手动备份：先退出 Peter，再运行 `.venv\Scripts\python.exe -m veil.system.backup_restore create --destination "X:\VEIL-backups"`（根目录 `backup_restore.py` 过渡兼容入口同样可用）。
+
+> 如需在**不拉取最新 `main`** 的情况下将程序代码回退到某个历史提交并重新打包桌面版，请使用独立离线回滚脚本 `scripts\windows\rollback-version.cmd <目标提交>`（详见 `docs/installation.md`）。脚本会先检查未跟踪/被忽略文件与目标提交的路径冲突，默认不联网同步依赖；确需联网时显式加 `--allow-online-deps`。
 
 ## 更新前自动备份
 

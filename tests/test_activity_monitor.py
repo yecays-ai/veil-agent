@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from veil_agent import Store, nowhere_activity_metadata, safe_tool_activity_detail
-from web_agent import Hub
+from veil.core.veil_agent import Store, nowhere_activity_metadata, safe_tool_activity_detail
+from veil.server.web_agent import Hub
 
 
 class ActivityMonitorTests(unittest.TestCase):

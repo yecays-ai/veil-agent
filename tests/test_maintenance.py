@@ -13,7 +13,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import maintenance
+from veil.system import maintenance
 
 
 def _git(repo, *args):
@@ -483,12 +483,12 @@ class MaintenanceTests(unittest.TestCase):
         self.manager.record_workbench_approval(task['task_id'], 'denied', 'a' * 64)
         self.manager.record_workbench(task['task_id'], cost='0.01', steps=4, report='repeated read',
                                       state='出错', reason='repeated_call')
-        script = ('import json,sys; from types import SimpleNamespace; from maintenance import MaintenanceStore; '
+        script = ('import json,sys; from types import SimpleNamespace; from veil.system.maintenance import MaintenanceStore; '
                   't=MaintenanceStore(SimpleNamespace(root=sys.argv[1]),"test").load(sys.argv[2]); '
                   'print(json.dumps({"reason":t["development"]["reason"],'
                   '"denied":t["authorization"]["workbench"]["denied"]}))')
         child = subprocess.run([sys.executable, '-c', script, str(self.store.root), task['task_id']],
-                               cwd=str(Path(maintenance.__file__).resolve().parent),
+                               cwd=str(Path(__file__).resolve().parents[1]),
                                capture_output=True, text=True, timeout=30, check=True)
         restored = json.loads(child.stdout)
         self.assertEqual(restored['reason'], 'repeated_call')
@@ -615,11 +615,11 @@ class MaintenanceTests(unittest.TestCase):
                          'VALUE = "$Format:%H$"\n')
 
     def test_real_acceptance_backend_starts_from_snapshot_with_fake_config(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
-        source = Path(maintenance.__file__).resolve().parent
+        source = Path(__file__).resolve().parents[1]
         archive = subprocess.run(['git', '-c', f'safe.directory={source.as_posix()}', '-C', str(source),
                                   'archive', '--format=tar', 'HEAD'], capture_output=True, timeout=60, check=True)
         with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode='r:') as content:
@@ -647,7 +647,7 @@ output_cny_per_million = "8"
         (self.repo / 'persona').mkdir(exist_ok=True)
         (self.repo / 'persona' / 'peter.md').write_text('Fictional persona', encoding='utf-8')
         (self.repo / '.env').write_text('FAKE_KEY=fake\n', encoding='utf-8')
-        from veil_agent import Budget, Chat, Store, load_character
+        from veil.core.veil_agent import Budget, Chat, Store, load_character
         try:
             cfg = load_character(self.repo, 'peter')
         except Exception as exc:
@@ -665,7 +665,7 @@ output_cny_per_million = "8"
         chat = Chat(cfg, store, Budget(store), Mock(), approval=lambda p: asked.append(p) or 'y',
                     output=lambda *_: None)
         chat.maintenance = self.manager
-        with patch('veil_agent.ROOT', self.repo):
+        with patch('veil.core.veil_agent.ROOT', self.repo):
             outcome = chat._run_workbench('create and run test_feature.py', 'fake-request', False,
                                           task_id=task['task_id'])
             first_approvals = len(asked)
@@ -705,7 +705,7 @@ output_cny_per_million = "8"
             self.manager.workbench_target(task['task_id'])
 
     def test_real_opencode_to_fake_github_delivery(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -733,7 +733,7 @@ output_cny_per_million = "8"
         self.assertTrue(self.gh.merged)
 
     def test_real_opencode_failure_then_fix_delivers_to_fake_github(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -790,7 +790,7 @@ output_cny_per_million = "8"
         self.assertTrue(self.gh.merged)
 
     def test_real_opencode_can_inspect_a_safe_git_snapshot(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -821,7 +821,7 @@ output_cny_per_million = "8"
         self.assertEqual((worktree / '.git').read_bytes(), original_git)
 
     def test_git_snapshot_does_not_copy_secret_directory_into_git_objects(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')
@@ -840,7 +840,7 @@ output_cny_per_million = "8"
         self.assertNotIn('fixture-private-secret', outcome.text)
 
     def test_git_snapshot_tracks_project_changes_without_touching_host_git(self):
-        import executor_opencode as ex
+        from veil.tools import executor_opencode as ex
         from tests.test_executor_opencode import _docker_workbench_available, _fake_llm, PROVIDER
         if not _docker_workbench_available():
             self.skipTest('VEIL workbench Docker image is unavailable')

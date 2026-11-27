@@ -7,8 +7,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from calendar_agreements import ACCEPT, TIME_WORDS, CalendarAgreements
-from life_records import LifeRecords
+from veil.life.calendar_agreements import ACCEPT, TIME_WORDS, CalendarAgreements
+from veil.life.life_records import LifeRecords
 
 
 @dataclass

@@ -12,10 +12,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools_agent import FilesystemTools, permitted_tools, tool_policy
-import xiaohongshu_tools
-from windows_observer import observation_image_message
-from xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, PageFailure, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
+from veil.tools.tools_agent import FilesystemTools, permitted_tools, tool_policy
+from veil.integrations import xiaohongshu_tools
+from veil.windows.windows_observer import observation_image_message
+from veil.integrations.xiaohongshu_tools import (MAX_DAILY, PAUSED_TEXT, PageFailure, Cooldown, Sidecar, TOOL, Transient, XiaohongshuTools,
                               account_lock, companion_env, private_folder, stop_process_tree)
 
 
@@ -105,7 +105,7 @@ class XiaohongshuTests(unittest.TestCase):
             {'data': {'note': {'title': 'Trail notes', 'desc': 'Body', 'xsecToken': 'PRIVATE_XSEC'},
                       'comments': {'list': [{'content': 'A comment', 'userInfo': {}, 'subComments': []}]*30}}},
         ]
-        with patch('xiaohongshu_tools.MIN_INTERVAL', 0):
+        with patch('veil.integrations.xiaohongshu_tools.MIN_INTERVAL', 0):
             text, state, _ = self.invoke(action='search', query='trails')
             self.assertEqual(state, '成功', text)
             self.assertNotIn('PRIVATE_XSEC', text)
@@ -132,8 +132,8 @@ class XiaohongshuTests(unittest.TestCase):
             {'is_logged_in': True, 'user_id': 'dedicated'},
             {'data': {'note': {'title': 'T', 'desc': 'D', **note}, 'comments': {'list': []}}},
         ]
-        with patch('xiaohongshu_tools.MIN_INTERVAL', 0), \
-                patch('xiaohongshu_tools.fetch_images', return_value=[uri, uri]) as fetch:
+        with patch('veil.integrations.xiaohongshu_tools.MIN_INTERVAL', 0), \
+                patch('veil.integrations.xiaohongshu_tools.fetch_images', return_value=[uri, uri]) as fetch:
             text, state, _ = self.invoke(action='search', query='trails')
             ref = json.loads(text.split('\n', 1)[1])['notes'][0]['note_ref']
             text, state, _ = self.invoke(action='detail', note_ref=ref)
@@ -151,10 +151,10 @@ class XiaohongshuTests(unittest.TestCase):
                 from io import BytesIO
                 return BytesIO(self.raw)
         jpeg = b'\xff\xd8\xff' + b'0' * 20
-        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(jpeg)):
+        with patch('veil.integrations.xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(jpeg)):
             uri = xiaohongshu_tools._download_image('https://sns.xhscdn.com/a', threading.Event())
         self.assertTrue(uri.startswith('data:image/jpeg;base64,'))
-        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(b'<html>')):
+        with patch('veil.integrations.xiaohongshu_tools.urllib.request.build_opener', return_value=Opener(b'<html>')):
             self.assertIsNone(xiaohongshu_tools._download_image('https://sns.xhscdn.com/a', threading.Event()))
         self.assertIsNone(xiaohongshu_tools._download_image('https://evil.example/a', threading.Event()))
         self.assertIsNone(xiaohongshu_tools._NoRedirect().redirect_request(None, None, 302, '', {}, 'https://evil.example/'))
@@ -162,11 +162,11 @@ class XiaohongshuTests(unittest.TestCase):
         import http.client
         class Bad:
             def open(self, request, timeout=0): raise http.client.BadStatusLine('x')
-        with patch('xiaohongshu_tools.urllib.request.build_opener', return_value=Bad()):
+        with patch('veil.integrations.xiaohongshu_tools.urllib.request.build_opener', return_value=Bad()):
             self.assertEqual(xiaohongshu_tools.fetch_images(['https://sns.xhscdn.com/a'], threading.Event()), [])
 
     def test_failed_picture_ends_the_list_so_order_stays_true(self):
-        with patch('xiaohongshu_tools._download_image', side_effect=['u1', None, 'u3']):
+        with patch('veil.integrations.xiaohongshu_tools._download_image', side_effect=['u1', None, 'u3']):
             self.assertEqual(xiaohongshu_tools.fetch_images(['a', 'b', 'c'], threading.Event()), ['u1'])
 
     def test_multiple_note_pictures_become_one_transient_image_message(self):
@@ -244,7 +244,7 @@ class XiaohongshuTests(unittest.TestCase):
             raise Transient('closed')
         self.sidecar.request.side_effect = slow
         self.sidecar.close.side_effect = release.set
-        with patch('xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
+        with patch('veil.integrations.xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
             text, state, _ = self.invoke(action='status')
         self.assertEqual(state, '出错')
         self.assertIn('too slow', text)
@@ -318,25 +318,25 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertNotIn('secret', str(caught.exception))
 
     def test_login_check_page_failure_keeps_existing_binding(self):
-        from xiaohongshu_setup import login_and_bind
+        from veil.integrations.xiaohongshu_setup import login_and_bind
         self.sidecar.request.side_effect = PageFailure('Xiaohongshu page did not load (STATUS_CHECK_FAILED).')
         with patch('builtins.input', side_effect=['']), patch('builtins.print') as printed, \
-                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
-                patch('xiaohongshu_setup.subprocess.Popen') as process, \
-                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+                patch('veil.integrations.xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('veil.integrations.xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('veil.integrations.xiaohongshu_setup.Sidecar', return_value=self.sidecar):
             process.return_value.wait.return_value = 0
             login_and_bind(self.root, self.folder)
         self.assertIn('不是登录问题', ' '.join(str(c) for c in printed.call_args_list))
         self.assertEqual(json.loads((self.folder / 'account.json').read_text())['user_id'], 'dedicated')
 
     def test_login_check_page_failure_with_broken_binding_is_not_reported_as_success(self):
-        from xiaohongshu_setup import login_and_bind
+        from veil.integrations.xiaohongshu_setup import login_and_bind
         (self.folder / 'account.json').write_text('{"user_id": ""}', encoding='utf-8')
         self.sidecar.request.side_effect = PageFailure('Xiaohongshu page did not load (STATUS_CHECK_FAILED).')
         with patch('builtins.input', side_effect=['']), patch('builtins.print'), \
-                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
-                patch('xiaohongshu_setup.subprocess.Popen') as process, \
-                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+                patch('veil.integrations.xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('veil.integrations.xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('veil.integrations.xiaohongshu_setup.Sidecar', return_value=self.sidecar):
             process.return_value.wait.return_value = 0
             with self.assertRaises(ValueError):
                 login_and_bind(self.root, self.folder)
@@ -361,7 +361,7 @@ class XiaohongshuTests(unittest.TestCase):
         hold = threading.Event()
         self.addCleanup(hold.set)
         self.sidecar.request.side_effect = lambda *args: hold.wait(10)
-        with patch('xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
+        with patch('veil.integrations.xiaohongshu_tools.OPERATION_TIMEOUT', 0.2):
             text, state, _ = self.invoke(action='status')
         self.assertEqual(state, '出错')
         self.assertIn('paused', text)
@@ -374,15 +374,15 @@ class XiaohongshuTests(unittest.TestCase):
                     self.fail('second session entered')
 
     def test_human_relogin_keeps_account_binding_and_daily_budget(self):
-        from xiaohongshu_setup import login_and_bind
+        from veil.integrations.xiaohongshu_setup import login_and_bind
         cookies = self.folder / 'cookies.json'
         cookies.write_text('fictional cookies', encoding='utf-8')
         quota = self.folder / 'read-budget.json'
         quota.write_text('{"count":60}', encoding='utf-8')
         with patch('builtins.input', side_effect=['RELOGIN', 'dedicated']), patch('builtins.print'), \
-                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
-                patch('xiaohongshu_setup.subprocess.Popen') as process, \
-                patch('xiaohongshu_setup.Sidecar', return_value=self.sidecar):
+                patch('veil.integrations.xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('veil.integrations.xiaohongshu_setup.subprocess.Popen') as process, \
+                patch('veil.integrations.xiaohongshu_setup.Sidecar', return_value=self.sidecar):
             process.return_value.wait.return_value = 0
             login_and_bind(self.root, self.folder)
         self.assertFalse(cookies.exists())
@@ -391,13 +391,13 @@ class XiaohongshuTests(unittest.TestCase):
         process.assert_called_once()
 
     def test_login_timeout_uses_process_tree_cleanup(self):
-        from xiaohongshu_setup import login_and_bind
+        from veil.integrations.xiaohongshu_setup import login_and_bind
         process = Mock()
         process.wait.side_effect = subprocess.TimeoutExpired('fake-login', 600)
         with patch('builtins.print'), \
-                patch('xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
-                patch('xiaohongshu_setup.subprocess.Popen', return_value=process), \
-                patch('xiaohongshu_setup.stop_process_tree') as cleanup:
+                patch('veil.integrations.xiaohongshu_setup.binary_path', return_value=self.root / 'fake.exe'), \
+                patch('veil.integrations.xiaohongshu_setup.subprocess.Popen', return_value=process), \
+                patch('veil.integrations.xiaohongshu_setup.stop_process_tree') as cleanup:
             with self.assertRaises(subprocess.TimeoutExpired):
                 login_and_bind(self.root, self.folder)
         cleanup.assert_called_once_with(process)
@@ -463,7 +463,7 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual(env['COOKIES_PATH'], str(self.folder / 'cookies.json'))
 
     def test_private_cookie_folder_cannot_be_exposed_as_file_workspace(self):
-        from agent_types import UserError
+        from veil.core.agent_types import UserError
         cfg = SimpleNamespace(id='peter', web=self.cfg.web,
                               tools={'folder': 'data/peter'}, screen_pop=None,
                               windows_interaction=None, desktop_file_read=None,
@@ -489,9 +489,9 @@ class XiaohongshuTests(unittest.TestCase):
         self.assertEqual(self.sidecar.request.call_count, 1)
 
     def test_autonomous_wake_reads_then_saves_local_draft_without_publishing(self):
-        from veil_agent import ActivityState, Budget, Character, Chat, Store
-        from autonomy import AutonomyController
-        from web_agent import Hub
+        from veil.core.veil_agent import ActivityState, Budget, Character, Chat, Store
+        from veil.autonomy.autonomy import AutonomyController
+        from veil.server.web_agent import Hub
         store = Store(self.root / 'data')
         cfg = Character('peter', 'Test', 'Fictional persona', 20, 100,
                         {'model': 'fake', 'max_input_tokens': 30000,
@@ -501,8 +501,8 @@ class XiaohongshuTests(unittest.TestCase):
                                'folder': 'data/peter/workspace'}, web=self.cfg.web,
                         autonomy={'interval_minutes': 90, 'daily_max_runs': 12,
                                   'daily_budget_cny': Decimal('3'), 'min_alarm_gap_minutes': 15})
-        with patch('tools_agent.shutil.which', return_value='fake-node'), patch(
-                'tools_agent._McpWorker', return_value=SimpleNamespace(tools=[SimpleNamespace(
+        with patch('veil.tools.tools_agent.shutil.which', return_value='fake-node'), patch(
+                'veil.tools.tools_agent._McpWorker', return_value=SimpleNamespace(tools=[SimpleNamespace(
                     name='write_file', description='Write a file', inputSchema={'type': 'object', 'properties': {
                         'path': {'type': 'string'}, 'content': {'type': 'string'}}, 'required': ['path', 'content']})],
                     close=lambda: None)):
@@ -536,7 +536,7 @@ class XiaohongshuTests(unittest.TestCase):
         hub = Hub('Test', activity)
         chat = Chat(cfg, store, Budget(store), model, tools=manager, output=hub.output)
         self.assertIn('mcp__xiaohongshu__xiaohongshu', chat.current_capability_snapshot())
-        with patch('xiaohongshu_tools.MIN_INTERVAL', 0):
+        with patch('veil.integrations.xiaohongshu_tools.MIN_INTERVAL', 0):
             AutonomyController(chat, hub).run()
         self.assertEqual((manager.lab / 'xiaohongshu-draft.md').read_text(encoding='utf-8'), draft)
         rows = [r for r in store.read('peter/tools.jsonl') if r.get('state') != '进行中']

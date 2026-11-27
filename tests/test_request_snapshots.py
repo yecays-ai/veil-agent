@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import request_snapshots
+from veil.system import request_snapshots
 
 
 def tool(name, description='Do a thing.', parameters=None):

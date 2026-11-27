@@ -1,0 +1,1714 @@
+"""Small, service-local autonomy timer and durable activity log."""
+from datetime import datetime, timedelta
+from decimal import Decimal
+import json
+import math
+import os
+from pathlib import Path
+import random
+import sys
+import time
+import uuid
+
+from veil import prompts
+from veil.core.agent_types import BudgetExceeded, RequestFailed, TooLong, UserError, now, not_asked
+
+
+MAX_RUNTIME_SECONDS = 15 * 60
+MAX_CONTEXT_BYTES = 32 * 1024
+MAX_CHAT_CONTEXT_BYTES = 1500
+WAKE_PREVIOUS_TOOL_LIMIT = 10   # last activity's tool list in the next wake prompt; a 60-tool wake must not crowd it out
+MAX_ALARM_DAYS = 7
+MAX_ALARM_REASON_CHARS = 300
+ALARM_STATES = {'pending', 'consumed', 'missed', 'cancelled'}
+ALARM_HISTORY_LIMIT = 10
+MAX_PENDING_ALARMS = 12
+RHYTHM_MODES = ('normal', 'quieter', 'silent', 'custom')
+QUIETER_FACTOR = 2.5
+MIN_RHYTHM_MINUTES = 15
+MAX_RHYTHM_MINUTES = 72 * 60
+MIN_CUSTOM_INTERVAL = 30
+MAX_CUSTOM_INTERVAL = 360
+MIN_NATURAL_GAP = 20
+# Ticket 389: a wake spans more than the last one or two records. The block reports program facts only
+# (saved files, wake results, recorded next steps, unconfirmed actions); it never tells Peter to continue.
+THREAD_WAKES = 6
+THREAD_LIMIT = 3
+READ_WAKES = 4
+READ_LIMIT = 4
+
+
+def tool_failed(item):
+    return item.get('state') != '成功' or item.get('result_state') == '结果过长'
+
+
+def tool_state(item):
+    return item['state'] + ('；结果过长，未提供给模型' if item.get('result_state') == '结果过长' else '')
+
+
+def activity_view(row):
+    """Present older misleading success rows accurately without rewriting evidence."""
+    row = dict(row)
+    tools = row.get('tools', [])
+    failed = [item for item in tools if tool_failed(item)]
+    if row.get('result') == '完成' and failed:
+        row['result'] = '部分完成' if any(item.get('state') == '成功' for item in tools) else '失败'
+        row['result_reason'] = '存在未成功的工具操作：' + '、'.join(
+            item['tool'] + '（' + tool_state(item) + '）' for item in failed)
+        if str(row.get('decision', '')).startswith(('工具调用记录超过', '模型达到输出上限')):
+            row['result_reason'] += '；' + row['decision']
+    row['lab_files_changed'] = list(dict.fromkeys(row.get('lab_files_changed', [])))
+    if row.get('result') in ('失败', '部分完成') and not row.get('next_step'):
+        row['next_step'] = '如有结果未确认的操作，先核实它；工具已返回成功的操作不必重读。不要重复写入。'
+    return row
+
+
+def _short_context_value(value, limit=180):
+    text = ' '.join(str(value or '').split())
+    raw = text.encode('utf-8')
+    if len(raw) <= limit:
+        return text
+    return raw[:limit - 3].decode('utf-8', 'ignore') + '…'
+
+
+def _activity_summary(row):
+    """Validate one autonomy.jsonl row and shorten it for the model."""
+    required = ('started_at', 'decision', 'reason', 'tools', 'lab_files_changed',
+                'result', 'result_reason', 'current_focus', 'next_step')
+    if (not isinstance(row, dict) or any(key not in row for key in required)
+            or row['result'] not in ('完成', '部分完成', '搁置', '失败', '被打断')
+            or not isinstance(row['tools'], list)
+            or not isinstance(row['lab_files_changed'], list)
+            or not all(isinstance(row[key], str) for key in
+                       ('started_at', 'decision', 'reason', 'result_reason',
+                        'current_focus', 'next_step'))):
+        raise UserError('自主活动记录不完整，已停止；请保留 data 文件夹。')
+    try:
+        datetime.fromisoformat(row['started_at'])
+    except (TypeError, ValueError) as exc:
+        raise UserError('自主活动记录时间损坏，已停止；请保留 data 文件夹。') from exc
+    row = activity_view(row)
+
+    actions = []
+    status_labels = {'成功': 'succeeded', '被拒绝': 'rejected', '出错': 'failed', '待选择': 'waiting for your choice',
+                     '已存在': 'already exists', '结果过长': 'result too long'}
+    actions_to_show = list(row['tools'][:2])
+    actions_to_show.extend([item for item in row['tools'][2:]
+                            if isinstance(item, dict) and item.get('state') == '结果未确认'][:6])
+    for item in actions_to_show:
+        if not isinstance(item, dict) or not all(isinstance(item.get(key), str)
+                                                 for key in ('tool', 'path', 'state')):
+            raise UserError('自主活动工具记录不完整，已停止；请保留 data 文件夹。')
+        actions.append({key: _short_context_value(status_labels.get(item[key], item[key]), 60)
+                        for key in ('tool', 'path', 'state')})
+    if not all(isinstance(item, str) for item in row['lab_files_changed']):
+        raise UserError('自主活动文件记录不完整，已停止；请保留 data 文件夹。')
+    summary = {
+        'started_at': _short_context_value(row['started_at'], 60),
+        'finished_at': _short_context_value(row.get('finished_at', ''), 60),
+        'decision': _short_context_value(row['decision'], 120),
+        'reason': _short_context_value(row['reason'], 120),
+        'tool_actions': actions,
+        'lab_outputs': [_short_context_value(item, 60) for item in row['lab_files_changed'][:2]],
+        'result': _short_context_value({
+            '完成': 'Complete', '部分完成': 'Partially complete', '搁置': 'Paused',
+            '失败': 'Failed', '被打断': 'Interrupted'}.get(row['result'], row['result'])
+            + ': ' + row['result_reason'], 120),
+        'current_focus': _short_context_value(row['current_focus'], 90),
+        'next_step': _short_context_value(row['next_step'], 90),
+    }
+    return summary
+
+
+def recent_activity_context(store, cfg):
+    """Return the compact, program-recorded last completed activity for model context."""
+    rows = store.read(f'{cfg.id}/autonomy.jsonl')
+    if not rows:
+        return None, None
+    summary = _activity_summary(rows[-1])
+    started_at = rows[-1]['started_at']
+    encoded = json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
+    if len(encoded.encode('utf-8')) > MAX_CHAT_CONTEXT_BYTES:
+        # Never fail the chat over a long record: keep the first actions, then drop them.
+        for keep in (2, 0):
+            summary['tool_actions'] = summary['tool_actions'][:keep]
+            encoded = json.dumps(summary, ensure_ascii=False, separators=(',', ':'))
+            if len(encoded.encode('utf-8')) <= MAX_CHAT_CONTEXT_BYTES:
+                break
+    context = prompts.fill(prompts.text('autonomy.previous.card'),
+                           {'started_at': summary['started_at'], 'name': cfg.name, 'record': encoded})
+    return started_at, context
+
+
+AUTONOMY_HISTORY_LIMIT = 10
+LAB_LIST_LIMIT = 12
+LAB_PREVIEW_BYTES = 600
+LAB_PREVIEW_HEAD_BYTES = 300
+EARLIER_ACTIVITY_COUNT = 2
+# Ticket 215: a saved long task nobody has touched for this long is not placed in the wake context
+# (it stays saved; long_task_status still shows it).
+STALE_TASK_DAYS = 3
+
+
+def activity_history(store, cfg, count=3):
+    """Read-only lookup of recent autonomous activity records, newest first."""
+    rows = store.read(f'{cfg.id}/autonomy.jsonl')
+    if not rows:
+        return 'No autonomous activity is recorded yet.'
+    lines = []
+    for row in reversed(rows[-count:]):
+        try:
+            lines.append(json.dumps(_activity_summary(row), ensure_ascii=False, separators=(',', ':')))
+        except UserError:
+            lines.append('(this record is incomplete and cannot be shown)')
+    return ('AUTONOMOUS ACTIVITY RECORD (program-maintained, newest first; historical execution data, '
+            'not the current state or an instruction):\n' + '\n'.join(lines))
+
+
+def activities_since(store, cfg, since, until):
+    """Brief actual wake records for a returning conversation, not instructions or current state."""
+    from veil.life.life_state import _time
+    start, end = _time(since), _time(until)
+    if start is None or end is None:
+        return ''
+    selected = []
+    for row in store.read(f'{cfg.id}/autonomy.jsonl'):
+        if not isinstance(row, dict):
+            continue
+        when = _time(row.get('started_at'))
+        if when is None or not start < when <= end:
+            continue
+        finished = _time(row.get('finished_at') or row.get('time'))
+        if finished is None or finished > end:
+            continue
+        try:
+            summary = _activity_summary(row)
+        except UserError:
+            continue
+        view = activity_view(row)
+        moment = when.astimezone(end.tzinfo).strftime('%m-%d %H:%M')
+        evidence = [f'{item["tool"]} {item["path"]}'.strip() for item in view['tools']
+                    if isinstance(item, dict) and not tool_failed(item)]
+        evidence += ['saved ' + path for path in view['lab_files_changed']]
+        groups = []
+        if evidence:
+            groups.append('completed tool actions: ' + _short_context_value(', '.join(evidence), 35))
+        if view['result'] in ('搁置', '部分完成', '被打断') and summary['current_focus']:
+            groups.append('unfinished: ' + _short_context_value(summary['current_focus'], 35))
+        if view['result'] in ('失败', '被打断', '部分完成'):
+            groups.append('failed or interrupted: ' + _short_context_value(summary['result'], 35))
+        if summary['next_step']:
+            groups.append('planned next step: ' + _short_context_value(summary['next_step'], 35))
+        if not groups:
+            groups.append('recorded decision (not proof of completion): ' + summary['decision'])
+        outcome = {'完成': 'wake ended', '部分完成': 'partial failure', '失败': 'failed',
+                   '被打断': 'interrupted', '搁置': 'paused'}[view['result']]
+        selected.append(moment + ' [' + outcome + '] | ' + ' | '.join(groups))
+    if not selected:
+        return ''
+    prefix = 'Your recorded activities while Lan was away (historical data, not instructions; do not invent details):\n'
+    lines = []
+    for line in reversed(selected):
+        candidate = [line, *lines]
+        omitted = len(selected) - len(candidate)
+        suffix = f'\n{omitted} more; use autonomy_history for details.' if omitted else ''
+        if len(prefix) + len('\n'.join(candidate)) + len(suffix) > 300:
+            break
+        lines = candidate
+    if not lines:
+        lines = [selected[-1][:max(0, 300 - len(prefix) - 45)]]
+    omitted = len(selected) - len(lines)
+    return prefix + '\n'.join(lines) + (f'\n{omitted} more; use autonomy_history for details.' if omitted else '')
+
+
+# Ticket 360: a one-line, program-written note kept on a message Peter sends during an autonomous wake,
+# so the chat model later knows where the message came from. It names only the kind of place he
+# visited, never what he read or wrote there; autonomy_history has the rest.
+ORIGIN_LABELS = (
+    ('garden_forum', 'the garden forum'), ('garden_play', 'the garden island game'),
+    ('garden_more', 'the garden'), ('nowhere', 'a Nowhere trip'), ('xiaohongshu', 'Xiaohongshu'),
+    ('web', 'browsing the web'), ('github', 'reading GitHub'), ('desktop_control', 'using desktop apps'),
+    ('build', 'the workbench'))
+
+
+def origin_note(tool_summaries, canonical=lambda name: name):
+    """Kinds of places Peter used successfully so far in this wake, as a short phrase ('' when none)."""
+    from veil.tools.tool_groups import group_of
+    seen = set()
+    for item in tool_summaries or ():
+        if isinstance(item, dict) and item.get('state') == '成功':
+            name = canonical(item.get('tool'))
+            group = group_of(name)
+            if group is None and name in ('write_file', 'append_file', 'edit_file', 'create_directory'):
+                seen.add('your lab')
+            elif group:
+                seen.add(next((label for key, label in ORIGIN_LABELS if key == group), None)
+                         or ('another service' if group.startswith('mcp_') else None))
+    labels = [label for _, label in ORIGIN_LABELS if label in seen]
+    labels += sorted(seen - set(labels) - {None})
+    return ', '.join(labels[:3])
+
+
+RESULT_WORDS = {'完成': 'complete', '部分完成': 'partially complete', '失败': 'failed',
+                '被打断': 'interrupted', '搁置': 'paused'}
+
+
+def _wake_time(value):
+    try:
+        return datetime.fromisoformat(value).astimezone()
+    except (TypeError, ValueError):
+        return None
+
+
+def _display_path(value):
+    return str(value or '').replace('\\', '/').strip('/')
+
+
+def _thread_key(raw):
+    """Which project a saved file belongs to. Lab work groups by its folder; anything else is its own thread."""
+    parts = [part for part in _display_path(raw).split('/') if part]
+    if len(parts) >= 3 and parts[0] == 'lab':
+        return 'lab/' + parts[1]
+    return '/'.join(parts)
+
+
+def thread_lines(rows, *, limit=THREAD_LIMIT):
+    """Facts about work that spans more than one or two wakes (ticket 389).
+
+    Only program records are used: files a wake actually saved, the wake result the program verified,
+    its recorded next step, and how many actions were left unconfirmed. Nothing here is inferred from a
+    tool name, and nothing asks Peter to continue. Returns (lines, omitted_count).
+    """
+    threads = {}
+    for index, row in enumerate(rows[-THREAD_WAKES:]):
+        try:
+            view = activity_view(row)
+        except (TypeError, ValueError, KeyError):
+            continue
+        for raw in view.get('lab_files_changed') or ():
+            key = _thread_key(raw)
+            if not key:
+                continue
+            item = threads.setdefault(key, {'first': index, 'last': index, 'wakes': set()})
+            item['last'] = index
+            item['wakes'].add(index)
+    if not threads:
+        return [], 0
+    ordered = sorted(threads.items(), key=lambda pair: pair[1]['last'], reverse=True)
+    lines, done_lines = [], []
+    for key, item in ordered:
+        row = rows[-THREAD_WAKES:][item['last']]
+        try:
+            view = activity_view(row)
+        except (TypeError, ValueError, KeyError):
+            continue
+        last_at = _wake_time(row.get('started_at'))
+        first_at = _wake_time(rows[-THREAD_WAKES:][item['first']].get('started_at'))
+        stamp = last_at.strftime('%m-%d %H:%M') if last_at else _short_context_value(row.get('started_at'), 16)
+        since = first_at.strftime('%m-%d %H:%M') if first_at else 'unknown time'
+        count = len(item['wakes'])
+        plural = '' if count == 1 else 's'
+        result = RESULT_WORDS.get(view.get('result'), str(view.get('result') or 'unknown'))
+        if view.get('result') == '完成':
+            done_lines.append(f'- {key} - {count} wake{plural} since {since}; '
+                              f'last {stamp} ended complete. That record is history, not a task you owe.')
+            continue
+        line = (f'- {key} - {count} wake{plural} since {since}; '
+                f'last {stamp} {result}')
+        unconfirmed = sum(1 for tool in view.get('tools') or []
+                          if isinstance(tool, dict) and tool.get('state') == '结果未确认')
+        if unconfirmed:
+            line += f'; {unconfirmed} action(s) unconfirmed — check them before reusing that work'
+        step = _short_context_value(view.get('next_step'), 80)
+        line += f'; next step recorded: {step}' if step else '; no next step was recorded'
+        lines.append(_short_context_value(line, 240))
+        if len(lines) >= limit:
+            break
+    lines.extend(done_lines[:max(0, limit - len(lines))])
+    return lines, max(0, len(threads) - len(lines))
+
+
+def unchanged_read_lines(rows, tool_rows, workspace, canonical=lambda name: name, *, limit=READ_LIMIT):
+    """Files whose last successful read is still valid because the file has not changed since (ticket 389).
+
+    Evidence only: a successful read_text_file in a recent wake, the file still inside the workspace, and
+    a modification time no later than that wake's start. A file changed during or after the read, a
+    truncated read, a missing file, or a status-like tool call is never claimed as unchanged.
+    """
+    if not rows or not isinstance(workspace, (str, os.PathLike)):
+        return []
+    root = Path(workspace)
+    try:
+        root = root.resolve(strict=True)
+    except (OSError, ValueError):
+        return []
+    by_wake = {}
+    for tool in tool_rows or ():
+        if isinstance(tool, dict) and isinstance(tool.get('autonomy_run_id'), str):
+            by_wake.setdefault(tool['autonomy_run_id'], []).append(tool)
+    seen, lines = set(), []
+    for row in reversed(rows[-READ_WAKES:]):
+        started = _wake_time(row.get('started_at'))
+        for tool in by_wake.get(row.get('started_at'), []):
+            if tool.get('state') != '成功' or tool.get('result_state') in ('已截断', '结果过长'):
+                continue
+            tool_name = canonical(tool.get('tool'))
+            raw = tool.get('path')
+            if tool_name == 'read_text_file':
+                raws = [raw]
+            elif tool_name == 'read_multiple_files' and isinstance(raw, str):
+                raws = [part.strip() for part in raw.split(',') if part.strip()]
+            else:
+                continue
+            for raw in raws:
+                if not isinstance(raw, str) or not raw.strip():
+                    continue
+                try:
+                    path = (root / raw.replace('\\', '/')).resolve()
+                    if not path.is_relative_to(root) or not path.is_file():
+                        continue
+                    info = path.stat()
+                except (OSError, ValueError):
+                    continue
+                if started is not None and info.st_mtime > started.timestamp():
+                    continue
+                key = str(path).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                stamp = started.strftime('%m-%d %H:%M') if started else 'an earlier wake'
+                size = info.st_size
+                size_text = f'{size / 1024:.1f} KB' if size >= 1024 else f'{size} B'
+                lines.append(f'- {_display_path(raw)} - read {stamp}, {size_text}, unchanged since.')
+                if len(lines) >= limit:
+                    return lines
+    return lines
+
+
+def recent_chat_handoff(store, cfg):
+    """The last activity record, until one chat turn has delivered it (ticket 094)."""
+    activity_started_at, context = recent_activity_context(store, cfg)
+    if activity_started_at is None:
+        return None, None
+    handoffs = store.read(f'{cfg.id}/autonomy-chat-handoffs.jsonl')
+    if any(isinstance(item, dict) and item.get('activity_started_at') == activity_started_at
+           for item in handoffs):
+        return None, None
+    return activity_started_at, (context + '\nThis record is shown once after the activity; '
+                                 'later, use autonomy_history to look up what you did.')
+
+
+def acknowledge_chat_handoff(store, cfg, activity_started_at):
+    store.append(f'{cfg.id}/autonomy-chat-handoffs.jsonl', {
+        'activity_started_at': activity_started_at,
+    })
+
+
+def recent_glance_handoff(store, cfg):
+    """Deliver the latest short-term desktop glimpse with the next ordinary chat turn."""
+    from veil.brain.recent_experiences import has_recent_glance
+    if has_recent_glance(store, cfg):
+        return None, None
+    rows = store.read(f'{cfg.id}/glance-last.json')
+    activity = rows[-1].get('activity') if rows else None
+    if not isinstance(activity, dict) or not isinstance(activity.get('started_at'), str):
+        return None, None
+    try:
+        delivered = store.read(f'{cfg.id}/glance-delivered.json')
+    except UserError:
+        raise
+    if delivered and delivered[-1].get('activity_started_at') == activity['started_at']:
+        return None, None
+    fact = {key: activity.get(key) for key in ('started_at', 'foreground', 'decision', 'result', 'result_reason')}
+    return activity['started_at'], (
+        prompts.text('autonomy.glance.record') + ' '
+        + json.dumps(fact, ensure_ascii=False, separators=(',', ':')))
+
+
+def acknowledge_glance_handoff(store, cfg, activity_started_at):
+    store.replace(f'{cfg.id}/glance-delivered.json', {'activity_started_at': activity_started_at})
+
+
+class AutonomyController:
+    def __init__(self, chat, hub):
+        self.chat, self.hub = chat, hub
+        self.chat.autonomy_controller = self
+        self.activity = hub.activity
+        self.path = f'{chat.cfg.id}/autonomy.jsonl'
+        self.active_path = chat.store.root / chat.cfg.id / 'autonomy-active.json'
+        self.alarm_path = chat.store.root / chat.cfg.id / 'autonomy-alarm.json'
+        self.rhythm_path = chat.store.root / chat.cfg.id / 'autonomy-rhythm.json'
+        self.interval = timedelta(minutes=chat.cfg.autonomy['interval_minutes'])
+        self.daily_max_runs = chat.cfg.autonomy['daily_max_runs']
+        self.daily_budget = chat.cfg.autonomy['daily_budget_cny']
+        self.min_alarm_gap = timedelta(minutes=chat.cfg.autonomy.get('min_alarm_gap_minutes', 15))
+        self.quiet_hours = chat.cfg.autonomy.get('quiet_hours')
+        self.quiet_default = chat.cfg.autonomy.get('quiet_hours_enabled', self.quiet_hours is not None)
+        self.quiet_path = chat.store.root / chat.cfg.id / 'autonomy-quiet.json'
+        self.started_at = datetime.fromisoformat(now())
+        self.rows = self.chat.store.read(self.path)
+        self._recover_active()
+        self._validate_rows()
+        self._read_alarms()
+        self._read_rhythm()
+        self.active = False
+        self.deadline = None
+        self.claimed_wake_reason = None
+        self.missed_shown = set()
+        self.announce_next_wake()
+        self.announce_more_room()
+        self.announce_cleanup()
+        self.announce_wake_control()
+
+    def _validate_rows(self):
+        required = ('started_at', 'finished_at', 'decision', 'reason', 'tools',
+                    'lab_files_changed', 'result', 'result_reason', 'current_focus',
+                    'next_step', 'cost_cny')
+        for row in self.rows:
+            try:
+                if (not isinstance(row, dict) or any(key not in row for key in required)
+                        or row['result'] not in ('完成', '部分完成', '搁置', '失败', '被打断')
+                        or not isinstance(row['tools'], list)
+                        or not all(isinstance(item, dict) and all(isinstance(item.get(key), str)
+                                                                  for key in ('tool', 'path', 'state'))
+                                   for item in row['tools'])
+                        or not isinstance(row['lab_files_changed'], list)
+                        or not all(isinstance(item, str) for item in row['lab_files_changed'])
+                        or not all(isinstance(row[key], str) for key in
+                                   ('started_at', 'finished_at', 'decision', 'reason', 'result_reason',
+                                    'current_focus', 'next_step'))):
+                    raise ValueError('invalid record')
+                datetime.fromisoformat(row['started_at'])
+                datetime.fromisoformat(row['finished_at'])
+                amount = Decimal(row['cost_cny'])
+                if not amount.is_finite() or amount < 0:
+                    raise ValueError('invalid cost')
+            except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+                raise UserError('自主活动记录不完整，已停止；请保留 data 文件夹。') from exc
+
+    # Ticket 139: Peter's own wake controls. Alarms he sets are exact; his natural rhythm is
+    # a hazard that builds after each wake (idea from Kli Space's Wake Veil, written fresh here).
+    # Lan's limits (pause, quiet hours, daily runs, budget) stay above both.
+
+    @staticmethod
+    def _valid_alarm(alarm):
+        if (not isinstance(alarm, dict)
+                or not isinstance(alarm.get('alarm_id'), str) or not alarm['alarm_id']
+                or not isinstance(alarm.get('state'), str) or alarm['state'] not in ALARM_STATES
+                or not isinstance(alarm.get('at'), str)
+                or not isinstance(alarm.get('reason'), str)
+                or len(alarm['reason']) > MAX_ALARM_REASON_CHARS):
+            raise UserError('Scheduled wake state is incomplete. Keep the data folder intact.')
+        if alarm['state'] == 'cancelled':
+            return {key: value for key, value in alarm.items() if key != 'time'}
+        try:
+            datetime.fromisoformat(alarm['at']).astimezone()
+        except (ValueError, OverflowError, OSError) as exc:
+            raise UserError('Scheduled wake time is invalid. Keep the data folder intact.') from exc
+        if alarm['state'] == 'pending' and not alarm['reason'].strip():
+            raise UserError('Scheduled wake reason is missing. Keep the data folder intact.')
+        return {key: value for key, value in alarm.items() if key != 'time'}
+
+    def _read_alarms(self):
+        try:
+            data = json.loads(self.alarm_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UserError('Scheduled wake state could not be read safely. Keep the data folder intact.') from exc
+        if isinstance(data, dict) and 'alarms' in data:
+            if not isinstance(data['alarms'], list):
+                raise UserError('Scheduled wake state is incomplete. Keep the data folder intact.')
+            return [self._valid_alarm(alarm) for alarm in data['alarms']]
+        return [self._valid_alarm(data)]  # one alarm saved before ticket 139
+
+    def _save_alarms(self, alarms):
+        keep = [alarm for alarm in alarms
+                if alarm['state'] == 'pending' or (alarm['state'] == 'missed' and not alarm.get('missed_reported'))]
+        done = [alarm for alarm in alarms if alarm not in keep][-ALARM_HISTORY_LIMIT:]
+        self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-alarm.json', {'alarms': done + keep})
+
+    def _read_alarm(self):
+        """The most recently set alarm, or None."""
+        alarms = self._read_alarms()
+        return alarms[-1] if alarms else None
+
+    def _save_alarm(self, alarm):
+        alarms = [item for item in self._read_alarms() if item['alarm_id'] != alarm['alarm_id']]
+        self._save_alarms(alarms + [{key: value for key, value in alarm.items() if key != 'time'}])
+
+    def _pending_alarms(self):
+        pending = [alarm for alarm in self._read_alarms() if alarm['state'] == 'pending']
+        return sorted(pending, key=lambda alarm: self._local_time(alarm['at']))
+
+    @staticmethod
+    def _local_time(value):
+        return datetime.fromisoformat(value).astimezone()
+
+    def _transition_alarms(self, ids, state, reason=None):
+        try:
+            alarms = self._read_alarms()
+            for alarm in alarms:
+                if alarm['alarm_id'] in ids:
+                    alarm['state'] = state
+                    if reason:
+                        alarm['missed_reason'] = reason
+            self._save_alarms(alarms)
+        except OSError as exc:
+            raise UserError('Scheduled wake state could not be updated safely; no wake was started. Keep the data folder intact.') from exc
+
+    def set_next_wake(self, args):
+        if not isinstance(args, dict):
+            return 'The scheduled wake was not changed because the arguments are invalid.', '被拒绝', 'set_next_wake'
+        at = args.get('at')
+        reason = args.get('reason', '')
+        cancel = args.get('cancel', '')
+        if not isinstance(at, str) or not isinstance(cancel, str):
+            return 'The at value must be a local ISO timestamp, or an empty string to cancel.', '被拒绝', 'set_next_wake'
+        if not at.strip():
+            pending = self._pending_alarms()
+            target = cancel.strip()
+            chosen = [alarm for alarm in pending if not target or target == 'all' or alarm['alarm_id'] == target]
+            if not chosen:
+                return 'There is no matching scheduled wake to cancel.', '成功', 'no scheduled wake'
+            try:
+                self._transition_alarms({alarm['alarm_id'] for alarm in chosen}, 'cancelled')
+            except UserError:
+                return 'The scheduled wake could not be cancelled safely; its previous state was preserved.', '出错', 'cancel scheduled wake'
+            return (f'Cancelled {len(chosen)} scheduled wake(s).', '成功', 'cancel scheduled wake')
+        if not self.activity.enabled():
+            return 'Autonomous activity is paused. Resume it before scheduling a wake.', '被拒绝', 'set_next_wake'
+        if not isinstance(reason, str):
+            return 'The reason must be one short sentence.', '被拒绝', 'set_next_wake'
+        reason = ' '.join(reason.split())
+        if not reason or len(reason) > MAX_ALARM_REASON_CHARS:
+            return f'The reason must contain 1 to {MAX_ALARM_REASON_CHARS} characters.', '被拒绝', 'set_next_wake'
+        try:
+            scheduled = datetime.fromisoformat(at.strip()).astimezone()
+        except (ValueError, OverflowError, OSError):
+            return 'The at value must be a valid local ISO timestamp.', '被拒绝', 'set_next_wake'
+        current_time = datetime.now().astimezone()
+        earliest = current_time + self.min_alarm_gap
+        latest = current_time + timedelta(days=MAX_ALARM_DAYS)
+        moved = False
+        if scheduled < earliest:
+            # Ticket 398: a too-soon request is moved to the earliest allowed time instead of becoming a red
+            # rejection Peter cannot learn from. The reason is kept; the result states the real time.
+            scheduled = earliest
+            moved = True
+        if scheduled > latest:
+            return f'The scheduled time cannot be more than {MAX_ALARM_DAYS} days from now.', '被拒绝', 'set_next_wake'
+        if self.quiet_enabled() and self._quiet_bounds(scheduled):
+            return (f'{scheduled.isoformat()} is inside the night quiet hours ({self.quiet_text()}) Lan set; '
+                    'no autonomous wake happens then. Choose a time outside them.', '被拒绝', 'set_next_wake')
+        try:
+            alarms = self._read_alarms()
+            if sum(1 for alarm in alarms if alarm['state'] == 'pending') >= MAX_PENDING_ALARMS:
+                return (f'You already have {MAX_PENDING_ALARMS} scheduled wakes waiting. Cancel one first.',
+                        '被拒绝', 'set_next_wake')
+            alarm = {'alarm_id': uuid.uuid4().hex[:8], 'at': scheduled.isoformat(), 'reason': reason,
+                     'state': 'pending', 'set_at': current_time.isoformat()}
+            self._save_alarms(alarms + [alarm])
+        except OSError:
+            return 'The scheduled wake could not be saved safely; the previous state was preserved.', '出错', 'set_next_wake'
+        used = self._eligible_count(scheduled.date().isoformat())
+        if used >= self.daily_max_runs:
+            note = (f' All {self.daily_max_runs} wakes for that day are already used, so it will not happen; '
+                    'choose a later day.')
+        else:
+            note = (f' That day has {self.daily_max_runs - used} of {self.daily_max_runs} wakes left so far; '
+                    'regular wakes use them too.')
+        moved_note = (' The requested time was too soon; it was moved to the earliest allowed time.'
+                      if moved else '')
+        return (f'Wake {alarm["alarm_id"]} is scheduled for {scheduled.isoformat()}. Your note: {reason}' + note + moved_note
+                + ' It rings even if your natural rhythm is set to quiet or off.',
+                '成功', f'{scheduled.isoformat()} | {reason}')
+
+    def _read_rhythm(self):
+        """Peter's current rhythm choice; anything expired or missing means normal."""
+        try:
+            data = json.loads(self.rhythm_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return {'mode': 'normal'}
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UserError('Wake rhythm setting could not be read safely. Keep the data folder intact.') from exc
+        try:
+            mode = data['mode']
+            until = datetime.fromisoformat(data['until']).astimezone()
+            set_at = datetime.fromisoformat(data['set_at']).astimezone()
+            if mode not in RHYTHM_MODES or mode == 'normal' or not isinstance(data.get('reason'), str):
+                raise ValueError(mode)
+            if mode == 'custom':
+                minutes = data['interval_minutes']
+                if type(minutes) is not int or not MIN_CUSTOM_INTERVAL <= minutes <= MAX_CUSTOM_INTERVAL:
+                    raise ValueError(minutes)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise UserError('Wake rhythm setting is invalid. Keep the data folder intact.') from exc
+        if datetime.now().astimezone() >= until:
+            return {'mode': 'normal', 'since': until}
+        return {**{key: value for key, value in data.items() if key != 'time'},
+                'until': until, 'set_at': set_at, 'since': set_at}
+
+    def set_wake_rhythm(self, args):
+        if not isinstance(args, dict) or args.get('mode') not in RHYTHM_MODES:
+            return ('mode must be one of: ' + ', '.join(RHYTHM_MODES) + '.', '被拒绝', 'set_wake_rhythm')
+        mode = args['mode']
+        current_time = datetime.now().astimezone()
+        if mode == 'normal':
+            if self._read_rhythm()['mode'] == 'normal':
+                return 'Your natural wake rhythm is already normal.', '成功', 'rhythm normal'
+            try:
+                self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-rhythm.json', {
+                    'mode': 'quieter', 'until': current_time.isoformat(), 'set_at': current_time.isoformat(),
+                    'reason': 'ended early'})
+            except OSError:
+                return 'The rhythm could not be changed safely; the previous setting stays.', '出错', 'set_wake_rhythm'
+            return 'Your natural wake rhythm is back to normal now.', '成功', 'rhythm normal'
+        minutes, reason = args.get('minutes'), args.get('reason', '')
+        if type(minutes) is not int or not MIN_RHYTHM_MINUTES <= minutes <= MAX_RHYTHM_MINUTES:
+            return (f'minutes must be a whole number from {MIN_RHYTHM_MINUTES} to {MAX_RHYTHM_MINUTES}; '
+                    'the setting ends by itself after that.', '被拒绝', 'set_wake_rhythm')
+        if not isinstance(reason, str) or not ' '.join(reason.split()) or len(reason) > MAX_ALARM_REASON_CHARS:
+            return f'The reason must contain 1 to {MAX_ALARM_REASON_CHARS} characters.', '被拒绝', 'set_wake_rhythm'
+        record = {'mode': mode, 'until': (current_time + timedelta(minutes=minutes)).isoformat(),
+                  'set_at': current_time.isoformat(), 'reason': ' '.join(reason.split())}
+        if mode == 'custom':
+            interval = args.get('interval_minutes')
+            if type(interval) is not int or not MIN_CUSTOM_INTERVAL <= interval <= MAX_CUSTOM_INTERVAL:
+                return (f'custom needs interval_minutes from {MIN_CUSTOM_INTERVAL} to {MAX_CUSTOM_INTERVAL}.',
+                        '被拒绝', 'set_wake_rhythm')
+            record['interval_minutes'] = interval
+        try:
+            self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-rhythm.json', record)
+        except OSError:
+            return 'The rhythm could not be changed safely; the previous setting stays.', '出错', 'set_wake_rhythm'
+        return (f'Natural wake rhythm set: {self.rhythm_text()} Scheduled wakes you set still ring. '
+                'Lan\'s daily limit and quiet hours still apply.', '成功', f'rhythm {mode} {minutes}min')
+
+    def _mean_interval(self, rhythm):
+        """Average minutes between natural wakes for this rhythm, or None when they are off."""
+        base = self.interval.total_seconds() / 60
+        if rhythm['mode'] == 'silent':
+            return None
+        if rhythm['mode'] == 'quieter':
+            return base * QUIETER_FACTOR
+        if rhythm['mode'] == 'custom':
+            return float(rhythm['interval_minutes'])
+        return base
+
+    def rhythm_text(self):
+        rhythm = self._read_rhythm()
+        if rhythm['mode'] == 'normal':
+            return f'normal (natural wakes about every {round(self._mean_interval(rhythm))} minutes on average).'
+        until = rhythm['until'].strftime('%H:%M')
+        left = max(int((rhythm['until'] - datetime.now().astimezone()).total_seconds() // 60), 0)
+        what = {'quieter': 'quieter', 'silent': 'no natural wakes',
+                'custom': f'custom, about every {rhythm.get("interval_minutes")} minutes'}[rhythm['mode']]
+        if rhythm['mode'] == 'quieter':
+            what += f' (about every {round(self._mean_interval(rhythm))} minutes)'
+        return (f'{what} until {until} ({left} min left), then normal again. You set it because: '
+                + json.dumps(rhythm['reason'], ensure_ascii=False) + '.')
+
+    def _natural_wait(self, reference, mean):
+        """Minutes from reference until the next natural wake.
+
+        The urge to wake builds at a rate around 1/mean per minute: low right after a wake, then
+        drifting a little up or down for this cycle. A wake happens once the built-up urge passes
+        this cycle's threshold. Threshold and drift are drawn once per cycle from a seed, so a
+        restart finds the same time instead of rolling again.
+        """
+        rng = random.Random(f'{reference.isoformat()}|{mean:.1f}')
+        threshold = rng.gammavariate(3, 1 / 3)
+        drift = math.exp(rng.gauss(0, 0.25))
+        steps_per_mean = 60
+        built, step = 0.0, 0
+        while built < threshold and step < 3 * steps_per_mean:
+            step += 1
+            settle = 1 - 0.7 * math.exp(-step / (steps_per_mean * 0.2))
+            built += 1.17 * drift * settle / steps_per_mean  # 1.17 keeps the average at mean
+        return max(step * mean / steps_per_mean, min(MIN_NATURAL_GAP, mean / 3))
+
+    def _periodic_next_wake(self, state):
+        enabled_at = state['enabled_at']
+        try:
+            reference = max(datetime.fromisoformat(enabled_at), self.started_at) if enabled_at else self.started_at
+        except (TypeError, ValueError) as exc:
+            raise UserError('自主活动开关状态损坏，已停止；请保留 data 文件夹。') from exc
+        for row in reversed(self.rows):
+            try:
+                when = datetime.fromisoformat(row['started_at'])
+            except (TypeError, ValueError) as exc:
+                raise UserError('自主活动记录时间损坏，已停止；请保留 data 文件夹。') from exc
+            if when >= reference:
+                reference = max(reference, when)
+                break
+        rhythm = self._read_rhythm()
+        if rhythm.get('since'):
+            reference = max(reference, rhythm['since'])
+        mean = self._mean_interval(rhythm)
+        if mean is None:
+            return None
+        next_at = reference + timedelta(minutes=self._natural_wait(reference, mean))
+        if rhythm['mode'] != 'normal' and next_at >= rhythm['until']:
+            # The setting ends first; the next cycle starts from the moment it ends.
+            normal = self._mean_interval({'mode': 'normal'})
+            next_at = rhythm['until'] + timedelta(minutes=self._natural_wait(rhythm['until'], normal))
+        if next_at < self.started_at:
+            return self.started_at + timedelta(minutes=self._natural_wait(self.started_at, mean))
+        return next_at
+
+    def _next_wake_details(self):
+        state = self.activity.snapshot()
+        if not state['enabled']:
+            return None, '自主活动已暂停。'
+        if self._eligible_count() >= self.daily_max_runs:
+            return None, '今日自主活动次数已用完。'
+        periodic = self._periodic_next_wake(state)
+        if periodic is not None and self.quiet_enabled():
+            bounds = self._quiet_bounds(max(periodic, datetime.now().astimezone()))
+            if bounds:
+                periodic = max(periodic, bounds[1])
+        for alarm in self._pending_alarms():
+            alarm_at = self._local_time(alarm['at'])
+            if self.quiet_enabled() and self._quiet_bounds(alarm_at):
+                continue
+            if periodic is None or alarm_at <= periodic:
+                return alarm_at, alarm['reason']
+            break
+        if periodic is None:
+            rhythm = self._read_rhythm()
+            return None, f'Peter 自己暂停了自然醒，{rhythm["until"].strftime("%H:%M")} 恢复；他定的闹钟照常。'
+        return periodic, None
+
+    def _recover_active(self):
+        try:
+            active = json.loads(self.active_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return
+        except (ValueError, UnicodeError) as exc:
+            raise UserError('自主活动中断标记损坏，已停止；请保留 data 文件夹。') from exc
+        if not isinstance(active, dict) or not isinstance(active.get('started_at'), str):
+            raise UserError('自主活动中断标记不完整，已停止；请保留 data 文件夹。')
+        try:
+            datetime.fromisoformat(active['started_at'])
+        except ValueError as exc:
+            raise UserError('自主活动中断标记时间损坏，已停止；请保留 data 文件夹。') from exc
+        if any(row.get('started_at') == active['started_at'] for row in self.rows):
+            self.active_path.unlink(missing_ok=True)
+            return
+        projected_tools = {}
+        for index, row in enumerate(self.chat.store.read(f'{self.chat.cfg.id}/tools.jsonl')):
+            if row.get('autonomy_run_id') != active['started_at']:
+                continue
+            if not all(isinstance(row.get(key), str) for key in ('tool', 'path', 'state')):
+                raise UserError('中断任务的工具记录损坏，请保留 data 文件夹。')
+            call_id = row.get('call_id')
+            key = (call_id if isinstance(call_id, str) and call_id else
+                   f"legacy:{row.get('request_id', '')}:{row.get('time', '')}:{index}")
+            if key not in projected_tools:
+                projected_tools[key] = {'tool': row['tool'], 'path': row['path'], 'state': '结果未确认'}
+            item = projected_tools[key]
+            item.update({field: row[field] for field in ('tool', 'path', 'state')})
+            if row.get('result_state') in ('结果过长', '已截断'):
+                item['result_state'] = row['result_state']
+        tools = list(projected_tools.values())
+        for item in tools:
+            if item['state'] == '进行中':
+                item['state'] = '结果未确认'
+        files = list(dict.fromkeys(item['path'] for item in tools if item['state'] == '成功'
+                     and self.chat.canonical_tool_name(item['tool']) in
+                     ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file')))
+        events = self.chat.store.read('costs.jsonl')
+        run_ids = {event['id'] for event in events if event.get('type') == 'reserve'
+                   and event.get('category') == 'autonomy' and event.get('character') == self.chat.cfg.id
+                   and datetime.fromisoformat(event['time']) >= datetime.fromisoformat(active['started_at'])}
+        settled = {event['id']: Decimal(event['amount']) for event in events
+                   if event.get('type') == 'settle' and event.get('id') in run_ids}
+        self._append({'started_at': active['started_at'], 'finished_at': now(),
+                      'decision': '服务异常停止，本次不会自动重试。', 'reason': '',
+                      'tools': tools, 'lab_files_changed': files,
+                      'result': '部分完成' if any(item['state'] in ('成功', '结果未确认') for item in tools) else '失败',
+                      'result_reason': '后台任务中断；存在未确认的工具结果时，必须先核实效果再继续。',
+                      'current_focus': '', 'next_step': '先核实所有“结果未确认”的操作及已留存文件，再继续，勿重复写入。',
+                      'cost_cny': str(sum(settled.values(), Decimal(0)))})
+        self.active_path.unlink(missing_ok=True)
+
+    def quiet_enabled(self):
+        if not self.quiet_hours:
+            return False
+        try:
+            state = json.loads(self.quiet_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return bool(self.quiet_default)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise UserError('Quiet-hours setting could not be read safely. Keep the data folder intact.') from exc
+        if not isinstance(state, dict) or type(state.get('enabled')) is not bool:
+            raise UserError('Quiet-hours setting is invalid. Keep the data folder intact.')
+        return state['enabled']
+
+    def set_quiet_enabled(self, enabled):
+        if not self.quiet_hours:
+            return False
+        previous = self.quiet_enabled()
+        self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-quiet.json', {'enabled': bool(enabled)})
+        if previous != enabled:
+            record = getattr(self.chat, 'record_capability_change', None)
+            if callable(record):
+                try:
+                    record(f'Lan turned night quiet hours ({self.quiet_text()}) {"on" if enabled else "off"}: '
+                           + ('no autonomous wakes happen during them.' if enabled else
+                              'autonomous wakes may happen at night again.'))
+                except Exception:
+                    self.chat.store.replace(f'{self.chat.cfg.id}/autonomy-quiet.json', {'enabled': previous})
+                    raise
+        return True
+
+    def quiet_text(self):
+        if not self.quiet_hours:
+            return ''
+        (sh, sm), (eh, em) = self.quiet_hours
+        return f'{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}'
+
+    def _quiet_bounds(self, stamp):
+        """The quiet window containing stamp as (start, end), or None."""
+        (sh, sm), (eh, em) = self.quiet_hours
+        for offset in (0, -1):
+            day = stamp + timedelta(days=offset)
+            start = day.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            end = day.replace(hour=eh, minute=em, second=0, microsecond=0)
+            if end <= start:
+                end += timedelta(days=1)
+            if start <= stamp < end:
+                return start, end
+        return None
+
+    def in_quiet(self, stamp=None):
+        if not self.quiet_enabled():
+            return False
+        return self._quiet_bounds(stamp or datetime.now().astimezone()) is not None
+
+    def wake_count_text(self):
+        used = self._eligible_count()
+        text = prompts.fill(prompts.text('autonomy.wake_count'),
+                            {'used': used, 'max': self.daily_max_runs})
+        if self.quiet_enabled():
+            text += ' ' + prompts.fill(prompts.text('autonomy.wake_quiet'), {'hours': self.quiet_text()})
+        text += ' ' + prompts.fill(prompts.text('autonomy.wake_rhythm'), {'rhythm': self.rhythm_text()})
+        pending = self._pending_alarms()
+        if pending:
+            text += ' ' + prompts.fill(prompts.text('autonomy.wake_scheduled'), {'alarms': '; '.join(
+                f'{alarm["alarm_id"]} at {self._local_time(alarm["at"]).strftime("%Y-%m-%d %H:%M")} '
+                + json.dumps(alarm['reason'], ensure_ascii=False) for alarm in pending)})
+        return text
+
+    def _today(self, stamp=None):
+        return (stamp or datetime.now().astimezone()).date().isoformat()
+
+    def _eligible_count(self, day=None):
+        day = day or self._today()
+        return sum(1 for row in self.rows if row['started_at'][:10] == day)
+
+    def next_wake(self):
+        return self._next_wake_details()[0]
+
+    def _due_alarms(self, current_time):
+        return [alarm for alarm in self._pending_alarms() if self._local_time(alarm['at']) <= current_time]
+
+    def _blocked_by_lan(self, current_time, due_alarms):
+        """Lan's limits come first; alarms caught by them become missed, never replayed."""
+        if self._eligible_count() >= self.daily_max_runs:
+            if due_alarms:
+                self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'missed',
+                                        'daily wake limit reached')
+            return True
+        if self.in_quiet(current_time):
+            if due_alarms:
+                self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'missed',
+                                        'night quiet hours')
+            return True
+        # An alarm whose time fell inside quiet hours does not ring late once they end.
+        quiet_ids = {alarm['alarm_id'] for alarm in due_alarms if self.in_quiet(self._local_time(alarm['at']))}
+        if quiet_ids:
+            self._transition_alarms(quiet_ids, 'missed', 'night quiet hours')
+            due_alarms[:] = [alarm for alarm in due_alarms if alarm['alarm_id'] not in quiet_ids]
+        return False
+
+    def due(self):
+        state = self.activity.snapshot()
+        if not state['enabled']:
+            return False
+        current_time = datetime.now().astimezone()
+        due_alarms = self._due_alarms(current_time)
+        if self._blocked_by_lan(current_time, due_alarms):
+            return False
+        if due_alarms:
+            return True
+        next_at = self.next_wake()
+        return next_at is not None and current_time >= next_at
+
+    def claim_due(self):
+        """Claim one idle wake and durably consume its alarms before it can run."""
+        state = self.activity.snapshot()
+        if not state['enabled']:
+            return False
+        current_time = datetime.now().astimezone()
+        due_alarms = self._due_alarms(current_time)
+        if self._blocked_by_lan(current_time, due_alarms):
+            return False
+        if due_alarms:
+            # Consume before returning to the chat loop. A crash between this
+            # write and model startup can miss one wake, but can never replay it.
+            self._transition_alarms({alarm['alarm_id'] for alarm in due_alarms}, 'consumed')
+            notes = [alarm['reason'] for alarm in due_alarms]
+            self.claimed_wake_reason = notes[0] if len(notes) == 1 else notes
+            return True
+        next_at = self.next_wake()
+        if next_at is None or current_time < next_at:
+            return False
+        self.claimed_wake_reason = None
+        return True
+
+    def status(self):
+        next_at, next_reason = self._next_wake_details()
+        last = activity_view(self.rows[-1]) if self.rows else None
+        result = ''
+        if last:
+            result = last['result'] + '：' + last['result_reason']
+        if next_at is None and next_reason is None:
+            next_reason = '当前没有已排定的唤醒时间。'
+        return {
+            'next_wake_at': next_at.isoformat() if next_at else None,
+            'next_wake_reason': next_reason,
+            'last_result': result[:180],
+            'last_activity': last,
+            'activity_history': [activity_view(row) for row in self.rows[-20:]],
+            'autonomy_busy': self.active,
+            'wakes_today': self._eligible_count(),
+            'daily_max_runs': self.daily_max_runs,
+            'quiet_hours': self.quiet_text() or None,
+            'quiet_enabled': self.quiet_enabled(),
+            'rhythm': self.rhythm_text(),
+            'scheduled_wakes': [{'id': alarm['alarm_id'], 'at': alarm['at'], 'note': alarm['reason']}
+                                for alarm in self._pending_alarms()],
+        }
+
+    def announce_next_wake(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_next_wake', None)
+        if announce:
+            announce()
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def announce_more_room(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_autonomy_more_room', None)
+        if announce:
+            announce()
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def announce_cleanup(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_autonomy_cleanup', None)
+        if announce:
+            announce(self.daily_budget, self.quiet_text())
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def announce_wake_control(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_wake_control', None)
+        if announce:
+            announce()
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def announce_autonomy(self):
+        announce = getattr(self.chat.tools, 'announce_autonomy', None)
+        if announce:
+            announce()
+            self.chat.pending_capability_event = self.chat.tools.capability_event
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    @staticmethod
+    def _task_is_stale(task, stamp):
+        if task.get('pending_action'):
+            return False  # an interrupted side effect must stay visible until its outcome is checked
+        try:
+            return stamp - datetime.fromisoformat(task['updated_at']) > timedelta(days=STALE_TASK_DAYS)
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def _lab_context(self):
+        # Ticket 152: a short look at the newest piece plus a list of the rest; Peter reads any
+        # file in full himself when he wants to continue it.
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        lab = getattr(files, 'lab', None)
+        if not lab or not lab.is_dir() or lab.is_symlink():
+            return 'Recent lab output: unavailable.'
+        try:
+            root = lab.resolve(strict=True)
+            candidates = []
+            for path in root.rglob('*'):
+                if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(root):
+                    candidates.append((path.stat().st_mtime, path))
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            if not candidates:
+                return 'Recent lab output: no files are available.'
+            lines = []
+            for index, (mtime, path) in enumerate(candidates[:LAB_LIST_LIMIT]):
+                stamp = datetime.fromtimestamp(mtime).astimezone().strftime('%Y-%m-%d %H:%M')
+                lines.append(f'- {path.relative_to(root).as_posix()} ({path.stat().st_size} bytes, changed {stamp})')
+            newest = candidates[0][1]
+            raw = newest.read_bytes()
+            if len(raw) <= LAB_PREVIEW_BYTES + LAB_PREVIEW_HEAD_BYTES:
+                head = raw.decode('utf-8', errors='replace')
+            else:
+                # A growing file (diary, notes): show its start and where it stopped.
+                head = (raw[:LAB_PREVIEW_HEAD_BYTES].decode('utf-8', errors='replace') + '\n...\n'
+                        + raw[-LAB_PREVIEW_BYTES:].decode('utf-8', errors='replace'))
+            more = len(candidates) - LAB_LIST_LIMIT
+            return (prompts.text('autonomy.lab.frame') + '\n' + '\n'.join(lines)
+                    + ('\n' + prompts.fill(prompts.text('autonomy.lab.more'), {'count': more}) if more > 0 else '')
+                    + '\n' + prompts.fill(prompts.text('autonomy.lab.newest'),
+                                          {'name': newest.relative_to(root).as_posix()}) + '\n' + head)
+        except OSError:
+            return 'Recent lab output: temporarily unreadable.'
+
+    def _recall_query(self):
+        """The wake judge's three evidence sources, kept short and separate from the model's full wake prompt."""
+        stamp = datetime.now().astimezone()
+        history = [row for row in getattr(self.chat, 'history_events', [])
+                   if isinstance(row, dict) and row.get('role') in ('user', 'assistant')
+                   and not row.get('recalled') and isinstance(row.get('content'), str)]
+        recent = '\n'.join(
+            f'{row["role"]}: {row["content"].strip()[:65]}' for row in history[-3:]) or '(none)'
+        task = self.chat.long_tasks.read()
+        active_task = (task.get('title', '')[:80]
+                       if task and task.get('status') != 'completed' and not self._task_is_stale(task, stamp)
+                       else '(none)')
+        previous = activity_view(self.rows[-1]) if self.rows else None
+        focus = _short_context_value((previous or {}).get('current_focus'), 80) if previous else ''
+        next_step = _short_context_value((previous or {}).get('next_step'), 80) if previous else ''
+        return (f'Recent chat:\n{recent}\nActive long task: {active_task}\n'
+                f'Previous wake focus: {focus or "(none)"}\nPrevious wake next step: {next_step or "(none)"}')[:600]
+
+    def _threads_text(self):
+        """Ticket 389: what actually happened across several wakes; facts only, never a request to continue."""
+        if not self.chat.cfg.autonomy.get('threads', True) or len(self.rows) < 2:
+            return ''
+        lines, omitted = thread_lines(self.rows)
+        if not lines:
+            return ''
+        more = f'\n({omitted} more thread(s) are in autonomy_history.)' if omitted else ''
+        return (prompts.text('autonomy.threads.frame') + '\n'
+                + '\n'.join(lines) + more + '\n')
+
+    def _reads_text(self):
+        """Ticket 389: files already read that have not changed; live state still needs checking."""
+        if not self.chat.cfg.autonomy.get('threads', True) or not self.rows:
+            return ''
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        workspace = getattr(files, 'workspace', None)
+        if not isinstance(workspace, (str, os.PathLike)):
+            return ''
+        try:
+            tool_rows = self.chat.store.read_tail(f'{self.chat.cfg.id}/tools.jsonl', 3000)
+        except (OSError, UserError, ValueError):
+            tool_rows = []
+        lines = unchanged_read_lines(self.rows, tool_rows, workspace, self.chat.canonical_tool_name)
+        if not lines:
+            return ''
+        return (prompts.text('autonomy.reads.frame') + '\n' + '\n'.join(lines) + '\n')
+
+    def _capture_approval(self, prompt):
+        """Autonomy never asks Lan live; keep the request so she can decide later."""
+        try:
+            self.chat.pending_approvals.add(prompt, self.chat.autonomy_run_id)
+        except UserError:
+            pass
+        return not_asked(prompt)
+
+    def _context(self, wake_reason=None):
+        stamp = datetime.now().astimezone()
+        rows = self.chat.store.read(self.chat.path)
+        from veil.life.life_state import gap_text
+        elapsed = gap_text(rows, stamp.isoformat(), minimum=0) or 'No previous visible user message is recorded.'
+        previous = activity_view(self.rows[-1]) if self.rows else None
+        auto_day, auto_pending = self.chat.budget.category_totals(self.chat.cfg.id)
+        remaining = max(self.daily_budget - auto_day - auto_pending, 0)
+        if previous is None:
+            previous_text = 'System record | Last autonomous activity | No previous activity record.'
+        else:
+            previous_text = (
+                prompts.fill(prompts.text('autonomy.previous.frame'),
+                             {'started_at': previous.get('started_at', 'unknown')}) + '\n'
+                + json.dumps({
+                    'decision': previous.get('decision'), 'reason': previous.get('reason'),
+                    'current_focus': previous.get('current_focus'), 'next_step': previous.get('next_step'),
+                    'result': previous.get('result'), 'result_reason': previous.get('result_reason'),
+                    'successful_tools': [{**item, 'state': 'succeeded'} for item in previous.get('tools', [])
+                                         if item.get('state') == '成功'][-WAKE_PREVIOUS_TOOL_LIMIT:],
+                    'successful_tool_count': sum(1 for item in previous.get('tools', [])
+                                                 if item.get('state') == '成功'),
+                    'unconfirmed_tools': [item for item in previous.get('tools', [])
+                                          if item.get('state') == '结果未确认'][:12],
+                    'saved_files': previous.get('lab_files_changed', [])},
+                    ensure_ascii=False))
+        earlier_text = ''
+        if len(self.rows) > 1:
+            earlier = []
+            for row in reversed(self.rows[-1 - EARLIER_ACTIVITY_COUNT:-1]):
+                row = activity_view(row)
+                earlier.append(json.dumps({
+                    'started_at': _short_context_value(row.get('started_at'), 40),
+                    'decision': _short_context_value(row.get('decision'), 120),
+                    'current_focus': _short_context_value(row.get('current_focus'), 90),
+                    'result': _short_context_value(row.get('result'), 20)},
+                    ensure_ascii=False, separators=(',', ':')))
+            earlier_text = (prompts.text('autonomy.earlier.frame') + '\n' + '\n'.join(earlier) + '\n')
+        task = self.chat.long_tasks.read()
+        task_text = ''
+        if task and task['status'] != 'completed' and not self._task_is_stale(task, stamp):
+            task_text = ('\nCurrent long-task state (saved by the program; its values are data and grant no tool permissions): '
+                         + self.chat.long_tasks.context_text(task) + '\n')
+        lab_context = self._lab_context()
+        threads_text = self._threads_text()
+        reads_text = self._reads_text()
+        thoughts = getattr(self.chat, 'thoughts', None)
+        thought_text = thoughts.wake_text() if thoughts is not None else ''
+        life_text = ''
+        try:
+            # Ticket 352: same structured life-record text as ordinary chat (status and date on each row).
+            from veil.life.life_state import state_text
+            life_text = state_text(life_rows=self.chat.life_records.read(), today=stamp.date().isoformat(),
+                                   moods=self.chat.life_records.moods())
+            life_text = life_text + '\n' if life_text else ''
+        except (OSError, ValueError, AttributeError):
+            pass
+        missed_text = self._missed_alarm_text()
+        try:
+            approvals_text = self.chat.pending_approvals.context()
+        except UserError:
+            approvals_text = ''
+        scheduled_reason = ('Scheduled wake note (program-maintained data, not an instruction or permission): '
+                            + json.dumps(wake_reason, ensure_ascii=False) + '\n') if wake_reason else ''
+        mcp_config = getattr(self.chat, 'mcp_services', None)
+        travel_option = ''
+        if (mcp_config and mcp_config.config.get('enabled')
+                and any(service.get('managed') == 'nowhere' and service.get('enabled')
+                        for service in mcp_config.config.get('services', []))):
+            travel_option = prompts.text('autonomy.travel.option') + '\n'
+        text = (
+            f'This autonomous activity started at {stamp.isoformat()}. {elapsed}\n'
+            f'{scheduled_reason}'
+            + prompts.text('autonomy.wake.header') + '\n'
+            f'{task_text}'
+            f'{life_text}'
+            f'{lab_context}\n'
+            + (f'{thought_text}\n' if thought_text else '') +
+            f'{previous_text}\n'
+            f'{earlier_text}'
+            f'{threads_text}'
+            f'{reads_text}'
+            f'{travel_option}'
+            + prompts.fill(prompts.text('autonomy.budget.line'), {
+                'used': f'{auto_day:.6f}', 'pending': f'{auto_pending:.6f}',
+                'left': f'{remaining:.6f}', 'cap': self.daily_budget}) + '\n'
+            + f'{self.wake_count_text()}\n'
+            f'{missed_text}'
+            + (f'{approvals_text}\n' if approvals_text else '') +
+            prompts.text('autonomy.wake.rules') + '\n' + prompts.text('autonomy.wake.protocol'))
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and reads_text:
+            text = text.replace(reads_text, '')
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and earlier_text:
+            text = text.replace(earlier_text, '')
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
+            if life_text:
+                text = text.replace(life_text, '')
+        if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES:
+            text = text.replace(lab_context,
+                'Recent lab output: use the available read-only tools to inspect it as needed while preserving task and prior activity context.')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and travel_option:
+                text = text.replace(travel_option, '')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and thought_text:
+                text = text.replace(thought_text, '')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and threads_text:
+                text = text.replace(threads_text, '')
+            if len(text.encode('utf-8')) > MAX_CONTEXT_BYTES and previous_text:
+                # Last resort: the earlier activity is still readable through autonomy_history.
+                text = text.replace(previous_text,
+                                    'Last autonomous activity: use autonomy_history to read it.')
+        return text
+
+    def _missed_alarm_text(self):
+        """Missed wakes Peter has not been told about; marked told only after the wake request succeeds."""
+        try:
+            alarms = self._read_alarms()
+        except UserError:
+            return ''
+        missed = [alarm for alarm in alarms if alarm['state'] == 'missed' and not alarm.get('missed_reported')]
+        self.missed_shown = {alarm['alarm_id'] for alarm in missed}
+        return ''.join(
+            f'The wake you scheduled for {alarm["at"]} did not happen '
+            f'({alarm.get("missed_reason") or "daily wake limit reached"}). Your note was: '
+            + json.dumps(alarm['reason'], ensure_ascii=False) + '\n' for alarm in missed)
+
+    def _mark_missed_reported(self):
+        shown, self.missed_shown = self.missed_shown, set()
+        if not shown:
+            return
+        try:
+            alarms = self._read_alarms()
+            for alarm in alarms:
+                if alarm['alarm_id'] in shown:
+                    alarm['missed_reported'] = True
+            self._save_alarms(alarms)
+        except (OSError, UserError):
+            pass
+
+    def should_yield(self):
+        return (self.hub.stopped or self.hub.autonomy_interrupted.is_set()
+                or not self.activity.enabled()
+                or (self.deadline is not None and time.monotonic() >= self.deadline))
+
+    def run(self):
+        wake_reason = self.claimed_wake_reason
+        self.claimed_wake_reason = None
+        started_at = now()
+        self.chat.last_tool_summaries = []
+        self.chat.tool_stop_reason = ''
+        self.active = True
+        self.deadline = time.monotonic() + MAX_RUNTIME_SECONDS
+        before = None
+        record = {'started_at': started_at, 'finished_at': None, 'decision': '', 'reason': '',
+                  'tools': [], 'lab_files_changed': [], 'result': '失败', 'result_reason': '',
+                  'current_focus': '', 'next_step': '', 'cost_cny': '0'}
+        self.active_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.active_path.with_suffix('.tmp')
+        with temporary.open('w', encoding='utf-8', newline='\n') as handle:
+            handle.write(json.dumps({'started_at': started_at}) + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.active_path)
+        old_output, old_approval = self.chat.output, self.chat.approval
+        old_yield = self.chat.autonomy_should_yield
+        old_message_output = self.chat.autonomy_message_output
+        old_message_lock = self.chat.autonomy_message_lock
+        old_run_id = self.chat.autonomy_run_id
+        self.chat.output = lambda *_: None
+        self.chat.approval = self._capture_approval
+        self.chat.autonomy_should_yield = self.should_yield
+        self.chat.autonomy_run_id = started_at
+        self.chat.autonomy_message_output = old_output
+        self.chat.autonomy_message_lock = self.hub.cond
+        try:
+            before = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+            with self.chat.budget.autonomous(self.chat.cfg.id, self.daily_budget):
+                self.chat.long_tasks.begin_tool_run()
+                answer = self.chat.send(self._context(wake_reason), autonomy=True,
+                                        memory_query=self._recall_query())
+                self._mark_missed_reported()
+                self.chat.apply_pending_recall()
+            record['decision'] = answer.strip()[:1000]
+            record['reason'] = answer.strip()[:1000]
+            for line in answer.splitlines():
+                key, separator, value = line.partition('：')
+                if not separator:
+                    key, separator, value = line.partition(':')
+                key = key.strip().casefold()
+                if separator and key in ('决定', 'decided', 'decision'):
+                    record['decision'] = value.strip()[:300]
+                elif separator and key in ('当前关注', '关注', 'focus', 'currently focused on', 'current focus'):
+                    record['current_focus'] = value.strip()[:300]
+                elif separator and key in ('下一步', '下一步计划', 'next', 'next step'):
+                    record['next_step'] = value.strip()[:300]
+                elif separator and key in ('原因', 'reason'):
+                    record['reason'] = value.strip()[:500]
+            record['tools'] = self.chat.last_tool_summaries
+            record['lab_files_changed'] = [item.get('path') for item in record['tools']
+                                           if item.get('state') == '成功' and self.chat.canonical_tool_name(item.get('tool')) in
+                                           ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file')]
+            if time.monotonic() >= self.deadline:
+                record['result'] = '失败'
+                record['result_reason'] = f'达到每次 {MAX_RUNTIME_SECONDS // 60} 分钟的硬时限。'
+            elif self.chat.autonomy_interrupted:
+                record['result'] = '被打断'
+                record['result_reason'] = '在当前工具步骤后让位给聊天、暂停或服务退出。'
+            elif self.chat.autonomy_budget_limited:
+                record['result'] = '搁置'
+                record['result_reason'] = '后台预算池或程序总预算已到上限；正常聊天仍可继续。'
+            elif self.chat.autonomy_cost_limited and not self.chat.autonomy_step_limited:
+                record['result'] = '搁置'
+                cap = ((self.chat.cfg.autonomy or {}).get('run_budget_cny'))
+                record['result_reason'] = f'达到每次 ¥{cap} 的花费上限。'
+            elif self.chat.autonomy_step_limited:
+                record['result'] = '搁置'
+                autonomy_cfg = self.chat.cfg.autonomy or {}
+                limit = (autonomy_cfg.get('max_tool_steps') if autonomy_cfg.get('run_budget_cny') is not None
+                         else (self.chat.cfg.tools or {}).get('max_steps', 1))
+                record['result_reason'] = f'达到每次 {limit} 个工具步骤的硬上限。'
+            elif self.should_yield() and not self.activity.enabled():
+                record['result'] = '被打断'
+                record['result_reason'] = '自主活动已暂停。'
+            else:
+                record['result'] = '完成' if any(item.get('state') == '成功' for item in record['tools']) else '搁置'
+                record['result_reason'] = f'按 {self.chat.cfg.name} 本次决定结束。'
+            if not record['decision']:
+                record['decision'] = '本次没有采取行动。'
+        except BudgetExceeded as exc:
+            record['result'] = '搁置'
+            record['result_reason'] = str(exc)
+            record['decision'] = '后台预算不足，本次没有继续调用。'
+        except (RequestFailed, TooLong) as exc:
+            record['result'] = '失败'
+            record['result_reason'] = str(exc)
+            record['decision'] = '本次自主请求未完成。'
+        except UserError as exc:
+            record['result'] = '失败'
+            record['result_reason'] = str(exc)
+            raise
+        finally:
+            try:
+                # Chat keeps this list live, even if a later model request fails.
+                record['tools'] = self.chat.last_tool_summaries
+                record['lab_files_changed'] = list(dict.fromkeys(
+                    item['path'] for item in record['tools'] if item.get('state') == '成功'
+                    and self.chat.canonical_tool_name(item.get('tool')) in
+                    ('write_file', 'append_file', 'create_directory', 'move_lab_file', 'edit_file', 'delete_file')))
+                successful = any(item.get('state') == '成功' for item in record['tools'])
+                failures = [item for item in record['tools'] if tool_failed(item)]
+                stop = self.chat.tool_stop_reason
+                if stop and record['result'] not in ('被打断',):
+                    record['result'] = '部分完成' if successful else '失败'
+                    record['result_reason'] = stop
+                    record['decision'] = '本次因程序限制中断。'
+                    record['program_stop_reason'] = stop
+                elif record['result'] == '失败' and successful:
+                    record['result'] = '部分完成'
+                elif record['result'] in ('完成', '搁置') and failures:
+                    record['result'] = '部分完成' if successful else '失败'
+                    record['result_reason'] = '未成功或结果不可用的工具操作：' + '、'.join(
+                        item['tool'] + '（' + tool_state(item) + '）' for item in failures)
+                if record['result'] in ('失败', '部分完成') and not record['next_step']:
+                    record['next_step'] = '如有结果未确认的操作，先核实它；工具已返回成功的操作不必重读。不要重复写入。'
+                after = sum(self.chat.budget.category_totals(self.chat.cfg.id))
+                record['finished_at'] = now()
+                record['cost_cny'] = str(max(after - before, 0)) if before is not None else '0'
+                # Ticket 152: which model actually served this wake, for later comparison.
+                provider = getattr(self.chat.cfg, 'provider', None) or {}
+                record['model'] = str(provider.get('label') or provider.get('model') or '')
+            finally:
+                self.chat.output, self.chat.approval = old_output, old_approval
+                self.chat.autonomy_should_yield = old_yield
+                self.chat.autonomy_message_output = old_message_output
+                self.chat.autonomy_message_lock = old_message_lock
+                self.chat.autonomy_run_id = old_run_id
+                self.chat.autonomy_mode = False
+                self.deadline = None
+                self.active = False
+                self.hub.autonomy_busy = False
+                self.hub.autonomy_interrupted.clear()
+            if not self.rows or self.rows[-1].get('started_at') != started_at:
+                self._append(record)
+            self.active_path.unlink(missing_ok=True)
+
+    def _append(self, record):
+        self.chat.store.append(self.path, record)
+        self.rows.append(record)
+
+    def command(self):
+        task = self.chat.long_tasks.summary()
+        task_line = '' if task is None else (
+            f"长期任务：{task['title']}（{task['status']}）\n"
+            f"最近进度/结果：{task['progress']}\n下一步：{task['next_step']}\n"
+            f"等待确认：{task['waiting_for'] or '无'}\n")
+        if not self.rows:
+            return task_line + ('还没有自主活动记录。' if not task_line else '')
+        lines = []
+        for saved in reversed(self.rows[-10:]):
+            row = activity_view(saved)
+            lines.append(f"{row['started_at']} | {row['decision'] or '未留下决定'} | "
+                         f"{row['result']}：{row['result_reason']} | ¥{row['cost_cny']}")
+            if row['lab_files_changed']:
+                lines.append('已留存文件：' + '、'.join(row['lab_files_changed']))
+            for item in row['tools']:
+                lines.append(f"工具：{item['tool']} | {item['path']} | {tool_state(item)}")
+            if row['next_step']:
+                lines.append('下一步：' + row['next_step'])
+        return task_line + '\n'.join(lines)
+
+
+class GlanceController:
+    """Short-lived, Windows-only check-ins while Lan is actively using the desktop."""
+
+    def __init__(self, chat, hub, *, clock=None, rng=None):
+        self.chat, self.hub = chat, hub
+        self.activity = hub.activity
+        self.config = getattr(chat.cfg, 'glance', None) or {}
+        self.platform_enabled = (sys.platform == 'win32' and bool(self.config)
+                                 and self.config.get('enabled') is True)
+        self.minimum = int(self.config.get('min_interval_minutes', 15))
+        self.maximum = int(self.config.get('max_interval_minutes', 40))
+        self.idle_seconds_limit = int(self.config.get('idle_seconds', 300))
+        self.max_steps = min(int(self.config.get('max_steps', 4)), 4)
+        self.daily_budget = self.config.get('daily_budget_cny', Decimal('1'))
+        self.last_path = f'{chat.cfg.id}/glance-last.json'
+        self.settings_path = chat.store.root / chat.cfg.id / 'glance-settings.json'
+        self._rng = rng or random
+        self._next_at = None
+        self._claimed = False
+        self._last_lock_check = 0.0
+        self._desktop_ready = False
+        self._budget_day = datetime.now().astimezone().date().isoformat()
+        self._budget_checked_at = 0.0
+        self._budget_available_cache = True
+        self._input_clock = clock
+        if self.platform_enabled and self._input_clock is None:
+            from veil.integrations.qq_channel import IdleClock, _windows_input_clock
+            from veil.windows.desktop_access import register_input_tracker
+            self._input_clock = IdleClock(*_windows_input_clock())
+            register_input_tracker(self._input_clock)
+        self._enabled = self._read_enabled()
+        self.announce()
+
+    def _read_enabled(self):
+        if not self.platform_enabled:
+            return False
+        try:
+            value = json.loads(self.settings_path.read_text(encoding='utf-8'))
+            if type(value.get('enabled')) is bool:
+                return value['enabled']
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, UnicodeError, AttributeError):
+            return False
+        return True
+
+    def enabled(self):
+        return self.platform_enabled and self._enabled
+
+    def set_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise UserError('瞄一眼设置无效。')
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.chat.store.replace(f'{self.chat.cfg.id}/glance-settings.json', {'enabled': enabled})
+        self._enabled = enabled if self.platform_enabled else False
+        self._next_at = None
+        return self.enabled()
+
+    def announce(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        announce = getattr(files, 'announce_glance', None)
+        if not callable(announce):
+            return
+        if announce() is not False:
+            self.chat.pending_capability_event = getattr(self.chat.tools, 'capability_event', None)
+            event = getattr(self.chat.tools, 'capability_event_model', None)
+            self.chat.pending_capability_event_model = event if isinstance(event, str) else None
+
+    def _desktop_is_open(self):
+        if not self.enabled() or not self.activity.enabled() or self.hub.stopping or self.hub.stopped:
+            return False
+        return self.desktop_recent_unlocked(self.idle_seconds_limit)
+
+    def desktop_recent_unlocked(self, idle_seconds=300):
+        """Use the shared input clock and lock check without requiring glance itself to be on."""
+        try:
+            if self._input_clock is None or self._input_clock.idle_seconds() >= idle_seconds:
+                return False
+            current = time.monotonic()
+            if current - self._last_lock_check >= 1.0:
+                from veil.windows.windows_observer import WindowsDesktopBackend
+                WindowsDesktopBackend._check_default_desktop()
+                self._last_lock_check = current
+                self._desktop_ready = True
+            return self._desktop_ready
+        except Exception:
+            self._desktop_ready = False
+            self._last_lock_check = time.monotonic()
+            return False
+
+    def _budget_available(self):
+        today = datetime.now().astimezone().date().isoformat()
+        if today == self._budget_day and time.monotonic() - self._budget_checked_at < 30:
+            return today, self._budget_available_cache
+        spent, pending = self.chat.budget.category_totals(
+            self.chat.cfg.id, category='glance')
+        if pending > 0 and spent + pending >= self.daily_budget:
+            # Ticket 211: an old unsettled glance reservation must not keep the budget full.
+            try:
+                settled = self.chat.budget.settle_stale_glance()
+            except (OSError, UserError):
+                settled = 0  # leave it for the next check; never break scheduling
+            if settled:
+                spent, pending = self.chat.budget.category_totals(
+                    self.chat.cfg.id, category='glance')
+        self._budget_day = today
+        self._budget_checked_at = time.monotonic()
+        self._budget_available_cache = spent + pending < self.daily_budget
+        return today, self._budget_available_cache
+
+    def due(self):
+        eligible = self._desktop_is_open()
+        today, budget_available = self._budget_available() if self.platform_enabled else (None, False)
+        if getattr(self, '_budget_day', today) != today:
+            self._budget_day = today
+            self._next_at = None
+        if not eligible or not budget_available:
+            self._next_at = None
+            return False
+        current = datetime.now().astimezone()
+        if self._next_at is None:
+            minutes = self._rng.randint(self.minimum, self.maximum)
+            self._next_at = current + timedelta(minutes=minutes)
+            return False
+        return current >= self._next_at
+
+    def claim_due(self):
+        if not self.due():
+            return False
+        self._next_at = None
+        self._claimed = True
+        return True
+
+    def desktop_items(self):
+        from veil.tools.desktop_files import desktop_item_names
+        return desktop_item_names()
+
+    def _observe(self):
+        files = getattr(self.chat.tools, 'files', self.chat.tools)
+        tools = getattr(files, 'windows_tools', None)
+        if tools is None:
+            return None, None, 'Windows 桌面观察不可用。'
+        foreground, state, _ = tools.invoke('windows_foreground', {})
+        if state != '成功':
+            # Lan on the bare desktop or with only VEIL open: still a real moment Peter can
+            # react to, so he sees the names of what sits on her desktop (never file contents).
+            listing = self.desktop_items()
+            if listing is None:
+                items = 'Her desktop items could not be listed.'
+            else:
+                names, more = listing
+                items = ('Items on her desktop, newest first: ' + ', '.join(names) + (', …' if more else '')
+                         if names else 'Her desktop has no items on it.')
+            return {'application': 'desktop'}, (
+                'No application window is open in front, so Lan is most likely on her bare desktop '
+                '(or only VEIL is open). ' + items), None
+        try:
+            metadata = json.loads(str(foreground).partition('\n')[2])
+            window_id = metadata['window_id']
+            if not isinstance(window_id, str):
+                raise ValueError
+        except (ValueError, TypeError, KeyError):
+            return None, None, '无法安全确认当前前台窗口。'
+        observed, state, _ = tools.invoke(
+            'windows_observe', {'window_id': window_id, 'visual_fallback': 'never'},
+            should_stop=self.should_yield)
+        if state != '成功':
+            # Window known but its contents unreadable (games, canvases): keep the glance
+            # going with the application name and title only.
+            return metadata, (
+                f"Lan's front window is {metadata.get('application')!s:.80} titled "
+                f"{metadata.get('title')!s:.200}; its contents could not be read. Reason: {str(observed)[:300]}"), None
+        return metadata, observed, None
+
+    def should_yield(self):
+        return (self.hub.stopping or self.hub.stopped or self.hub.autonomy_interrupted.is_set()
+                or not self.activity.enabled() or not self._desktop_is_open())
+
+    def run(self):
+        self._claimed = False
+        started_at = now()
+        from veil.brain.recent_experiences import begin_glance, record_glance
+        begin_glance(self.chat.store, self.chat.cfg, started_at)
+        self.chat.last_tool_summaries = []
+        row = {'started_at': started_at, 'finished_at': None, 'decision': '',
+               'result': '搁置', 'result_reason': '', 'foreground': {}, 'tools': [], 'cost_cny': '0'}
+        before = Decimal(0)
+        old_output, old_yield = self.chat.output, self.chat.autonomy_should_yield
+        old_approval = self.chat.approval
+        old_message_output = self.chat.autonomy_message_output
+        old_run_id = self.chat.autonomy_run_id
+        old_mode = getattr(self.chat, 'glance_mode', False)
+        old_tool_limit = getattr(self.chat, 'glance_tool_limit', 4)
+        try:
+            before = sum(self.chat.budget.category_totals(self.chat.cfg.id, category='glance'))
+            metadata, observed, error = self._observe()
+            if metadata:
+                row['foreground'] = {key: metadata.get(key) for key in ('application', 'title', 'state')}
+                record_glance(self.chat.store, self.chat.cfg, row)
+            if error:
+                row['result_reason'] = error
+                return
+            window_context = str(observed)[:8000]
+            context = (prompts.text('autonomy.glance.rules') + '\n' + window_context)
+            context += ('\n' + prompts.text('autonomy.glance.note'))
+            self.chat.output = lambda *_: None
+            self.chat.approval = not_asked
+            self.chat.autonomy_should_yield = self.should_yield
+            self.chat.autonomy_run_id = 'glance:' + started_at
+            self.chat.autonomy_message_output = old_output
+            self.chat.glance_mode = True
+            self.chat.glance_tool_limit = self.max_steps
+            self.hub.autonomy_busy = True
+            with self.chat.budget.glancing(self.chat.cfg.id, self.daily_budget):
+                answer = self.chat.send(
+                    'Take a brief look at what Lan is doing now.', autonomy=True,
+                    extra_context=context)
+            row['decision'] = answer.strip()[:1000] or '这次安静离开。'
+            row['result_reason'] = row['decision']
+            row['result'] = '完成'
+            row['tools'] = self.chat.last_tool_summaries
+        except BudgetExceeded as exc:
+            row['result_reason'] = str(exc)
+        except (RequestFailed, TooLong, UserError) as exc:
+            row['result'] = '失败'
+            row['result_reason'] = str(exc)[:500]
+        except Exception:
+            row['result'] = '失败'
+            row['result_reason'] = '瞄一眼意外中断；没有自动重试。'
+        finally:
+            try:
+                row['finished_at'] = now()
+                row['tools'] = self.chat.last_tool_summaries
+                after = sum(self.chat.budget.category_totals(self.chat.cfg.id, category='glance'))
+                row['cost_cny'] = str(max(after - before, Decimal(0)))
+                self._budget_checked_at = 0.0
+                self.chat.store.replace(self.last_path, {'activity': row})
+                record_glance(self.chat.store, self.chat.cfg, row)
+                # Only the legacy one-shot handoff is acknowledged. The new private
+                # experience remains available until the next glance starts.
+                acknowledge_glance_handoff(self.chat.store, self.chat.cfg, started_at)
+            finally:
+                self.chat.output, self.chat.autonomy_should_yield = old_output, old_yield
+                self.chat.approval = old_approval
+                self.chat.autonomy_message_output = old_message_output
+                self.chat.autonomy_run_id = old_run_id
+                self.chat.glance_mode = old_mode
+                self.chat.glance_tool_limit = old_tool_limit
+                self.chat.autonomy_mode = False
+                self.hub.autonomy_busy = False
+                self.hub.autonomy_interrupted.clear()
+
+    def status(self):
+        try:
+            saved = json.loads(self.settings_path.read_text(encoding='utf-8'))
+            enabled = self.platform_enabled and saved.get('enabled') is True
+        except (FileNotFoundError, OSError, ValueError, UnicodeError, AttributeError):
+            enabled = self.enabled()
+        try:
+            last = json.loads((self.chat.store.root / self.last_path).read_text(encoding='utf-8')).get('activity')
+            history = [last] if isinstance(last, dict) else []
+        except (OSError, ValueError, UnicodeError, AttributeError):
+            history = []
+        next_at = self._next_at.isoformat() if self._next_at else None
+        return {'glance_enabled': enabled, 'glance_next_at': next_at,
+                'glance_activity': history}
+

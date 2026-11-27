@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_files import MAX_CREATE_BYTES, DesktopFileTools
-from tools_agent import tool_policy
+from veil.tools.desktop_files import MAX_CREATE_BYTES, DesktopFileTools
+from veil.tools.tools_agent import tool_policy
 
 
 class DesktopFileToolTests(unittest.TestCase):

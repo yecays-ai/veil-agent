@@ -6,13 +6,13 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-import brain_backup
-import brain_events
-import brain_export
-from brain_migrate import migrate_role
-from brain_store import BrainStore
-from brain_authority_init import initialize
-from veil_agent import Store
+from veil.brain.storage import brain_backup
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_export
+from veil.brain.storage.brain_migrate import migrate_role
+from veil.brain.storage.brain_store import BrainStore
+from veil.brain.storage.brain_authority_init import initialize
+from veil.core.veil_agent import Store
 
 
 class EventLedgerTests(unittest.TestCase):
@@ -87,8 +87,8 @@ class EventLedgerTests(unittest.TestCase):
 
 class StartupMigrationTests(unittest.TestCase):
     def test_memory_startup_migrates_legacy_event_files(self):
-        from memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.brain.memory_agent import Memory
+        from veil.core.veil_agent import Budget, Character
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         store = Store(temp.name + '/data')
@@ -212,7 +212,7 @@ class BackupSafetyTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.db = self.root / 'brain.db'
         initialize(self.db)
-        import brain_writer
+        from veil.brain.storage import brain_writer
         connection = sqlite3.connect(str(self.db))
         try:
             brain_writer.create_memory(connection, {'body': 'old'}, embedder=lambda _: [0.1] * 1024)
@@ -222,7 +222,7 @@ class BackupSafetyTests(unittest.TestCase):
         brain_backup.backup(self.db, self.backup)
 
     def _add_new(self):
-        import brain_writer
+        from veil.brain.storage import brain_writer
         connection = sqlite3.connect(str(self.db))
         try:
             brain_writer.create_memory(connection, {'body': 'new after backup'},
@@ -290,7 +290,7 @@ class BackupSafetyTests(unittest.TestCase):
         self.assertTrue(list(self.root.glob('brain.db.pre-restore-*')))
 
     def test_restore_merges_full_new_memory_and_event_lifecycle(self):
-        import brain_writer
+        from veil.brain.storage import brain_writer
         connection = sqlite3.connect(str(self.db))
         try:
             created = brain_writer.create_memory(
@@ -360,9 +360,9 @@ class BackupSafetyTests(unittest.TestCase):
 
     def test_legacy_events_and_full_stage_rows_are_imported(self):
         import json
-        from brain_events import read_rows
-        from brain_migrate import migrate_role
-        from veil_agent import Store
+        from veil.brain.storage.brain_events import read_rows
+        from veil.brain.storage.brain_migrate import migrate_role
+        from veil.core.veil_agent import Store
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         store = Store(temp.name + '/data')
@@ -407,7 +407,7 @@ class BackupSafetyTests(unittest.TestCase):
         self.assertFalse((out / 'event-dream.json').exists())
 
     def test_backup_path_with_hash_is_opened_exactly(self):
-        import brain_backup
+        from veil.brain.storage import brain_backup
         target = Path(self.temp.name) / 'brain#1.db'
         brain_backup.backup(self.db, target)
         self.assertTrue(target.is_file())

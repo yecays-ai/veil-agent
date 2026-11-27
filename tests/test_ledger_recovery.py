@@ -9,10 +9,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-import backup_restore
-import data_repair
-import ledger_recovery as ledger
-from veil_agent import Budget, BudgetExceeded, Store, UserError
+from veil.system import backup_restore
+from veil.system import data_repair
+from veil.system import ledger_recovery as ledger
+from veil.core.veil_agent import Budget, BudgetExceeded, Store, UserError
 
 DAY = '2026-11-01T10:00:00+08:00'
 
@@ -364,10 +364,10 @@ class RepairTests(unittest.TestCase):
         store = Store(self.root / 'data')
         with self.assertRaises(UserError) as caught:
             store.read('fixture/chat.jsonl')
-        self.assertIn('data_repair.py diagnose --file', str(caught.exception))
+        self.assertIn('veil.system.data_repair diagnose --file', str(caught.exception))
         with self.assertRaises(UserError) as caught:
             store.append('fixture/chat.jsonl', {'n': 9})
-        self.assertIn('data_repair.py diagnose --file', str(caught.exception))
+        self.assertIn('veil.system.data_repair diagnose --file', str(caught.exception))
 
 
 if __name__ == '__main__':

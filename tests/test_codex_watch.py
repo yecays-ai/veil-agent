@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from codex_watch import CodexWatchController
+from veil.autonomy.codex_watch import CodexWatchController
 
 
 class CodexWatchAnnouncementTests(unittest.TestCase):

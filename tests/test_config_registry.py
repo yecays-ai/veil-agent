@@ -3,9 +3,9 @@ import math
 import unittest
 from dataclasses import FrozenInstanceError
 
-from config_registry import (ConfigDefinition, ConfigEvidence, ConfigRegistry, Observation, Scope,
+from veil.core.config_registry import (ConfigDefinition, ConfigEvidence, ConfigRegistry, Observation, Scope,
                              Source, ValueType, model_config_overview)
-from model_settings import ROLES
+from veil.core.model_settings import ROLES
 
 
 class ConfigRegistryTests(unittest.TestCase):

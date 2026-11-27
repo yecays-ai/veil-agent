@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_icons import (
+from veil.windows.desktop_icons import (
     DesktopIcon,
     DesktopIconsError,
     DesktopIconsLayoutBlocked,
@@ -15,7 +15,7 @@ from desktop_icons import (
     generate_icon_id,
     validate_layout_plan,
 )
-from veil_agent import Store
+from veil.core.veil_agent import Store
 
 
 class DesktopIconsCoreTests(unittest.TestCase):

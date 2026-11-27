@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock
 
-from web_agent import make_handler
+from veil.server.web_agent import make_handler
 
 
 class ConfigOverviewRouteTests(TestCase):

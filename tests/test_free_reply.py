@@ -6,10 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil_agent import Budget, Chat, Store, load_character
-from agent_types import RequestFailed
-from web_agent import Hub, ChatAction
-from veil_agent import ActivityState
+from veil.core.veil_agent import Budget, Chat, Store, load_character
+from veil.core.agent_types import RequestFailed
+from veil.server.web_agent import Hub, ChatAction
+from veil.core.veil_agent import ActivityState
 
 TOML = '''name = "Test"
 provider = "fake"
@@ -81,7 +81,7 @@ class FreeReplyTests(unittest.TestCase):
 
     def test_fake_sticker_marker_in_a_plain_reply_is_sent_back_to_peter(self):
         # Ticket 224: typing a sticker marker for a sticker that does not exist is not a reply.
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         model = Mock(side_effect=[
@@ -110,7 +110,7 @@ class FreeReplyTests(unittest.TestCase):
 
     def test_retry_after_a_fake_sticker_keeps_the_reasoning_of_that_reply(self):
         # DeepSeek's thinking mode answers 400 when the reasoning of a reply put back in the request is missing.
-        from stickers import StickerLibrary
+        from veil.chat.stickers import StickerLibrary
         library = StickerLibrary(self.root / 'stickers')
         library.add_bytes('peter', 'chair', b'\x89PNG\r\n\x1a\n' + b'0' * 20, create_pack=True)
         model = Mock(side_effect=[
@@ -516,7 +516,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
             hub.set_typing(False)
 
         worker = threading.Thread(target=keep_typing_then_send)
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2), patch('veil.server.web_agent.TYPING_ACTIVE_SECONDS', 0.3):
             worker.start()
             batch = hub._input_fn()
         worker.join()
@@ -527,7 +527,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
         from unittest.mock import patch
         hub = self.hub()
         hub.inbox.put(('hi', None, None, 'id-1', False))
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2):
             started = time.monotonic()
             batch = hub._input_fn()
         self.assertEqual(str(batch), 'hi')
@@ -540,7 +540,7 @@ class WaitWhileLanTypesTests(unittest.TestCase):
         hub.set_typing(True)
         hub.typed_at = time.monotonic() - 10
         hub.inbox.put(('hi', None, None, 'id-1', False))
-        with patch('web_agent.TYPING_GRACE_SECONDS', 0.2), patch('web_agent.TYPING_ACTIVE_SECONDS', 0.3):
+        with patch('veil.server.web_agent.TYPING_GRACE_SECONDS', 0.2), patch('veil.server.web_agent.TYPING_ACTIVE_SECONDS', 0.3):
             started = time.monotonic()
             batch = hub._input_fn()
         self.assertEqual(str(batch), 'hi')

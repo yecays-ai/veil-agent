@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import brain_events
-import brain_writer
-import veil_brain
-from brain_migrate import unhide_legacy_rows
-from brain_read import BrainRead
-from veil_agent import Store
+from veil.brain.storage import brain_events
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.storage.brain_migrate import unhide_legacy_rows
+from veil.brain.storage.brain_read import BrainRead
+from veil.core.veil_agent import Store
 
 
 class UnhideMigrationTests(unittest.TestCase):
@@ -122,8 +122,8 @@ class UnhideMigrationTests(unittest.TestCase):
 
     def test_memory_startup_runs_unhide_migration(self):
         from unittest.mock import Mock
-        from memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.brain.memory_agent import Memory
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('startup hidden', is_hidden=1, dont_surface=1,
                                  bucket='archive', type='archived')
         provider = {'model': 'fake', 'max_input_tokens': 20000, 'input_cny_per_million': 1,
@@ -147,8 +147,8 @@ class UnhideMigrationTests(unittest.TestCase):
 
     def test_pending_delete_stays_unreadable_after_hidden_removal(self):
         from unittest.mock import Mock
-        from memory_agent import Memory
-        from veil_agent import Budget, Character
+        from veil.brain.memory_agent import Memory
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('pending runtime')
         connection = sqlite3.connect(str(self.db))
         try:
@@ -178,9 +178,9 @@ class UnhideMigrationTests(unittest.TestCase):
 
     def test_autonomous_delete_request_reaches_lan_and_approval_removes(self):
         from unittest.mock import Mock
-        from memory_agent import Memory
-        from memory_native import NativeMemoryTools
-        from veil_agent import Budget, Character
+        from veil.brain.memory_agent import Memory
+        from veil.brain.memory_native import NativeMemoryTools
+        from veil.core.veil_agent import Budget, Character
         rejected_id = self._create('keep after rejection')
         approved_id = self._create('remove after approval')
         connection = sqlite3.connect(str(self.db))
@@ -226,9 +226,9 @@ class UnhideMigrationTests(unittest.TestCase):
         # Regression guard for the is_hidden(delete_pending) conflict: the pending flag itself
         # must not make process_pending_deletions reject the request before Lan sees it.
         from unittest.mock import Mock
-        from memory_agent import Memory
-        from memory_native import NativeMemoryTools
-        from veil_agent import Budget, Character
+        from veil.brain.memory_agent import Memory
+        from veil.brain.memory_native import NativeMemoryTools
+        from veil.core.veil_agent import Budget, Character
         memory_id = self._create('pending approval')
         connection = sqlite3.connect(str(self.db))
         try:
@@ -275,7 +275,7 @@ class PageContractTests(unittest.TestCase):
 
     def test_native_trace_schema_no_longer_offers_a_hide_argument(self):
         root = Path(__file__).resolve().parents[1]
-        source = (root / 'memory_native.py').read_text(encoding='utf-8')
+        source = (root / 'veil' / 'brain' / 'memory_native.py').read_text(encoding='utf-8')
         schema = source.split('trace_schema', 1)[1][:3000] if 'trace_schema' in source else source
         self.assertNotIn("'dont_surface': {'type': 'boolean'", schema)
 

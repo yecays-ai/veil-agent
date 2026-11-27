@@ -18,14 +18,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import brain_retrieval
-import brain_writer
-import diagnostics
-import veil_brain
-from brain_read import BrainRead
-from memory_agent import Memory
-from recall_judge import DEFAULTS as JUDGE_DEFAULTS
-from veil_agent import Budget, Character, Store
+from veil.brain.recall import brain_retrieval
+from veil.brain.storage import brain_writer
+from veil.system import diagnostics
+from veil.brain.storage import veil_brain
+from veil.brain.storage.brain_read import BrainRead
+from veil.brain.memory_agent import Memory
+from veil.brain.recall.recall_judge import DEFAULTS as JUDGE_DEFAULTS
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class CountingEmbedder:
@@ -118,7 +118,7 @@ class ModelSwitchRetryTests(MemoryFixture):
                 "SELECT value FROM meta WHERE key='embedding_model'").fetchone()
         self.assertIsNotNone(stored)
         authority._last_pending_retry = 0.0
-        with patch('brain_writer.retry_pending_vectors',
+        with patch('veil.brain.storage.brain_writer.retry_pending_vectors',
                    side_effect=AssertionError('must not retry after a model switch')):
             authority._retry_pending(CountingEmbedder([1.0] * 1024, 'another-model').embed)
 
@@ -189,7 +189,7 @@ class ApiPassThroughTests(MemoryFixture):
         self.assertEqual(chain['recall']['judge']['candidates'], 8)
 
     def test_live_context_passes_retrieval_and_degraded_to_the_api(self):
-        from web_agent import Hub
+        from veil.server.web_agent import Hub
         role = self.store.root / 'peter'
         role.mkdir(parents=True, exist_ok=True)
         context_row = {'time': '2026-11-26T10:00:00+08:00', 'kind': 'chat',

@@ -14,9 +14,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock
 
-from memory_agent import Memory, vault_path
+from veil.brain.memory_agent import Memory, vault_path
 from test_recall_rotation import FictionalOmbre
-from veil_agent import Budget, Character, Store
+from veil.core.veil_agent import Budget, Character, Store
 
 STORY_V1 = ('The kiln fired twice. The first glaze ran, the second one held. V1STORYMARK and the end.')
 STORY_V2 = ('A different telling about the same evening. V2STORYMARK and nothing else.')

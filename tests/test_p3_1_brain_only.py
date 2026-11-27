@@ -4,14 +4,14 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-import brain_writer
-import veil_brain
-from brain_read import BrainRead
-from memory_agent import Memory
-from memory_native import NativeMemoryTools
-from veil_agent import UserError
-from recall_judge import RecallJudge, load_settings
-from veil_agent import Budget, Character, Store
+from veil.brain.storage import brain_writer
+from veil.brain.storage import veil_brain
+from veil.brain.storage.brain_read import BrainRead
+from veil.brain.memory_agent import Memory
+from veil.brain.memory_native import NativeMemoryTools
+from veil.core.veil_agent import UserError
+from veil.brain.recall.recall_judge import RecallJudge, load_settings
+from veil.core.veil_agent import Budget, Character, Store
 
 
 class FakeEmbedder:

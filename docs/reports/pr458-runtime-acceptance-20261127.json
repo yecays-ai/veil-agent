@@ -1,0 +1,136 @@
+{
+  "tool": "pr458-runtime-acceptance",
+  "date": "2026-11-27",
+  "old_tree_source": "d78a8b7",
+  "new_tree_source": "c266d71",
+  "environment": {
+    "os": "Windows",
+    "python": "3.12.10",
+    "node": "24.22.0",
+    "network": "disabled for rollback checks via invalid proxy + PIP_NO_INDEX"
+  },
+  "upgrade": {
+    "old_update_bat_first_run_exit": 1,
+    "first_run_stop": "playwright cache EPERM after code update",
+    "old_update_bat_second_run_exit": 0,
+    "package_output": "Wrote new app to: dist\\VEIL-win32-x64",
+    "nowhere": "skipped with warning",
+    "data_paths_unchanged": true
+  },
+  "desktop": {
+    "old_asar_backend": {
+      "validRoot": true,
+      "connected": true,
+      "health_status": 200,
+      "ready": true,
+      "stopped": false
+    },
+    "new_asar_backend": {
+      "validRoot": true,
+      "connected": true,
+      "launch_args": [
+        "-m",
+        "veil.server.web_launcher",
+        "--no-browser"
+      ],
+      "health_status": 200,
+      "ready": true,
+      "stopped": false
+    },
+    "packaged_gui": "unverified: process exits 0 with no window in non-interactive session"
+  },
+  "brain_api_chat": {
+    "old_brain_db": {
+      "integrity": "ok",
+      "digest_ok": true,
+      "memories": 1,
+      "events": 1
+    },
+    "brain_overview_status": 200,
+    "brain_active": 1,
+    "brain_events_total": 1,
+    "memory_library_status": 200,
+    "memory_library_total": 1,
+    "memory_events_status": 200,
+    "memory_events_count": 1,
+    "memory_event_title": "Fictional drill event",
+    "send_status": 200,
+    "assistant_reply": "FICTIONAL DRILL REPLY",
+    "chat_file": "data/drill/chat.jsonl",
+    "chat_rows": 3,
+    "cost_ledger": "data/costs.jsonl"
+  },
+  "permissions_autonomy": {
+    "read_state": "success",
+    "new_write_state": "success",
+    "append_denied_state": "denied",
+    "append_approved_state": "success",
+    "autonomy_record": "data/peter/autonomy.jsonl",
+    "autonomy_record_grew": true,
+    "autonomy_cost_cny": "0.000360",
+    "autonomy_result": "shelved",
+    "experience_record": "unverified"
+  },
+  "full_offline_rollback": {
+    "skip_package": false,
+    "skip_python_deps": false,
+    "exit": 0,
+    "head_is_old_tree": true,
+    "package_success": true,
+    "old_code_brain_read": {
+      "integrity": "ok",
+      "digest_ok": true,
+      "memories": 1,
+      "events": 1
+    },
+    "data_paths_unchanged": true
+  },
+  "failure_recovery": {
+    "playwright_eprem": {
+      "exit": 1,
+      "code_updated": true,
+      "data_unchanged": true
+    },
+    "package_eperm": {
+      "exit": 1,
+      "previous_code_restored": true,
+      "previous_exe_restored": true,
+      "exe_sha256": "4fae31db45fd73d71f0bb24273283fcd629def48e6689aba63873b4cf9f024e8"
+    },
+    "dependency_missing": {
+      "exit": 1,
+      "previous_code_restored": true,
+      "data_sha256_unchanged": true
+    },
+    "dirty_tracked_refused": {
+      "exit": 1,
+      "head_unchanged": true
+    },
+    "untracked_conflict_refused": {
+      "exit": 1,
+      "head_unchanged": true,
+      "file_intact": true
+    }
+  },
+  "data_manifest": {
+    "backup_files": 11,
+    "unchanged_sensitive": [
+      ".env",
+      "persona/peter.md",
+      "persona/peter.example.md",
+      "characters/peter/character.toml",
+      "characters/peter/windows-apps.toml"
+    ],
+    "synthetic_changed": [
+      "characters/drill/character.toml",
+      "data/drill/brain.db"
+    ],
+    "formal_data_touched": false
+  },
+  "unverified": [
+    "packaged VEIL.exe GUI/display",
+    "Nowhere installation",
+    "autonomy experience record",
+    "real Peter data/model/chat"
+  ]
+}

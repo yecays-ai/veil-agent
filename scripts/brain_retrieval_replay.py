@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import brain_retrieval
+from veil.brain.recall import brain_retrieval
 
 
 def read_jsonl(path, required):
@@ -72,7 +72,7 @@ class Embedder:
 
     def __init__(self, env_file, model, base):
         from dotenv import dotenv_values
-        from recall_relevance import QueryEmbedder
+        from veil.brain.recall.recall_relevance import QueryEmbedder
         if not Path(env_file).is_file():
             raise SystemExit('--embed needs an env file with EMBED_API_KEY: %s' % env_file)
         values = dotenv_values(Path(env_file), interpolate=False, encoding='utf-8-sig')
