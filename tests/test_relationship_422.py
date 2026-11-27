@@ -100,7 +100,7 @@ max_bytes = 4000
     def seed_relationship(self, chat):
         # A confirmed item needs a checkable source: here, a real message in this role's chat log.
         self.store.append('peter/chat.jsonl', {'role': 'user', 'message_id': 'm-quiet',
-                                               'content': 'a hard day should get a quiet evening'})
+                                               'content': CONFIRMED})
         chat.profile._invoke_profile('profile_append', {'section': 'relationship',
                                                         'text': CONFIRMED, 'status': 'confirmed',
                                                         'sources': ['chat:m-quiet']})
@@ -477,9 +477,9 @@ class PageSaveProvenanceTests(unittest.TestCase):
         self.profile.save_relationship([{'id': 'lan-1', 'text': 'She comes home after seven.',
                                          'status': 'confirmed'}])
         self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-e',
-                                              'content': 'I like small surprises'})
+                                              'content': 'I like small surprises.'})
         self.profile._invoke_profile('profile_append', {'section': 'relationship',
-                                                        'text': 'She said small surprises are fine.',
+                                                        'text': 'I like small surprises.',
                                                         'status': 'confirmed', 'sources': ['chat:m-e']})
         self.profile._invoke_profile('profile_append', {'section': 'relationship',
                                                         'text': 'Maybe she prefers mornings.',
@@ -538,9 +538,9 @@ class EvidencePathTests(unittest.TestCase):
 
     def test_a_real_message_reference_makes_it_evidence(self):
         self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-kind',
-                                              'content': 'I do love early mornings actually'})
+                                              'content': 'I love early mornings.'})
         result, state, _ = self.profile._invoke_profile(
-            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+            'profile_append', {'section': 'relationship', 'text': 'I love early mornings.',
                                'status': 'confirmed', 'sources': ['chat:m-kind']})
         self.assertEqual('成功', state)
         item = self.profile.relationship_items()[0]
@@ -564,13 +564,13 @@ class EvidencePathTests(unittest.TestCase):
         events.parent.mkdir(parents=True, exist_ok=True)
         events.write_text('{"event_id":"e1","story":"The old fictional story."}\n', encoding='utf-8')
         self.store.append('fake/chat.jsonl', {'role': 'user', 'message_id': 'm-fix',
-                                              'content': 'no, it is not mornings, it is the evenings'})
+                                              'content': 'I love quiet evenings, not mornings.'})
         self.profile._invoke_profile('profile_append',
                                      {'section': 'relationship', 'text': 'She loves early mornings.'})
         self.profile._invoke_profile('profile_replace',
                                      {'section': 'relationship',
                                       'old_text': 'She loves early mornings.',
-                                      'new_text': 'She loves quiet evenings, not mornings.',
+                                      'new_text': 'I love quiet evenings, not mornings.',
                                       'sources': ['chat:m-fix']})
         items = self.profile.relationship_items()
         current = [item for item in items if item['status'] != 'outdated']
@@ -607,7 +607,7 @@ class ToolLoopEvidenceTests(ProfileFixture):
         chat, memory = self.build()
         self.install_tools(chat)
         arguments = json.dumps({'section': 'relationship',
-                                'text': 'She said a hard day wants a quiet evening, not a plan.',
+                                'text': 'After a hard day I want a quiet evening, not a plan.',
                                 'status': 'confirmed', 'sources': ['chat:m-now']})
         tool_call = types.SimpleNamespace(id='call-1', function=types.SimpleNamespace(
             name='profile_append', arguments=arguments))
@@ -621,7 +621,7 @@ class ToolLoopEvidenceTests(ProfileFixture):
                                       model_dump=lambda exclude_none=True: {
                                           'role': 'assistant', 'content': 'Fictional reply'})
         self.model.side_effect = [(first, 100, 20, 0), (final, 120, 5, 0)]
-        chat.send('今天好累', message_id='m-now')
+        chat.send('After a hard day I want a quiet evening, not a plan.', message_id='m-now')
         item = chat.profile.relationship_items()[0]
         self.assertEqual('confirmed', item['status'])
         self.assertEqual('evidence', item['source'])
@@ -882,14 +882,14 @@ class DamagedChatLogTests(EvidencePathTests):
             {'role': 'user', 'message_id': None, 'content': 'broken three'},
             {'role': 'user', 'message_id': '', 'content': 'broken four'},
             {'role': 'assistant', 'message_id': 'm-assistant', 'content': 'his own reply'},
-            {'role': 'user', 'message_id': 'm-real', 'content': 'I do love early mornings'},
+            {'role': 'user', 'message_id': 'm-real', 'content': 'I love early mornings.'},
         ]
         with path.open('w', encoding='utf-8') as handle:
             for row in rows:
                 handle.write(json.dumps(row) + '\n')
             handle.write('{not json at all}\n')
         result, state, _ = self.profile._invoke_profile(
-            'profile_append', {'section': 'relationship', 'text': 'She loves early mornings.',
+            'profile_append', {'section': 'relationship', 'text': 'I love early mornings.',
                                'status': 'confirmed', 'sources': ['chat:m-real']})
         self.assertEqual('成功', state)
         item = self.profile.relationship_items()[0]
@@ -947,12 +947,12 @@ class EvidenceVerificationTests(EvidencePathTests):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('w', encoding='utf-8') as handle:
             handle.write(json.dumps({'role': 'user', 'message_id': 'm-old',
-                                     'content': 'I really do love early mornings'}) + '\n')
+                                     'content': 'I love early mornings.'}) + '\n')
             for index in range(1200):
                 handle.write(json.dumps({'role': 'user', 'message_id': f'filler{index}',
                                          'content': 'fictional chatter ' * 40}) + '\n')
         self.profile._invoke_profile('profile_append',
-                                     {'section': 'relationship', 'text': 'She loves early mornings.',
+                                     {'section': 'relationship', 'text': 'I love early mornings.',
                                       'status': 'confirmed', 'sources': ['chat:m-old']})
         item = self.profile.relationship_items()[0]
         self.assertEqual('confirmed', item['status'])

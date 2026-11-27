@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
+from contextlib import closing
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,39 +43,29 @@ class _MiniStore:
         return self.read(rel_path)[-n:]
 
 
-class _StrictEventLearnedContext(LearnedContext):
-    """Candidate AB-A2 rule: allows `event:<id>` to promote to `confirmed` ONLY when the event has
-    S2 `stage-evidence` (kind='chat', role='user') whose message_id verifies in chat.jsonl,
-    or a verbatim user quote verified in chat.jsonl."""
-
-    def __init__(self, data_root, character_id, settings, *, event_evidence_index):
-        super().__init__(data_root, character_id, settings)
-        self._event_evidence_index = event_evidence_index
-
-    def _verified_sources(self, sources):
-        kept_chat, pointers, dropped = super()._verified_sources(sources)
-        promoted_events = []
-        remaining_pointers = []
-        for ptr in pointers:
-            kind, _, val = ptr.partition(':')
-            if kind == 'event' and val in self._event_evidence_index:
-                ev_mids = self._event_evidence_index[val]
-                verified_mids = self._chat_user_messages(ev_mids)
-                if verified_mids:
-                    promoted_events.append(ptr)
-                    continue
-            remaining_pointers.append(ptr)
-        return list(dict.fromkeys([*kept_chat, *promoted_events])), remaining_pointers, dropped
-
-
 class _NaiveEventLearnedContext(LearnedContext):
-    """Counter-example AB-A2 rule: treats ANY `event:` pointer as confirmed without user chat proof."""
+    """Deliberately unsafe comparison arm, never used by the product."""
 
-    def _verified_sources(self, sources):
-        kept_chat, pointers, dropped = super()._verified_sources(sources)
-        promoted = [p for p in pointers if p.startswith('event:')]
-        rest = [p for p in pointers if not p.startswith('event:')]
-        return list(dict.fromkeys([*kept_chat, *promoted])), rest, dropped
+    def _relationship_provenance(self, status, sources, claim_text='', data=None):
+        result = super()._relationship_provenance(status, sources, claim_text, data)
+        if not result['rebutted'] and any(ref.startswith('event:') for ref in sources):
+            result.update(status=status, source='evidence', downgraded=False, evidence_state='valid')
+        return result
+
+
+def _seed_a2_evidence(db_path, *stage_ledgers):
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.executescript("""
+            CREATE TABLE events (event_id TEXT PRIMARY KEY, memory_id TEXT);
+            CREATE TABLE event_ledger (id INTEGER PRIMARY KEY, ledger_seq INTEGER,
+                                       kind TEXT, event_id TEXT, payload_json TEXT);
+        """)
+        for ledger, event_id in stage_ledgers:
+            conn.execute('INSERT INTO events VALUES (?, NULL)', (event_id,))
+            conn.executemany('INSERT INTO event_ledger VALUES (NULL, ?, ?, ?, ?)',
+                             ((seq, kind, event_id, json.dumps(row))
+                              for seq, (kind, row) in enumerate(ledger)))
+        conn.commit()
 
 
 class _FourZoneLearnedContext(LearnedContext):
@@ -142,11 +134,11 @@ def verify_a2_s2_write_path():
         # Build isolated chat.jsonl & tools.jsonl with realistic S2 timestamps
         chat_rows = [
             {'role': 'user', 'message_id': 'msg-u1', 'time': (now - timedelta(minutes=10)).isoformat(),
-             'content': '我加班累的时候不喜欢被说教，只想你陪我安安静静待一会儿。'},
+             'content': '我加班累的时候只想安静待一会儿。'},
             {'role': 'assistant', 'message_id': 'msg-a1', 'time': (now - timedelta(minutes=9)).isoformat(),
              'content': '好，我记住了，你累的时候我只安静陪着你。'},
             {'role': 'user', 'message_id': 'msg-u2', 'time': (now - timedelta(minutes=5)).isoformat(),
-             'content': '上次和这次都是这样，晚上十一点以后别催我复盘工作。'},
+             'content': '晚上十一点以后别催我复盘工作。'},
             {'role': 'assistant', 'message_id': 'msg-a2', 'time': (now - timedelta(minutes=4)).isoformat(),
              'content': '我猜她可能以后都不想聊工作了（这是我自己的猜测）。'},
         ]
@@ -188,15 +180,6 @@ def verify_a2_s2_write_path():
         quotes4 = em._explicit_user_quotes(stage4)
         ledger4, qrows4 = em._stage_evidence_ledger(stage4, 'e-missing-ev', [], quotes4, now)
 
-        # Build strict event->verified user message_ids index from S2 stage-evidence ledger rows
-        ev_index = {}
-        for ledger in (ledger1, ledger2, ledger3, ledger4):
-            for kind, payload in ledger:
-                if kind == 'stage-evidence' and payload.get('kind') == 'chat' and payload.get('role') == 'user':
-                    mid = payload.get('message_id')
-                    if mid:
-                        ev_index.setdefault(payload['event_id'], []).append(mid)
-
         # Verify S2 _capture_evidence preserved chat user messages despite 10 high-freq tool calls
         s2_chat_preserved = sum(1 for item in captured1 if item.get('kind') == 'chat' and item.get('role') == 'user')
 
@@ -210,13 +193,16 @@ def verify_a2_s2_write_path():
             if arm_name == 'chat_only':
                 lc = LearnedContext(arm_root, 'peter', settings)
             elif arm_name == 'strict_event_chat_evidence':
-                lc = _StrictEventLearnedContext(arm_root, 'peter', settings, event_evidence_index=ev_index)
+                _seed_a2_evidence(arm_root / 'peter' / 'brain.db',
+                                  (ledger1, 'e-user-quote'), (ledger2, 'e-multi-exp'),
+                                  (ledger3, 'e-peter-guess'), (ledger4, 'e-missing-ev'))
+                lc = LearnedContext(arm_root, 'peter', settings)
             else:
                 lc = _NaiveEventLearnedContext(arm_root, 'peter', settings)
 
             cases = [
-                ('S1_user_quote', '加班累时只想安静陪伴，不要说教', 'confirmed', ['event:e-user-quote'], True),
-                ('S2_multi_exp', '晚上十一点以后不复盘工作', 'confirmed', ['event:e-multi-exp'], True),
+                ('S1_user_quote', '我加班累的时候只想安静待一会儿。', 'confirmed', ['event:e-user-quote'], True),
+                ('S2_multi_exp', '晚上十一点以后别催我复盘工作。', 'confirmed', ['event:e-multi-exp'], True),
                 ('S4_peter_guess', '猜测她以后完全不想聊工作', 'confirmed', ['event:e-peter-guess'], False),
                 ('S5_missing_ev', '无有效证据的推断', 'confirmed', ['event:e-missing-ev', 'chat:nonexistent'], False),
             ]
@@ -246,7 +232,7 @@ def verify_a2_s2_write_path():
 
             # Scenario 3: User correction & deletion sovereignty (Lan edits/deletes via save_relationship)
             current = lc.relationship_items()
-            target_item = next(i for i in current if i['text'] == '加班累时只想安静陪伴，不要说教')
+            target_item = next(i for i in current if i['text'] == '我加班累的时候只想安静待一会儿。')
             edited = [dict(i, text='加班累时先问我需不需要安静陪着', status='confirmed')
                       if i['id'] == target_item['id'] else i for i in current]
             # Also delete Peter's guess item

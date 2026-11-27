@@ -382,7 +382,11 @@ test('the recall summary keeps base, recall and association apart (ticket 422)',
   assert.doesNotMatch(old, /关系底色 0 条/);
   const details = extract('recallDetails');
   assert.match(details({ relationship_base: { items: ['r1'], chars: 5, tokens: 2 } }),
-    /关系底色：1 条/);
+    /关系底色：存储 \? .*注入 1/);
+  assert.match(details({ relationship_base: {
+    stored_count: 2, active_count: 1, preselected_items: ['r1'], selected_items: [], items: [],
+    dropped: [{ id: 'r1', reason: 'space' }], reason: 'space',
+  } }), /存储 2 \/ 有效 1 \/ 初选 1 \/ 选中 0 \/ 注入 0.*space/);
   assert.match(details({ carried: ['u1'] }), /追问承接/);
   assert.match(details({}), /关系底色：未记录/);
 });

@@ -10,18 +10,25 @@ Facts, growth, and the relationship base sit in the stable prefix; ongoing is in
 user message so frequent updates do not invalidate the provider's prefix cache.
 Lan's edits, locks, corrections, and deletions always win.
 """
+import base64
+import copy
 import json
 import os
 import re
-import shutil
 import sqlite3
 import threading
 import uuid
+from collections import deque
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 from veil import prompts
+from veil.brain.storage.brain_lock import write_lock
 from veil.core.agent_types import UserError
+from veil.core.model_settings import ModelSettings
 
 SECTIONS = ('facts', 'growth')
 ALL_SECTIONS = ('facts', 'growth', 'relationship', 'ongoing')
@@ -52,9 +59,20 @@ DEFAULT_MAX_BYTES = sum(SECTION_BUDGETS.values())  # 6200
 VERSION = 1
 
 _AGREEMENT_RE = re.compile(
-    r'^(?:对|好|好的|好呀|嗯|行|可以|同意|确认|没错|是的|是啊|就这样|记住了|知道了|'
-    r'ok|okay|yes|yeah|yep|sure|agreed|agree|confirmed|confirm|got it|sounds good)[!！。.~～\s]*$',
+    r'^(?:对|好的?|好呀|嗯|行|可以|同意|确认|没错|是的|是啊|'
+    r'ok|okay|yes|yeah|yep|agreed|agree|confirmed|right|correct)[!！。.\s]*$',
     re.IGNORECASE,
+)
+_NON_ASSERTION_RE = re.compile(''.join((
+    r'["“”‘「」『』《》�\x00\x60:：；;。.!！?？\r\n]|(?<!\w)[\x27’]|[\x27’](?!\w)',
+    r'|(?:说|觉得|认为|以为|坦言|表示|提到|声称|写道|问我|可能|大概|也许|假如|如果|万一|',
+    r'只要|除非|假设|好像|据说|不确定|不一定|吗$|么$|吧$|难道|反话|开玩笑)',
+    r'|\b(?:said|says|told|claims?|thinks?|thought|believes?|according to|heard|',
+    r'guess|maybe|perhaps|possibly|probably|if|unless|suppose|imagine|joking)\b',
+)), re.IGNORECASE)
+_COMPOUND_QUESTION_RE = re.compile(
+    r'[,，、/]|还是|或者|而且|并且|以及|又要|同时|不但|可不可以|是不是|要不要'
+    r'|\b(?:and|or|but|also|then|otherwise)\b', re.IGNORECASE,
 )
 _NEGATION_RE = re.compile(
     r'(?:不要|不能|不可|不会|不想|别|禁止|勿|无需|不用|不再|从未|从来不|不喜欢|讨厌|反感|'
@@ -106,49 +124,89 @@ def _jaccard_similar(text_a, text_b, *, threshold=0.72, min_tokens=4):
     return union > 0 and (inter / union) >= threshold
 
 
+def _claim_units(text):
+    """Split for comparison only; never use these units to rewrite a stored note."""
+    return [piece.strip() for piece in re.split(r'\n+|(?<=[.!?;])\s+|(?<=[。！？；])', text)
+            if piece.strip()]
+
+
+def _matches_governed_claim(text, reference):
+    """Match exact or high-overlap wording; this is a veto check, not entailment."""
+    ref = _norm_text(reference)
+    if not ref:
+        return False
+    for candidate in [text, *_claim_units(text)]:
+        left = re.sub(r'^\s*(?:[-*+•]\s+|\d+[.)]\s+)', '', _norm_text(candidate)).rstrip('.!?。！？;；')
+        right = ref.rstrip('.!?。！？;；')
+        if (left == right or _jaccard_similar(left, right)
+                or (len(right) >= 8 and re.search(r'(?<![a-z0-9])' + re.escape(right) + r'(?![a-z0-9])', left))):
+            return True
+    return False
+
+
+def _veto_text(block, text, now, reason, item_id=None):
+    norm = _norm_text(text)
+    if not norm:
+        return
+    rows = block.setdefault('vetoed', [])
+    if not any(isinstance(v, dict) and v.get('norm_text') == norm for v in rows):
+        rows.append({'id': item_id, 'text': text, 'norm_text': norm,
+                     'vetoed_at': now, 'reason': reason})
+
+
+def _lift_exact_veto(block, text):
+    norm = _norm_text(text)
+    if block.get('vetoed'):
+        block['vetoed'] = [row for row in block['vetoed']
+                           if not (isinstance(row, dict) and row.get('norm_text') == norm)]
+
+
 def _has_negation(text):
     return bool(_NEGATION_RE.search(str(text or '')))
 
 
-def _supports_claim(user_text, claim_text):
-    """Programmatic content support check (0 LLM calls).
+def _literal_proposition(text):
+    """Normalize only whitespace, case and a single terminal statement mark."""
+    if not isinstance(text, str):
+        return ''
+    text = text.strip()
+    if text.endswith(('.', '。', '!', '！')):
+        text = text[:-1].rstrip()
+    if _NON_ASSERTION_RE.search(text) or not (_CJK_RE.search(text) or _WORD_RE.search(text)):
+        return ''
+    return _norm_text(text)
 
-    Boundaries:
-    1. Explicit agreement phrases or ultra-short replies (<= 6 chars) are accepted when backed
-       by a real user message.
-    2. Same-script substantive messages must share at least one lexical token/bigram with
-       claim_text (preventing unrelated real user messages from confirming a guess), AND must not
-       have opposite negation polarity on overlapping content (preventing "don't like X" from
-       confirming "likes X").
-    3. Cross-lingual pairs (e.g. Chinese user message + English claim summary) cannot be judged
-       by surface token overlap without an LLM; they remain accepted when backed by verified user
-       evidence (boundary explicitly documented).
-    """
-    raw = str(user_text or '').strip()
-    if not raw:
+
+def _confirmation_target(question):
+    """Accept an explicit yes/no check of one literal proposition, never a free-form question."""
+    if not isinstance(question, str) or not question.strip().endswith(('?', '？')):
+        return ''
+    question = question.strip()[:-1].rstrip()
+    tag = re.fullmatch(r'(.+?)[,，]\s*(?:对吗|是吗|没错吧|right|correct)', question, re.I)
+    if tag:
+        target = tag[1]
+    elif question.endswith('吗'):
+        target = question[:-1]
+    else:
+        english = re.fullmatch(r'(?:do (you .+)|is it true that (.+))', question, re.I)
+        if not english:
+            return ''
+        target = english[1] or english[2]
+    if _COMPOUND_QUESTION_RE.search(target) or target.rstrip().endswith(('.', '。', '!', '！')):
+        return ''
+    return _literal_proposition(target)
+
+
+def _supports_claim(user_text, claim_text, *, confirmation_target=''):
+    """Require literal whole-claim support; unknown entailment must stay uncertain."""
+    if not isinstance(user_text, str):
         return False
-    if _AGREEMENT_RE.fullmatch(raw):
-        return True
-    claim = str(claim_text or '').strip()
+    claim = _literal_proposition(claim_text)
     if not claim:
-        return True
-    if len(raw) <= 6 or len(claim) <= 6:
-        return True
-    raw_has_cjk = bool(_CJK_RE.search(raw))
-    claim_has_cjk = bool(_CJK_RE.search(claim))
-    if raw_has_cjk != claim_has_cjk:
-        return True
-    user_tokens = _lexical_tokens(raw)
-    claim_tokens = _lexical_tokens(claim)
-    if not user_tokens or not claim_tokens:
-        return True
-    if not (user_tokens & claim_tokens):
         return False
-    # Asymmetric polarity guard: a negated user statement ("don't like X" / "从来不喜欢X")
-    # must never confirm an affirmative claim ("likes X" / "喜欢X") on overlapping tokens.
-    if _has_negation(raw) and not _has_negation(claim):
-        return False
-    return True
+    if _AGREEMENT_RE.fullmatch(user_text.strip()):
+        return bool(confirmation_target and claim == confirmation_target)
+    return claim == _literal_proposition(user_text)
 
 
 def _resolve_section_budgets(settings):
@@ -180,13 +238,39 @@ class LearnedContext:
         self.legacy_max_bytes = settings.get('max_bytes')
         self.versions = self.root / (Path(self.path).stem + '.versions.jsonl')
         self.error_path = self.root / 'peter-page-errors.jsonl'
-        self.lock = threading.RLock()
+        self._instance_lock = threading.RLock()
+        self._storage_lock_held = False
+        self._lock_store = SimpleNamespace(root=self.root.parent)
+        self._journal = self.path.with_name(self.path.name + '.pending')
         self._logged_error = ''
         self._chat_cache_key = None
         self._chat_cache = {}
 
+    @property
+    def lock(self):
+        return self._storage_lock()
+
+    @contextmanager
+    def _storage_lock(self):
+        """Serialize the whole read/modify/write with other instances and Brain bundles."""
+        with self._instance_lock:
+            if self._storage_lock_held:
+                yield
+                return
+            with ExitStack() as stack:
+                try:
+                    stack.enter_context(write_lock(self._lock_store, self.root.name))
+                except OSError as exc:
+                    raise UserError(f'无法取得 {self.path.name} 的保存锁：{exc}') from exc
+                self._storage_lock_held = True
+                try:
+                    self._recover_storage_transaction()
+                    yield
+                finally:
+                    self._storage_lock_held = False
+
     def invalidate_evidence_cache(self):
-        with self.lock:
+        with self._instance_lock:
             self._chat_cache_key = None
             self._chat_cache = {}
 
@@ -211,11 +295,7 @@ class LearnedContext:
     def _migrate(self):
         if self.path.exists():
             return
-        self.root.mkdir(parents=True, exist_ok=True)
-        facts = self._legacy_text()
-        data = self._empty(facts)
-        self._write(data)
-        self._record('migrate', None, data)
+        self._commit_with_version('migrate', None, self._empty(self._legacy_text()))
 
     def _load(self):
         with self.lock:
@@ -327,37 +407,63 @@ class LearnedContext:
     # ---------- evidence ----------
 
     def _chat_user_index(self):
-        """Indexed cache of real user messages in chat.jsonl, invalidated on mtime/size change."""
+        """Index live user speech; record only directly adjacent assistant questions."""
         path = self.root / 'chat.jsonl'
         try:
-            st = path.stat()
-            key = (st.st_mtime_ns, st.st_size)
+            with path.open('rb') as handle:
+                before = os.fstat(handle.fileno())
+                content = handle.read()
+            after = path.stat()
+            if (before.st_ino, before.st_mtime_ns, before.st_size) != (
+                    after.st_ino, after.st_mtime_ns, after.st_size) or len(content) != after.st_size:
+                return None
+        except FileNotFoundError:
+            self.invalidate_evidence_cache()
+            return {}
         except OSError:
-            self._chat_cache_key = None
-            self._chat_cache = {}
+            self.invalidate_evidence_cache()
             return None
+        # Windows timestamps may not change on same-size rewrites within one clock tick.
+        key = sha256(content).digest()
         if self._chat_cache_key == key:
             return self._chat_cache
-        index = {}
-        try:
-            with path.open('r', encoding='utf-8', errors='replace') as handle:
-                for line in handle:
-                    try:
-                        row = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(row, dict) or row.get('role') != 'user':
-                        continue
-                    message_id = row.get('message_id') or row.get('id')
-                    if not isinstance(message_id, str) or not message_id:
-                        continue
-                    text = row.get('content') if isinstance(row.get('content'), str) else row.get('text')
-                    index[message_id] = {
-                        'text': text if isinstance(text, str) else '',
-                        'time': row.get('time') if isinstance(row.get('time'), str) else '',
-                    }
-        except OSError:
-            return None
+        index, seen, duplicates = {}, set(), set()
+        previous = None
+        for line in content.split(b'\n'):
+            preceding, previous = previous, None
+            try:
+                row = json.loads(line.decode('utf-8'))
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            mid = row.get('message_id') or row.get('id')
+            if not isinstance(mid, str) or not SOURCE_REF.fullmatch(f'chat:{mid}'):
+                continue
+            if mid in seen:
+                duplicates.add(mid)
+                continue
+            seen.add(mid)
+            role = row.get('role')
+            text = row.get('content') if 'content' in row else row.get('text')
+            if not isinstance(text, str) or not text.strip() or '�' in text:
+                continue
+            # For short acknowledgments, the proposed text is not itself evidence;
+            # it is only the object of this user turn's explicit confirmation.
+            if role == 'assistant':
+                target = _confirmation_target(text)
+                if target:
+                    previous = (mid, target)
+            elif role == 'user':
+                index[mid] = {
+                    'text': text, 'confirmation': preceding,
+                    'time': row.get('time') if isinstance(row.get('time'), str) else '',
+                }
+        for mid in duplicates:
+            index.pop(mid, None)
+        for info in index.values():
+            preceding = info.pop('confirmation')
+            info['confirmation_target'] = preceding[1] if preceding and preceding[0] not in duplicates else ''
         self._chat_cache_key = key
         self._chat_cache = index
         return index
@@ -373,116 +479,97 @@ class LearnedContext:
         return {mid: index[mid] for mid in wanted if mid in index}
 
     def _open_brain_ro(self):
-        db_path = self.root / 'brain.db'
-        if not db_path.is_file():
-            return None, False
         try:
-            uri = f'file:{db_path.as_posix()}?mode=ro'
+            uri = self.root.joinpath('brain.db').resolve().as_uri() + '?mode=ro'
             conn = sqlite3.connect(uri, uri=True, timeout=1.0)
             conn.row_factory = sqlite3.Row
             return conn, True
-        except sqlite3.Error:
-            try:
-                conn = sqlite3.connect(str(db_path), timeout=1.0)
-                conn.row_factory = sqlite3.Row
-                return conn, True
-            except sqlite3.Error:
-                return None, False
+        except (OSError, sqlite3.Error, ValueError):
+            return None, False
 
     def _resolve_db_evidence(self, pointer_kind, pointer_id, chat_index):
-        """Trace event:<id> or memory:<id> through brain.db to real user evidence.
-
-        Returns dict:
-          exists: bool
-          unavailable: bool
-          origins: list[tuple[origin_key, user_text]]
-        """
-        db_path = self.root / 'brain.db'
-        if not db_path.is_file():
-            return {'exists': False, 'unavailable': False, 'origins': []}
-        conn, ok = self._open_brain_ro()
-        if not ok or conn is None:
-            return {'exists': False, 'unavailable': True, 'origins': []}
+        """Resolve event and memory pointers to deduplicated, still-live chat row IDs."""
+        result = {'exists': False, 'unavailable': False, 'missing_origin': False, 'origins': set()}
         try:
-            tables = {
-                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            }
-            event_ids = []
-            memory_ids = []
-            exists = False
-            if pointer_kind == 'event' and 'events' in tables:
-                ev = conn.execute(
-                    'SELECT event_id, memory_id FROM events WHERE event_id=?', (pointer_id,)
-                ).fetchone()
-                if ev is not None:
-                    exists = True
-                    event_ids.append(ev['event_id'])
-                    if ev['memory_id']:
-                        memory_ids.append(ev['memory_id'])
-            elif pointer_kind == 'memory' and 'memories' in tables:
-                mem = conn.execute(
-                    'SELECT id, is_tombstone, is_deleted FROM memories WHERE id=?', (pointer_id,)
-                ).fetchone()
-                if mem is not None and not mem['is_tombstone'] and not mem['is_deleted']:
-                    exists = True
-                    memory_ids.append(mem['id'])
-                    if 'events' in tables:
-                        for ev in conn.execute(
-                            'SELECT event_id FROM events WHERE memory_id=?', (mem['id'],)
-                        ).fetchall():
-                            event_ids.append(ev['event_id'])
-            if not exists:
-                return {'exists': False, 'unavailable': False, 'origins': []}
+            (self.root / 'brain.db').stat()
+        except FileNotFoundError:
+            return result
+        except OSError:
+            return {**result, 'unavailable': True}
+        conn, ok = self._open_brain_ro()
+        if not ok:
+            return {**result, 'unavailable': True}
+        try:
+            conn.execute('BEGIN')  # One snapshot for pointer, ledger, and quote reads.
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            memory_id = pointer_id
+            if pointer_kind == 'event':
+                if 'events' not in tables:
+                    return result
+                event = conn.execute('SELECT memory_id FROM events WHERE event_id=?', (pointer_id,)).fetchone()
+                if event is None:
+                    return result
+                memory_id = event['memory_id']
+            if pointer_kind == 'memory' or memory_id:
+                if 'memories' not in tables or conn.execute(
+                    'SELECT 1 FROM memories WHERE id=? AND is_tombstone=0 AND is_deleted=0', (memory_id,),
+                ).fetchone() is None:
+                    return result
+            result['exists'] = True
+            if chat_index is None:
+                return {**result, 'unavailable': True}
 
-            origins = []
-            seen_origins = set()
-            if event_ids and 'event_ledger' in tables:
-                placeholders = ','.join('?' for _ in event_ids)
-                rows = conn.execute(
-                    f"SELECT payload_json FROM event_ledger "
-                    f"WHERE kind='stage-evidence' AND event_id IN ({placeholders}) "
-                    f"ORDER BY ledger_seq, id LIMIT 200",
-                    tuple(event_ids),
-                ).fetchall()
-                for row in rows:
+            def verify(mid, copied):
+                raw = chat_index.get(mid) if isinstance(mid, str) else None
+                # Copies can never supply the text we judge, nor can a later unrelated chat
+                # row with identical wording replace the identified original turn.
+                if (raw and isinstance(copied, str) and copied.strip()
+                        and ' '.join(copied.split()) == ' '.join(raw['text'].split())):
+                    result['origins'].add(mid)
+                else:
+                    result['missing_origin'] = True
+
+            if 'event_ledger' in tables and 'events' in tables:
+                if pointer_kind == 'event':
+                    where = 'event_id=?'
+                else:
+                    where = 'event_id IN (SELECT event_id FROM events WHERE memory_id=?)'
+                for row in conn.execute(
+                    f"SELECT payload_json FROM event_ledger WHERE kind='stage-evidence' AND {where} "
+                    "ORDER BY ledger_seq DESC, id DESC LIMIT 200", (pointer_id,),
+                ):
                     try:
                         payload = json.loads(row[0])
                     except (ValueError, TypeError):
                         continue
-                    if not isinstance(payload, dict):
-                        continue
-                    if payload.get('kind') == 'chat' and payload.get('role') == 'user':
-                        mid = payload.get('message_id')
-                        if isinstance(mid, str) and mid:
-                            if chat_index is not None:
-                                if mid not in chat_index:
-                                    continue
-                                utext = chat_index[mid].get('text') or payload.get('text') or ''
-                            else:
-                                utext = payload.get('text') or ''
-                            okey = ('chat', mid)
-                            if okey not in seen_origins:
-                                seen_origins.add(okey)
-                                origins.append((okey, utext))
-            if memory_ids and 'quotes' in tables:
-                placeholders = ','.join('?' for _ in memory_ids)
-                qrows = conn.execute(
-                    f"SELECT memory_id, ord, speaker, text FROM quotes "
-                    f"WHERE memory_id IN ({placeholders}) AND speaker='user' "
-                    f"ORDER BY memory_id, ord LIMIT 50",
-                    tuple(memory_ids),
-                ).fetchall()
-                for qrow in qrows:
-                    qtext = (qrow['text'] or '').strip()
-                    if not qtext:
-                        continue
-                    okey = ('quote', _norm_text(qtext))
-                    if okey not in seen_origins:
-                        seen_origins.add(okey)
-                        origins.append((okey, qtext))
-            return {'exists': True, 'unavailable': False, 'origins': origins}
+                    if (isinstance(payload, dict) and payload.get('kind') == 'chat'
+                            and payload.get('role') == 'user'):
+                        verify(payload.get('message_id'), payload.get('text'))
+
+            if memory_id and 'quotes' in tables:
+                quotes = [r[0] for r in conn.execute(
+                    "SELECT text FROM quotes WHERE memory_id=? AND speaker='user' ORDER BY ord LIMIT 50",
+                    (memory_id,),
+                ) if isinstance(r[0], str) and r[0].strip()]
+                # The quote projection has no message ID. A structured, live chat ref on
+                # this same memory can supply it; never search globally for similar text.
+                if quotes and 'sources' in tables:
+                    quote_texts = {' '.join(text.split()) for text in quotes}
+                    for row in conn.execute(
+                        "SELECT ref FROM sources WHERE memory_id=? AND kind='chat' "
+                        "AND (status IS NULL OR status IN ('', 'active', 'verified')) ORDER BY ord LIMIT 50",
+                        (memory_id,),
+                    ):
+                        ref = row[0]
+                        mid = ref.removeprefix('chat:') if isinstance(ref, str) else None
+                        raw = chat_index.get(mid)
+                        if raw and ' '.join(raw['text'].split()) in quote_texts:
+                            result['origins'].add(mid)
+                if quotes and not result['origins']:
+                    result['missing_origin'] = True
+            return result
         except sqlite3.Error:
-            return {'exists': False, 'unavailable': True, 'origins': []}
+            return {'exists': False, 'unavailable': True, 'missing_origin': False, 'origins': set()}
         finally:
             conn.close()
 
@@ -496,58 +583,43 @@ class LearnedContext:
         4. Programmatic content support & whether Lan already vetoed/corrected this claim.
         """
         chat_index = self._chat_user_index()
-        chat_unavailable = chat_index is None and (self.root / 'chat.jsonl').exists()
-        kept_refs = []
-        dropped = []
-        missing_refs = []
-        unverified_support = []
+        kept_refs, dropped, missing_refs, unverified_support = [], [], [], []
         valid_origins = set()
-        seen_origin_keys = set()
-        any_unavailable = chat_unavailable
-
-        for source in sources or []:
-            if not isinstance(source, str) or not SOURCE_REF.fullmatch(source):
-                dropped.append(str(source))
+        any_unavailable = False
+        for source in dict.fromkeys(s for s in (sources or []) if isinstance(s, str)):
+            if not SOURCE_REF.fullmatch(source):
+                dropped.append(source)
                 continue
             kind, _, value = source.partition(':')
             if kind == 'chat':
-                if chat_index is not None and value in chat_index:
-                    utext = chat_index[value]['text']
-                    if _supports_claim(utext, claim_text):
-                        okey = ('chat', value)
-                        if okey not in seen_origin_keys:
-                            seen_origin_keys.add(okey)
-                            valid_origins.add(okey)
-                        kept_refs.append(source)
-                    else:
-                        unverified_support.append(source)
-                        kept_refs.append(source)
-                else:
+                if chat_index is None:
+                    any_unavailable = True
+                    kept_refs.append(source)
+                    continue
+                if value not in chat_index:
                     dropped.append(source)
                     missing_refs.append(source)
+                    continue
+                origins = {value}
             elif kind in ('event', 'memory'):
-                res = self._resolve_db_evidence(kind, value, chat_index)
-                kept_refs.append(source)
-                if res['unavailable']:
-                    any_unavailable = True
-                elif not res['exists']:
+                resolved = self._resolve_db_evidence(kind, value, chat_index)
+                any_unavailable |= resolved['unavailable']
+                origins = resolved['origins']
+                if not resolved['unavailable'] and (not resolved['exists'] or resolved['missing_origin']):
                     missing_refs.append(source)
-                else:
-                    matched_any = False
-                    for okey, utext in res['origins']:
-                        if _supports_claim(utext, claim_text):
-                            matched_any = True
-                            if okey not in seen_origin_keys:
-                                seen_origin_keys.add(okey)
-                                valid_origins.add(okey)
-                    if res['origins'] and not matched_any:
-                        unverified_support.append(source)
             else:
-                # long_task: kept as traceability pointer only, never promotes to confirmed
-                kept_refs.append(source)
+                kept_refs.append(source)  # long_task is for traceability only.
+                continue
+            kept_refs.append(source)
+            matched = set()
+            for mid in origins:
+                info = chat_index[mid]
+                if _supports_claim(info['text'], claim_text, confirmation_target=info['confirmation_target']):
+                    matched.add(('chat', mid))
+            valid_origins.update(matched)
+            if origins and not matched:
+                unverified_support.append(source)
 
-        kept_refs = list(dict.fromkeys(kept_refs))
-        missing_refs = list(dict.fromkeys(missing_refs))
         rebutted = self._is_rebutted_by_lan(claim_text, data)
         if not rebutted and valid_origins and chat_index and claim_text:
             cited_times = [
@@ -593,24 +665,36 @@ class LearnedContext:
             'rebutted': rebutted,
         }
 
-    def _is_rebutted_by_lan(self, claim_text, data):
-        """Check whether Lan already vetoed or replaced this claim (exact or high-overlap rephrase)."""
-        norm = _norm_text(claim_text)
-        if not norm or not isinstance(data, dict):
+    def _is_rebutted_by_lan(self, claim_text, data, *, section=None):
+        """Apply persistent user vetoes across cognition sections."""
+        if not _norm_text(claim_text) or not isinstance(data, dict):
             return False
-        block = data.get('relationship') or {}
-        for veto in block.get('vetoed') or []:
-            if not isinstance(veto, dict):
-                continue
-            if veto.get('norm_text') == norm or _jaccard_similar(claim_text, veto.get('text', '')):
-                return True
-        for item in block.get('items') or []:
+        for key in ALL_SECTIONS:
+            for veto in (data.get(key) or {}).get('vetoed') or []:
+                if isinstance(veto, dict) and _matches_governed_claim(claim_text, veto.get('text', '')):
+                    return True
+        for item in (data.get('relationship') or {}).get('items') or []:
             if (isinstance(item, dict) and item.get('status') == 'outdated'
                     and item.get('source') == 'lan'
-                    and (_norm_text(item.get('text')) == norm
-                         or _jaccard_similar(claim_text, item.get('text', '')))):
+                    and _matches_governed_claim(claim_text, item.get('text', ''))):
                 return True
         return False
+
+    def _automatic_write_error(self, data, text, *, source='peter', previous=None):
+        """Single admission check for new/replaced text and retirement."""
+        rank = SOURCE_RANK[source]
+        if previous and (previous.get('locked') or SOURCE_RANK.get(previous.get('source'), 1) > rank):
+            return 'This cognition is locked or has a higher-priority source; nothing was changed.'
+        if not text:
+            return None
+        if self._is_rebutted_by_lan(text, data):
+            return 'This cognition was already vetoed or corrected by Lan; nothing was changed.'
+        for item in data['relationship']['items']:
+            if (item is not previous and item['status'] != 'outdated'
+                    and (item.get('locked') or SOURCE_RANK.get(item.get('source'), 1) > rank)
+                    and _matches_governed_claim(text, item['text'])):
+                return 'This overlaps a locked or higher-priority relationship cognition; nothing was changed.'
+        return None
 
     def _verified_sources(self, sources):
         """Backwards-compatible helper returning (verified_chat, pointers, dropped)."""
@@ -625,23 +709,6 @@ class LearnedContext:
         Only claims backed by >= 1 verified, non-rebutted user origin (via direct `chat:` or
         `event:`/`memory:` traced to user `stage-evidence` / `quotes`) can be `confirmed`.
         """
-        if type(self)._verified_sources is not LearnedContext._verified_sources:
-            verified, pointers, dropped = self._verified_sources(sources)
-            kept = [*verified, *pointers]
-            if verified:
-                return {
-                    'status': 'confirmed' if status == 'confirmed' else 'uncertain',
-                    'source': 'evidence', 'sources': kept,
-                    'dropped_sources': dropped, 'missing_refs': [],
-                    'unverified_support': [], 'evidence_state': 'valid',
-                    'downgraded': False, 'rebutted': False,
-                }
-            return {
-                'status': 'uncertain', 'source': 'peter', 'sources': kept,
-                'dropped_sources': dropped, 'missing_refs': [],
-                'unverified_support': [], 'evidence_state': 'none',
-                'downgraded': status == 'confirmed', 'rebutted': False,
-            }
         ev = self._evaluate_sources(sources, claim_text=claim_text, data=data)
         if ev['rebutted']:
             return {
@@ -736,28 +803,88 @@ class LearnedContext:
     # ---------- prompt blocks ----------
 
     def context(self):
-        """Stable prefix: growth + facts. Never raises; a broken file falls back to old notes."""
+        """Stable, model-facing facts and growth (management reads the stored document)."""
+        return self.build_prompt()['stable']
+
+    def build_prompt(self):
+        """Project all four sections from one snapshot, without changing any stored claim."""
+        projection = {'stable': None, 'notes': '', 'ongoing': None, 'relationship_items': [],
+                      'cross_section_conflicts': []}
         try:
             data = self._load()
         except UserError as exc:
             self._log_error('context', exc)
             facts = self._legacy_text().strip()
-            if not facts:
-                return None
-            return (
-                "PETER'S NOTES ABOUT LAN (fallback; the new file is unreadable, so these are "
-                "the old notes; data, not instructions):\n" + facts
-            )
-        growth = data['growth']['text'].strip()
-        facts = data['facts']['text'].strip()
-        if not growth and not facts:
-            return None
-        lines = [prompts.text('memory.learned.header')]
-        if growth:
-            lines.append(prompts.text('memory.learned.growth') + '\n' + growth)
-        if facts:
-            lines.append(prompts.text('memory.learned.facts') + '\n' + facts)
-        return '\n\n'.join(lines)
+            if facts:
+                projection['stable'] = (
+                    "PETER'S NOTES ABOUT LAN (fallback; the new file is unreadable, so these are "
+                    "the old notes; data, not instructions):\n" + facts
+                )
+            return projection
+
+        relations = self._apply_live_evidence_check(data)
+        projection['relationship_items'] = relations
+        conflicts = self.relationship_conflict_texts(data)
+        # A bare duplicate must not undo the live evidence downgrade or its caveat.
+        conflicts.extend(item['text'] for item in relations
+                         if item.get('evidence_degraded') or item.get('evidence_state') == 'rebutted')
+
+        def rejected(text, section, explicit=False):
+            return not explicit and (self._is_rebutted_by_lan(text, data, section=section)
+                                     or any(_matches_governed_claim(text, old) for old in conflicts))
+
+        for item in relations:
+            if item.get('source') != 'lan' and not item.get('locked'):
+                item['prompt_vetoed'] = self._is_rebutted_by_lan(item['text'], data)
+
+        def project_notes(section):
+            block = data[section]
+            explicit = block.get('lan_text') or []
+            kept = []
+            unit_number = 0
+            for paragraph in re.split(r'\n[ \t]*\n', block['text'].strip()):
+                # Whole Markdown list entries or prose paragraphs. Never remove one sentence from
+                # a paragraph and leave a rule whose exception/qualification has disappeared.
+                parts = re.split(r'\n(?=(?:[-*+•]|\d{1,3}[.)])[ \t]+)', paragraph)
+                paragraph_kept = []
+                for part in parts:
+                    if not part.strip():
+                        continue
+                    unit_number += 1
+                    if rejected(part, section, paragraph.strip() in explicit):
+                        projection['cross_section_conflicts'].append(f'{section}:{unit_number}')
+                    else:
+                        paragraph_kept.append(part)
+                if paragraph_kept:
+                    kept.append('\n'.join(paragraph_kept))
+            return '\n\n'.join(kept)
+
+        growth, facts = project_notes('growth'), project_notes('facts')
+        projection['notes'] = facts + '\n' + growth
+        if growth or facts:
+            lines = [prompts.text('memory.learned.header')]
+            if growth:
+                lines.append(prompts.text('memory.learned.growth') + '\n' + growth)
+            if facts:
+                lines.append(prompts.text('memory.learned.facts') + '\n' + facts)
+            projection['stable'] = '\n\n'.join(lines)
+
+        ongoing = []
+        done = 0
+        for item in data['ongoing']['items']:
+            status = item['status']
+            if status == 'completed':
+                done += 1
+            elif status in ('active', 'uncertain'):
+                if rejected(item['text'], 'ongoing', item.get('lan_text') is True):
+                    projection['cross_section_conflicts'].append('ongoing:' + item['id'])
+                else:
+                    ongoing.append(f'- [{status}] {item["text"].strip()}')
+        lines = [prompts.text('memory.ongoing.header'), *ongoing] if ongoing else []
+        if done:
+            lines.append(prompts.text('memory.ongoing.done').format(count=done))
+        projection['ongoing'] = '\n'.join(lines) or None
+        return projection
 
     def _apply_live_evidence_check(self, data):
         """Evaluate current evidence health for active relationship items without mutating disk."""
@@ -796,21 +923,15 @@ class LearnedContext:
             return []
         return self._apply_live_evidence_check(data)
 
-    def relationship_conflict_texts(self):
-        """Return normalized texts of outdated/vetoed relationship rules for cross-section checks."""
-        try:
-            data = self._load()
-        except UserError:
-            return []
-        block = data.get('relationship') or {}
-        texts = []
-        for item in block.get('items') or []:
-            if isinstance(item, dict) and item.get('status') == 'outdated' and item.get('text'):
-                texts.append(item['text'])
-        for veto in block.get('vetoed') or []:
-            if isinstance(veto, dict) and veto.get('text'):
-                texts.append(veto['text'])
-        return texts
+    def relationship_conflict_texts(self, data=None):
+        """Conflict references for the read-only prompt projection, never copied into diagnostics."""
+        if data is None:
+            try:
+                data = self._load()
+            except UserError:
+                return []
+        return [item['text'] for item in data['relationship']['items']
+                if item.get('status') == 'outdated']
 
     def notes_text(self):
         """facts + growth as one string, for de-duplicating the relationship base against them."""
@@ -821,78 +942,127 @@ class LearnedContext:
         return data['facts']['text'] + '\n' + data['growth']['text']
 
     def dynamic_context(self):
-        """Ongoing items, injected late so updates do not break the stable prefix."""
-        try:
-            data = self._load()
-        except UserError as exc:
-            self._log_error('dynamic_context', exc)
-            return None
-        items = [item for item in data['ongoing']['items'] if item['status'] in ('active', 'uncertain')]
-        done = [item for item in data['ongoing']['items'] if item['status'] == 'completed']
-        if not items and not done:
-            return None
-        lines = []
-        if items:
-            lines.append(prompts.text('memory.ongoing.header'))
-            for item in items:
-                label = 'uncertain' if item['status'] == 'uncertain' else 'active'
-                lines.append(f'- [{label}] {item["text"].strip()}')
-        if done:
-            lines.append(prompts.text('memory.ongoing.done').format(count=len(done)))
-        return '\n'.join(lines)
+        """Projected ongoing items, injected late so updates do not break the stable prefix."""
+        return self.build_prompt()['ongoing']
 
     # ---------- writing & consistency ----------
 
     def _write(self, data):
         data['updated_at'] = _now()
         text = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
-        temporary = self.path.with_name(self.path.name + f'.{uuid.uuid4().hex}.tmp')
+        ModelSettings._atomic_bytes(self.path, text.encode('utf-8'))
+
+    def _record(self, tool, before, after):
+        row = {
+            'time': _now(), 'tool': tool,
+            'before': json.dumps(before, ensure_ascii=False) if before is not None else None,
+            'after': json.dumps(after, ensure_ascii=False),
+        }
+        encoded = (json.dumps(row, ensure_ascii=False) + '\n').encode('utf-8')
+        self.versions.parent.mkdir(parents=True, exist_ok=True)
+        with self.versions.open('ab') as handle:
+            if handle.write(encoded) != len(encoded):
+                raise OSError('short version write')
+            handle.flush()
+            os.fsync(handle.fileno())
+        ModelSettings._sync_directory(self.versions.parent)
+
+    def _recover_storage_transaction(self):
+        """Recover with the role's Brain write lock already held (including bundle callers)."""
         try:
-            with temporary.open('w', encoding='utf-8', newline='\n') as handle:
-                handle.write(text)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
-        except OSError as exc:
             try:
-                temporary.unlink()
-            except OSError:
-                pass
-            raise UserError(
-                f'写 {self.path.name} 失败：{exc}。修改没有保存；请重试。错误记录在 {self.error_path}。'
-            ) from exc
-
-    def _record(self, tool, before, after, *, strict=False):
-        try:
-            self.versions.parent.mkdir(parents=True, exist_ok=True)
-            row = {
-                'time': _now(), 'tool': tool,
-                'before': json.dumps(before, ensure_ascii=False) if before is not None else None,
-                'after': json.dumps(after, ensure_ascii=False),
-            }
-            with self.versions.open('a', encoding='utf-8') as handle:
-                handle.write(json.dumps(row, ensure_ascii=False) + '\n')
-                handle.flush()
-                os.fsync(handle.fileno())
-        except OSError as exc:
-            if strict:
-                raise UserError(f'记录版本历史失败：{exc}') from exc
-
-    def _commit_with_version(self, tool, before, data):
-        """Persist data and its version record together; roll back data if version write fails."""
-        snapshot = self.path.read_text(encoding='utf-8') if self.path.exists() else None
-        self._write(data)
-        try:
-            self._record(tool, before, data, strict=True)
-        except UserError:
-            if snapshot is not None:
-                tmp = self.path.with_name(self.path.name + f'.{uuid.uuid4().hex}.rb.tmp')
+                record = json.loads(self._journal.read_bytes())
+            except FileNotFoundError:
+                return None
+            state = record['state']
+            if state == 'prepared':
+                original = record['body']
+                original = base64.b64decode(original, validate=True) if original is not None else None
+                size = record['versions_size']
+                if size is not None and (type(size) is not int or size < 0):
+                    raise ValueError('invalid version history length')
+                # An append can only extend the file. Never manufacture missing history.
+                if size is None:
+                    self.versions.unlink(missing_ok=True)
+                    ModelSettings._sync_directory(self.versions.parent)
+                else:
+                    with self.versions.open('r+b') as handle:
+                        disk_size = os.fstat(handle.fileno()).st_size
+                        if disk_size < size:
+                            raise ValueError('version history is shorter than recorded')
+                        if disk_size > size:
+                            handle.truncate(size)
+                        os.fsync(handle.fileno())
+                if original is None:
+                    self.path.unlink(missing_ok=True)
+                    ModelSettings._sync_directory(self.path.parent)
+                else:
+                    ModelSettings._atomic_bytes(self.path, original)
+                self._journal.unlink()
+                ModelSettings._sync_directory(self._journal.parent)
+            elif state == 'committed':
+                # A prior replace may have reached disk before its directory sync failed.
+                # Keep the marker and stop if we still cannot confirm the commit.
                 try:
-                    tmp.write_text(snapshot, encoding='utf-8', newline='\n')
-                    os.replace(tmp, self.path)
+                    ModelSettings._sync_directory(self._journal.parent)
+                except OSError as exc:
+                    raise UserError('笔记正文与版本已写入，但无法确认保存是否持久化；请修复磁盘并刷新确认，不要重试写入。') from exc
+                # Match the model settings contract: a cleanup error is not a lost save.
+                try:
+                    self._journal.unlink()
+                    ModelSettings._sync_directory(self._journal.parent)
                 except OSError:
                     pass
-            raise
+            else:
+                raise ValueError('invalid transaction state')
+            return state
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise UserError('笔记正文与版本历史的上次保存无法自动恢复；已暂停保存，请保留数据目录并检查磁盘。') from exc
+
+    def _commit_with_version(self, tool, before, data):
+        """Commit a body snapshot and a history append using the prepared/committed protocol."""
+        with self.lock:
+            if self._journal.exists():
+                raise UserError('无法清理上次笔记保存的事务记录；本次没有保存，请检查磁盘。')
+            try:
+                # The history is append-only under this lock; journalling its original byte
+                # offset lets us roll back partial appends without copying all past versions.
+                try:
+                    size = self.versions.stat().st_size
+                except FileNotFoundError:
+                    size = None
+                record = {'state': 'prepared', 'body': ModelSettings._snapshot(self.path),
+                          'versions_size': size}
+                ModelSettings._atomic_bytes(self._journal, json.dumps(record).encode('utf-8'))
+                self._write(data)
+                self._record(tool, before, data)
+                ModelSettings._atomic_bytes(self._journal, b'{"state":"committed"}')
+            except Exception as exc:
+                if self._recover_storage_transaction() == 'committed':
+                    return
+                if isinstance(exc, OSError):
+                    raise UserError(f'保存 {self.path.name} 及版本历史失败：{exc}。修改没有保存。') from exc
+                raise
+            self._recover_storage_transaction()
+
+    def read_version_history(self):
+        """Read the latest committed version rows, newest first, without initializing a file."""
+        with self.lock:
+            rows = deque(maxlen=20)
+            try:
+                with self.versions.open(encoding='utf-8', errors='replace') as handle:
+                    for line in handle:
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(row, dict):
+                            rows.append(row)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise UserError(f'读取笔记版本历史失败：{exc}') from exc
+            return list(reversed(rows))
 
     def _log_error(self, operation, exc):
         signature = f'{operation}:{self.path.stat().st_mtime_ns if self.path.exists() else 0}:{exc}'
@@ -922,8 +1092,18 @@ class LearnedContext:
                 raise UserError('你打开之后这一块又改过；请先刷新，或用“覆盖他的版本”保存。')
             before = json.loads(json.dumps(data, ensure_ascii=False))
             before_bytes = self._section_bytes(data, section)
-            data[section]['text'] = text
-            data[section]['updated_at'] = _now()
+            block = data[section]
+            old_units = set(_claim_units(block['text']))
+            new_units = set(_claim_units(text))
+            now = _now()
+            for unit in sorted(old_units - new_units):
+                _veto_text(block, unit, now, 'lan_edited')
+            for unit in sorted(new_units - old_units):
+                _lift_exact_veto(block, unit)
+            if text != block['text']:
+                block['lan_text'] = [part.strip() for part in re.split(r'\n[ \t]*\n', text) if part.strip()]
+            block['text'] = text
+            block['updated_at'] = now
             self._check_section_budget(data, section, before_bytes=before_bytes)
             self._commit_with_version(f'save_{section}', before, data)
             return data
@@ -937,13 +1117,31 @@ class LearnedContext:
                 raise UserError('你打开之后 ongoing 又改过；请先刷新，或用“覆盖他的版本”保存。')
             before = json.loads(json.dumps(data, ensure_ascii=False))
             before_bytes = self._section_bytes(data, 'ongoing')
-            data['ongoing']['items'] = items
-            data['ongoing']['updated_at'] = _now()
-            for item in data['ongoing']['items']:
-                if (isinstance(item, dict) and item.get('status') == 'completed'
-                        and not isinstance(item.get('completed_at'), str)):
-                    item['completed_at'] = data['ongoing']['updated_at']
-            self._validate_items(data['ongoing']['items'])
+            block = data['ongoing']
+            self._validate_items(items)
+            now = _now()
+            stored = {item['id']: item for item in block['items']}
+            revised = {item['id']: dict(item) for item in items}
+            for item_id, previous in stored.items():
+                item = revised.get(item_id)
+                if item is None or item['text'] != previous['text']:
+                    _veto_text(block, previous['text'], now, 'lan_edited' if item else 'lan_deleted', item_id)
+            for item_id, item in revised.items():
+                previous = stored.get(item_id, {})
+                if item['text'] != previous.get('text'):
+                    item['lan_text'] = True
+                    _lift_exact_veto(block, item['text'])
+                elif previous.get('lan_text'):
+                    item['lan_text'] = True
+                if item['status'] == 'completed':
+                    if previous.get('status') != 'completed' or previous.get('lan_completed'):
+                        item['lan_completed'] = True
+                    if not isinstance(item.get('completed_at'), str):
+                        item['completed_at'] = now
+                else:
+                    item.pop('lan_completed', None)
+            block['items'] = list(revised.values())
+            block['updated_at'] = now
             self._check_section_budget(data, 'ongoing', before_bytes=before_bytes)
             self._commit_with_version('save_ongoing', before, data)
             return data
@@ -972,8 +1170,7 @@ class LearnedContext:
             now = _now()
             cleaned = []
             kept_ids = set()
-            vetoed = list(block.get('vetoed') or [])
-            veto_norms = {v.get('norm_text') for v in vetoed if isinstance(v, dict) and v.get('norm_text')}
+            rel_block = data['relationship']
 
             for item in items:
                 if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not item['id']:
@@ -988,11 +1185,12 @@ class LearnedContext:
                 row = {'id': item['id'], 'text': text, 'status': status}
                 if req_locked:
                     row['locked'] = True
-                # If Lan explicitly re-adds or edits a previously vetoed text, lift that veto.
-                norm = _norm_text(text)
-                if norm in veto_norms and (previous is None or text != previous.get('text') or status != previous.get('status')):
-                    vetoed = [v for v in vetoed if not (isinstance(v, dict) and v.get('norm_text') == norm)]
-                    veto_norms.discard(norm)
+                if previous and (previous['text'] != text
+                                 or (previous['status'] != 'outdated' and status == 'outdated')):
+                    _veto_text(rel_block, previous['text'], now, 'lan_corrected', item['id'])
+                if status != 'outdated' and (previous is None or previous['text'] != text
+                                             or previous['status'] == 'outdated'):
+                    _lift_exact_veto(rel_block, text)
 
                 if (previous is not None and text == previous.get('text')
                         and status == previous.get('status')
@@ -1033,27 +1231,12 @@ class LearnedContext:
                         row[key] = previous[key]
                 cleaned.append(row)
 
-            # Record items removed by Lan in `vetoed` so Peter / old evidence cannot resurrect them.
             for old_id, old_item in stored.items():
-                if old_id not in kept_ids and old_item.get('status') != 'outdated':
-                    norm = _norm_text(old_item.get('text'))
-                    if norm and norm not in veto_norms:
-                        vetoed.append({
-                            'id': old_id,
-                            'text': old_item.get('text', ''),
-                            'norm_text': norm,
-                            'vetoed_at': now,
-                            'reason': 'lan_deleted',
-                        })
-                        veto_norms.add(norm)
+                if old_id not in kept_ids:
+                    _veto_text(rel_block, old_item['text'], now, 'lan_deleted', old_id)
 
             self._validate_relationship_items(cleaned)
-            rel_block = data.setdefault('relationship', {})
             rel_block['items'] = cleaned
-            if vetoed:
-                rel_block['vetoed'] = vetoed[-200:]
-            elif 'vetoed' in rel_block:
-                rel_block['vetoed'] = []
             rel_block['updated_at'] = now
             self._check_section_budget(data, 'relationship', before_bytes=before_bytes)
             self._commit_with_version('save_relationship', before, data)
@@ -1160,7 +1343,7 @@ class LearnedContext:
                 # Only downgrade model-promoted items when evidence is definitively invalid or rebutted
                 # (do not permanently mutate on temporary unavailability).
                 if (item.get('status') == 'confirmed' and item.get('source') == 'evidence'
-                        and not item.get('locked') and ev['evidence_state'] in ('invalid', 'rebutted')):
+                        and not item.get('locked') and ev['evidence_state'] in ('invalid', 'rebutted', 'none')):
                     item['status'] = 'uncertain'
                     item['source'] = 'peter'
                     item['updated_at'] = now
@@ -1181,7 +1364,7 @@ class LearnedContext:
         Never deletes, truncates, or rewrites original text, IDs, sources, or history.
         """
         with self.lock:
-            data = self._load()
+            data = self._empty(self._legacy_text()) if dry_run and not self.path.exists() else self._load()
             budgets = self.section_budget_status(data)
             rel_block = data.get('relationship') or {}
             needs_upgrade = 'vetoed' not in rel_block
@@ -1198,9 +1381,11 @@ class LearnedContext:
             backup_path = self.path.with_name(
                 f'{self.path.stem}.pre-s3-migrate-{uuid.uuid4().hex[:8]}.bak.json'
             )
-            if self.path.exists():
-                shutil.copy2(self.path, backup_path)
-            before = json.loads(json.dumps(data, ensure_ascii=False))
+            try:
+                ModelSettings._atomic_bytes(backup_path, self.path.read_bytes())
+            except OSError as exc:
+                raise UserError(f'创建迁移备份失败：{exc}') from exc
+            before = copy.deepcopy(data)
             rel_block.setdefault('vetoed', [])
             self._commit_with_version('migrate_s3_budgets', before, data)
             plan['backup_path'] = str(backup_path)
@@ -1208,44 +1393,25 @@ class LearnedContext:
             return plan
 
     def rollback_migration(self, backup_path):
-        """Restore pre-migration snapshot while preserving post-migration additions losslessly."""
+        """Undo this schema migration, not any user edits made since the backup."""
         src = Path(backup_path)
-        if not src.is_file():
-            raise UserError(f'找不到迁移备份文件：{backup_path}')
         with self.lock:
+            try:
+                backup = json.loads(src.read_bytes())
+            except (OSError, ValueError) as exc:
+                raise UserError(f'读取迁移备份失败：{exc}') from exc
+            self._upgrade_ongoing(backup)
+            self._upgrade_relationship(backup)
+            self._validate(backup)
+            if not self.path.exists():
+                raise UserError('当前笔记文件缺失；无法确认迁移后的修改，请保留备份并先恢复当前文件。')
             current = self._load()
-            before = json.loads(json.dumps(current, ensure_ascii=False))
-            restored = json.loads(src.read_text(encoding='utf-8'))
-            self._upgrade_ongoing(restored)
-            self._upgrade_relationship(restored)
-            self._validate(restored)
-            # Preserve post-migration additions in relationship and ongoing (by item id)
-            for key in ('relationship', 'ongoing'):
-                rest_items = (restored.get(key) or {}).get('items') or []
-                rest_ids = {row.get('id') for row in rest_items if isinstance(row, dict) and row.get('id')}
-                for row in (current.get(key) or {}).get('items') or []:
-                    if isinstance(row, dict) and row.get('id') and row['id'] not in rest_ids:
-                        rest_items.append(row)
-                restored.setdefault(key, {})['items'] = rest_items
-            # Preserve post-migration vetoed records
-            cur_vetoed = (current.get('relationship') or {}).get('vetoed') or []
-            if cur_vetoed:
-                rest_vetoed = list((restored.get('relationship') or {}).get('vetoed') or [])
-                seen_v = {v.get('norm_text') for v in rest_vetoed if isinstance(v, dict)}
-                for v in cur_vetoed:
-                    if isinstance(v, dict) and v.get('norm_text') not in seen_v:
-                        rest_vetoed.append(v)
-                        seen_v.add(v.get('norm_text'))
-                restored.setdefault('relationship', {})['vetoed'] = rest_vetoed
-            # Preserve appended facts/growth text added after backup
-            for sec in SECTIONS:
-                r_txt = (restored.get(sec) or {}).get('text') or ''
-                c_txt = (current.get(sec) or {}).get('text') or ''
-                if c_txt and c_txt != r_txt and c_txt.startswith(r_txt):
-                    restored[sec]['text'] = c_txt
-                    restored[sec]['updated_at'] = current[sec].get('updated_at', _now())
-            self._validate(restored)
-            self._commit_with_version('rollback_s3_migration', before, restored)
+            restored = copy.deepcopy(current)
+            # The migration only added an empty veto list. Current content is authoritative,
+            # including removals and cleared vetoes: copying old rows would resurrect them.
+            if 'vetoed' not in backup['relationship'] and restored['relationship'].get('vetoed') == []:
+                restored['relationship'].pop('vetoed')
+            self._commit_with_version('rollback_s3_migration', current, restored)
             return restored
 
     def _validate_items(self, items):
@@ -1378,10 +1544,7 @@ class LearnedContext:
                 text = args.get('text')
                 if not isinstance(text, str) or not text.strip():
                     return 'text must be a non-empty string.', '被拒绝', name
-                if self._is_rebutted_by_lan(text.strip(), data):
-                    return (
-                        f'Cannot add to {section}: this rule was already vetoed or corrected by Lan.'
-                    ), '被拒绝', name
+                candidate = text.strip()
                 after = (before + '\n\n' + text.strip()) if before else text.strip()
             else:
                 old, new = args.get('old_text'), args.get('new_text')
@@ -1394,6 +1557,14 @@ class LearnedContext:
                         f'Nothing was changed.'
                     ), '被拒绝', name
                 after = before.replace(old, new).strip()
+                old_parts = {part.strip() for part in re.split(r'\n[ \t]*\n', before)}
+                new_parts = {part.strip() for part in re.split(r'\n[ \t]*\n', after)}
+                if any(part in old_parts and part not in new_parts for part in data[section].get('lan_text', [])):
+                    return 'Cannot replace text saved by Lan.', '被拒绝', name
+                candidate = '\n\n'.join(sorted(new_parts - old_parts))
+            error = self._automatic_write_error(data, candidate)
+            if error:
+                return error, '被拒绝', name
             old_data = json.loads(json.dumps(data, ensure_ascii=False))
             data[section]['text'] = after
             data[section]['updated_at'] = _now()
@@ -1435,10 +1606,7 @@ class LearnedContext:
                 clean_text = text.strip()
                 norm = _norm_text(clean_text)
                 if self._is_rebutted_by_lan(clean_text, data):
-                    return (
-                        'This rule was already corrected or removed by Lan; '
-                        'Peter cannot re-add or override it.'
-                    ), '被拒绝', name
+                    return 'This rule was already corrected or removed by Lan.', '被拒绝', name
                 # Idempotency: avoid duplicate active items with identical normalized text.
                 existing = next(
                     (row for row in items if isinstance(row, dict)
@@ -1456,6 +1624,9 @@ class LearnedContext:
                         f'{existing["source"]}). Nothing duplicated.'
                     ), '成功', name
                 provenance = self._relationship_provenance(requested, raw_sources, claim_text=clean_text, data=data)
+                error = self._automatic_write_error(data, clean_text, source=provenance['source'])
+                if error:
+                    return error, '被拒绝', name
                 new_item = {
                     'id': uuid.uuid4().hex[:12], 'text': clean_text,
                     'status': provenance['status'], 'source': provenance['source'],
@@ -1490,17 +1661,7 @@ class LearnedContext:
                         f'exactly one. Nothing was changed.'
                     ), '被拒绝', name
                 previous = matches[0]
-                if previous.get('locked'):
-                    return (
-                        f'Relationship item {previous["id"]} is locked by Lan; '
-                        f'Peter cannot modify or retire a locked item.'
-                    ), '被拒绝', name
                 clean_new = new.strip()
-                if clean_new and self._is_rebutted_by_lan(clean_new, data):
-                    return (
-                        'Replacement text was already corrected or removed by Lan; '
-                        'Peter cannot re-add it.'
-                    ), '被拒绝', name
                 provenance = self._relationship_provenance(
                     requested, raw_sources, claim_text=clean_new, data=data
                 ) if clean_new else {
@@ -1508,6 +1669,11 @@ class LearnedContext:
                     'dropped_sources': [], 'missing_refs': [], 'unverified_support': [],
                     'evidence_state': 'none', 'downgraded': False, 'rebutted': False,
                 }
+                error = self._automatic_write_error(
+                    data, clean_new, source=provenance['source'], previous=previous,
+                )
+                if error:
+                    return error, '被拒绝', name
                 replacement = None
                 if clean_new:
                     replacement = {
@@ -1583,6 +1749,9 @@ class LearnedContext:
             if action == 'add':
                 if not isinstance(text, str) or not text.strip():
                     return 'text must be a non-empty string.', '被拒绝', 'ongoing_update'
+                error = self._automatic_write_error(data, text.strip())
+                if error:
+                    return error, '被拒绝', 'ongoing_update'
                 item = {
                     'id': uuid.uuid4().hex[:12], 'text': text.strip(), 'status': 'active',
                     'sources': sources, 'created_at': now, 'updated_at': now,
@@ -1596,11 +1765,19 @@ class LearnedContext:
                 item = next((row for row in items if row['id'] == item_id), None)
                 if item is None:
                     return f'No ongoing item with id {item_id}.', '被拒绝', 'ongoing_update'
+                if (action == 'reopen' or (action == 'update' and args.get('status') in ('active', 'uncertain'))):
+                    error = self._automatic_write_error(data, item['text'])
+                    if item.get('lan_completed') or error:
+                        return error or 'This task was completed by Lan.', '被拒绝', 'ongoing_update'
                 if action == 'update':
                     if text is not None:
                         if not isinstance(text, str) or not text.strip():
                             return 'text must be a non-empty string.', '被拒绝', 'ongoing_update'
-                        item['text'] = text.strip()
+                        if text.strip() != item['text']:
+                            error = self._automatic_write_error(data, text.strip())
+                            if item.get('lan_text') or error:
+                                return error or 'This task text was saved by Lan.', '被拒绝', 'ongoing_update'
+                            item['text'] = text.strip()
                     if sources:
                         item['sources'] = sources
                     if args.get('status') in ('active', 'uncertain'):

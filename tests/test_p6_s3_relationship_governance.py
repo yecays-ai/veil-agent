@@ -137,7 +137,7 @@ class StrictEvidenceChainTests(unittest.TestCase):
         })
         self.chat_path = self.role / 'chat.jsonl'
         self.chat_path.write_text(
-            json.dumps({'role': 'user', 'message_id': 'u1', 'content': '以后别猜我心情，直接问我。'}) + '\n'
+            json.dumps({'role': 'user', 'message_id': 'u1', 'content': '我更喜欢直接沟通。'}) + '\n'
             + json.dumps({'role': 'user', 'message_id': 'u2', 'content': '今天午饭吃了牛肉面，挺好吃的。'}) + '\n'
             + json.dumps({'role': 'assistant', 'message_id': 'a1', 'content': '以后别猜心情，直接问。'}) + '\n',
             encoding='utf-8',
@@ -154,7 +154,7 @@ class StrictEvidenceChainTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO event_ledger(ledger_seq, kind, source_file, event_id, payload_json) "
             "VALUES(1, 'stage-evidence', '__live__', 'e1', ?)",
-            (json.dumps({'kind': 'chat', 'role': 'user', 'message_id': 'u1', 'text': '以后别猜我心情，直接问我。'}),),
+            (json.dumps({'kind': 'chat', 'role': 'user', 'message_id': 'u1', 'text': '我更喜欢直接沟通。'}),),
         )
         # Event e_tool has ONLY tool evidence (no user chat evidence, no user quotes)
         conn.execute(
@@ -176,7 +176,7 @@ class StrictEvidenceChainTests(unittest.TestCase):
     def test_direct_and_indirect_user_evidence_promotes_to_confirmed(self):
         _, st1, _ = self.lc.invoke('profile_append', {
             'section': 'relationship', 'status': 'confirmed',
-            'text': '不要猜Lan心情，直接问她。', 'sources': ['event:e1'],
+            'text': '我更喜欢直接沟通。', 'sources': ['event:e1'],
         })
         self.assertEqual(st1, '成功')
         items = self.lc.read()['relationship']['items']
@@ -209,7 +209,7 @@ class StrictEvidenceChainTests(unittest.TestCase):
         # Both chat:u1 and event:e1 point to u1 -> counted as 1 origin, still valid
         self.lc.invoke('profile_append', {
             'section': 'relationship', 'status': 'confirmed',
-            'text': '不要猜Lan心情，直接问她。', 'sources': ['chat:u1', 'event:e1'],
+            'text': '我更喜欢直接沟通。', 'sources': ['chat:u1', 'event:e1'],
         })
         # Now delete event e1 from brain.db -> partial_stale (chat:u1 still valid!)
         self.db.execute("DELETE FROM events WHERE event_id='e1'")
@@ -317,7 +317,7 @@ class ProductionPipelineAndCompressionTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_compression_preserves_locked_long_item_and_autonomy_receives_base(self):
+    def test_unsafe_compression_omits_locked_item_and_autonomy_receives_full_base(self):
         long_rule = (
             '在讨论技术方案和工作排期时，不要急着给安慰或空话，要先直接给出结论和依据；'
             '但如果Lan明确说今天很累了，就先顺着情绪陪她说话，不要再继续追问技术细节。'
@@ -329,10 +329,9 @@ class ProductionPipelineAndCompressionTests(unittest.TestCase):
             {'id': 'unc1', 'text': '她可能喜欢早睡', 'status': 'uncertain'},
         ])
         chosen = select_relationship_base(lc.relationship_items(), max_chars=120)
-        self.assertTrue(any(item['id'] == 'locked1' for item in chosen['items']))
-        locked_entry = next(item for item in chosen['items'] if item['id'] == 'locked1')
-        self.assertTrue(locked_entry['compressed'])
-        self.assertTrue(locked_entry['line'].endswith('…'))
+        self.assertIn({'id': 'locked1', 'reason': 'space'}, chosen['dropped'])
+        self.assertTrue(chosen['degraded'])
+        self.assertNotIn('locked1', [item['id'] for item in chosen['items']])
 
         chat = Chat(self.cfg, self.store, self.budget, self.model, output=lambda _: None)
         # Normal chat with no recall
@@ -343,7 +342,8 @@ class ProductionPipelineAndCompressionTests(unittest.TestCase):
         for req in self.model.requests:
             joined = '\n'.join(m['content'] for m in req['messages'] if m.get('role') == 'system')
             self.assertIn('CURRENT BETWEEN YOU AND LAN', joined)
-            self.assertIn('不要急着给安慰或空话', joined)
+            self.assertIn(long_rule, joined)
+            self.assertIn('就先顺着情绪陪她说话，不要再继续追问技术细节。', joined)
 
     def test_negation_polarity_and_newer_user_rebuttal_block_promotion(self):
         lc = LearnedContext(self.root / 'data', self.cfg.id, self.cfg.profile)

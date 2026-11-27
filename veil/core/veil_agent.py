@@ -4207,7 +4207,10 @@ class Chat:
             labels[id(voice_message)] = 'voice.frame'
         # Ticket 096: the role's own notes about the user sit right after the persona. They change
         # only when edited, so the cached prefix holds between edits.
-        profile_context = self.profile.context() if self.profile else None
+        profile_projection = (self.profile.build_prompt()
+                              if hasattr(self.profile, 'build_prompt') else None)
+        profile_context = (profile_projection['stable'] if profile_projection is not None
+                           else self.profile.context() if self.profile else None)
         if profile_context:
             head.append({'role': 'system', 'content': profile_context})
             labels[id(head[-1])] = 'memory.learned'
@@ -4219,7 +4222,8 @@ class Chat:
         if getattr(self, 'profile', None) and hasattr(self.profile, 'relationship_items'):
             from veil.brain.relationship_base import build as build_relationship_base
             from veil.brain.relationship_base import message as relationship_message
-            relationship = build_relationship_base(self.profile, getattr(self.cfg, 'profile', None))
+            relationship = build_relationship_base(self.profile, getattr(self.cfg, 'profile', None),
+                                                   projection=profile_projection)
             relationship_base_message = relationship_message(relationship)
             if relationship_base_message:
                 head.append(relationship_base_message)
@@ -4310,7 +4314,8 @@ class Chat:
             runtime_required.append({'role': 'system', 'content': mcp_problem})
             labels[id(runtime_required[-1])] = 'mcp_problem'
         if getattr(self, 'profile', None) and hasattr(self.profile, 'dynamic_context'):
-            ongoing_message = self.profile.dynamic_context()
+            ongoing_message = (profile_projection['ongoing'] if profile_projection is not None
+                               else self.profile.dynamic_context())
             if ongoing_message:
                 runtime_required.append({'role': 'system', 'content': ongoing_message})
                 labels[id(runtime_required[-1])] = 'memory.ongoing'
@@ -4324,7 +4329,7 @@ class Chat:
         observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
-        relationship_selected_ids = [
+        relationship_preselected_ids = [
             item.get('id') for item in relationship.get('items', [])
             if isinstance(item, dict) and item.get('id')
         ]
@@ -4340,13 +4345,12 @@ class Chat:
                 {'id': removed.get('id'), 'reason': 'budget'})
             relationship['degraded'] = True
             relationship['reason'] = 'budget'
-            relationship['chars'] = sum(item.get('chars') or 0 for item in relationship['items'])
+            relationship['dropped_total'] += 1
+            relationship['text'] = '\n'.join(item['line'] for item in relationship['items'])
+            relationship['chars'] = len(relationship['text'])
             if relationship['items']:
-                relationship_base_message['content'] = (
-                    relationship['header'] + '\n'
-                    + '\n'.join(item['line'] for item in relationship['items']))
+                relationship_base_message['content'] = relationship['header'] + '\n' + relationship['text']
             else:
-                relationship['text'] = ''
                 try:
                     head.remove(relationship_base_message)
                 except ValueError:
@@ -4571,53 +4575,78 @@ class Chat:
             except Exception:
                 pass
 
-        snapshot_step(1, messages, tool_schema, sent=not self.tool_mode)
-        save_debug = getattr(self.memory, 'save_recall_debug', None) if self.memory is not None else None
-        if callable(save_debug) and not skip_recall:
-            # Ticket 422: say what the relationship base actually contributed, even when no event was
-            # recalled. `space` is what the required blocks left memory this turn; a base that no longer
-            # fits its own small budget is reported as degraded instead of silently vanishing.
-            debug = getattr(self.memory, 'last_recall_debug', None)
-            if isinstance(debug, dict):
-                try:
-                    base_tokens = (estimate_message_tokens([relationship_base_message], calibration)
-                                   if relationship_base_message is not None else 0)
-                except Exception:
-                    base_tokens = 0
-                debug['relationship_base'] = {
-                    'chars': relationship.get('chars', 0), 'tokens': base_tokens,
-                    'stored_count': relationship.get('stored_count', 0),
-                    'active_count': relationship.get('active_count', 0),
-                    'selected_items': relationship_selected_ids,
-                    'items': [item.get('id') for item in relationship.get('items', [])],
-                    'statuses': {item.get('id'): item.get('status') for item in relationship.get('items', [])},
-                    'locked_items': [item.get('id') for item in relationship.get('items', []) if item.get('locked')],
-                    'compressed_items': list(relationship.get('compressed_items') or []),
-                    'cross_section_conflicts': list(relationship.get('cross_section_conflicts') or []),
-                    'dropped': list(relationship.get('dropped') or []),
-                    'degraded': bool(relationship.get('degraded')),
-                    'reason': relationship.get('reason') or '',
-                    'space_tokens': memory_space,
-                }
-            # Ticket 391: IDs only, no query or memory text; the panel reads this next to the context log.
+        diagnostics_saved = False
+
+        def save_turn_debug(sent_messages=()):
+            nonlocal diagnostics_saved
+            if diagnostics_saved:
+                return
+            diagnostics_saved = True
+            selected = relationship.get('items', [])
+            actual_message = next((msg for msg, label in zip(sent_messages, snapshot_labels(sent_messages))
+                                   if label == 'relationship_base'), None)
+            injected = selected if actual_message is not None else []
+            injected_ids = [item['id'] for item in injected]
+            debug = (getattr(self.memory, 'last_recall_debug', None)
+                     if not skip_recall else None)
+            base_debug = {
+                'chars': relationship.get('chars', 0) if injected else 0,
+                'tokens': estimate_message_tokens([actual_message], calibration) if injected else 0,
+                'stored_count': relationship.get('stored_count', 0),
+                'active_count': relationship.get('active_count', 0),
+                'active_items': list(relationship.get('active_items') or []),
+                'preselected_items': relationship_preselected_ids,
+                'selected_items': [item['id'] for item in selected],
+                'injected_items': injected_ids,
+                'items': injected_ids,
+                'statuses': {item['id']: item['status'] for item in injected},
+                'locked_items': [item['id'] for item in injected if item.get('locked')],
+                'compressed_items': [],
+                'cross_section_conflicts': list(relationship.get('cross_section_conflicts') or []),
+                'dropped': list(relationship.get('dropped') or []),
+                'dropped_total': relationship.get('dropped_total', 0),
+                'dropped_more': relationship.get('dropped_more', 0),
+                'degraded': bool(relationship.get('degraded')),
+                'reason': relationship.get('reason') or '',
+                'space_tokens': memory_space,
+            }
+            save_debug = getattr(self.memory, 'save_recall_debug', None)
             try:
-                save_debug(request_id)
-            except UserError:
+                if isinstance(debug, dict) and callable(save_debug):
+                    debug['relationship_base'] = base_debug
+                    save_debug(request_id)
+                elif relationship:
+                    self.store.append(f'{self.cfg.id}/recall-diagnostics.jsonl', {
+                        'time': now(), 'request_id': request_id, 'relationship_base': base_debug})
+            except (OSError, UserError):
                 pass
+
+        def tool_snapshot(step, sent_messages, sent_tools, sent=True):
+            snapshot_step(step, sent_messages, sent_tools, sent=sent)
+            if sent:
+                save_turn_debug(sent_messages)
+
+        if self.tool_mode:
+            snapshot_step(1, messages, tool_schema, sent=False)
         try:
             self._capability_request_active = True
             self.last_self = description
             if self.tool_mode:
-                reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
-                                                        snapshot=snapshot_step,
-                                                        autonomy=autonomy,
-                                                        checkpoint_goal=self.investigation.goal_for(text),
-                                                        checkpoint_resuming=bool(resume_context))
+                try:
+                    reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
+                                                            snapshot=tool_snapshot,
+                                                            autonomy=autonomy,
+                                                            checkpoint_goal=self.investigation.goal_for(text),
+                                                            checkpoint_resuming=bool(resume_context))
+                finally:
+                    save_turn_debug()
                 self._capture_work_checkpoint(autonomy)
             else:
                 try:
                     sent_bytes = request_byte_size(messages)
                     self.budget.mark_dispatched(request_id)
+                    snapshot_step(1, messages, tool_schema)
+                    save_turn_debug(messages)
                     reply, prompt, completion, cached = self._model_call(messages)
                     usage_status = usage_status_for(prompt, sent_bytes)
                 except RequestNotSent:

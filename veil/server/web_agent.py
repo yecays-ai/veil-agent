@@ -605,7 +605,8 @@ class Hub(ScreenPopMixin):
         user = chat.user_persona.status() if getattr(chat, 'user_persona', None) else None
         learned = chat.profile.status(with_text=True) if getattr(chat, 'profile', None) and hasattr(chat.profile, 'status') else None
         if learned is not None:
-            learned['versions'] = self._page_versions(chat.profile.versions)
+            learned['versions'] = (chat.profile.read_version_history()
+                                   if hasattr(chat.profile, 'read_version_history') else [])
         return {
             'persona': {'text': persona_text, 'chars': len(persona_text),
                         'bytes': len(persona_text.encode('utf-8')),
@@ -2617,6 +2618,72 @@ def make_handler(hub, token):
                     self._send(200, brain_overview(hub))
                 except sqlite3.Error:
                     self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import growth_analysis
+                try:
+                    self._send(200, growth_analysis(
+                        hub,
+                        range_key=(query.get('range') or ['7d'])[0],
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                    ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/day-changes':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import day_changes
+                try:
+                    self._send(200, day_changes(hub, (query.get('date') or [''])[0]))
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/growth-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import generate_growth_report
+                try:
+                    inc_content = (query.get('include_content') or ['1'])[0] not in ('0', 'false', 'False')
+                    inc_health = (query.get('include_health') or ['0'])[0] in ('1', 'true', 'True')
+                    self._send(200, generate_growth_report(
+                        hub,
+                        from_date=(query.get('from_date') or [''])[0],
+                        to_date=(query.get('to_date') or [''])[0],
+                        include_content=inc_content,
+                        include_health=inc_health,
+                        fmt=(query.get('format') or ['full'])[0],
+                    ))
+                except ValueError as exc:
+                    self._send(400, {'error': str(exc)})
+                except sqlite3.Error:
+                    self._send(503, {'error': 'Brain 数据库暂时无法读取，请稍后重试。'})
+            elif url.path == '/api/brain/recall-turns':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turns
+                try:
+                    page_num = int((query.get('page') or ['1'])[0] or 1)
+                    limit_num = int((query.get('limit') or ['20'])[0] or 20)
+                except ValueError:
+                    self._send(400, {'error': '分页参数 page 与 limit 必须为整数。'})
+                    return
+                self._send(200, recall_turns(
+                    hub,
+                    page=page_num,
+                    limit=limit_num,
+                    date=(query.get('date') or [''])[0],
+                    purpose=(query.get('purpose') or [''])[0],
+                    model=(query.get('model') or [''])[0],
+                    status=(query.get('status') or [''])[0],
+                ))
+            elif url.path == '/api/brain/recall-report':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import recall_turn_report
+                self._send(200, recall_turn_report(hub, (query.get('request_id') or [''])[0]))
             elif url.path == '/api/memory/library':
                 if not self._guard(self.headers.get('X-Token')):
                     return
@@ -3344,7 +3411,11 @@ def make_handler(hub, token):
 
         def _get_peter_page(self):
             try:
-                self._send(200, hub.peter_page())
+                data = hub.peter_page()
+                if isinstance(data, dict) and isinstance(data.get('learned'), dict):
+                    from veil.brain.brain_p4_api import _compute_cognition_budget
+                    data['learned']['budget'] = _compute_cognition_budget(data['learned'])
+                self._send(200, data)
             except UserError as exc:
                 self._send(400, {'error': str(exc)})
             except OSError as exc:
@@ -3735,6 +3806,13 @@ def make_handler(hub, token):
                 self._post_brain_health_scan(body)
             elif url.path == '/api/brain/health/settings':
                 self._post_brain_health_settings(body)
+            elif url.path == '/api/brain/layer-toggle':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import toggle_layer
+                res = toggle_layer(hub, str(body.get('layer_id') or ''), bool(body.get('enabled')))
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
             elif url.path == '/api/pending-approvals':
                 try:
                     self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
