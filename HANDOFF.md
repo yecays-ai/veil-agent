@@ -10,17 +10,9 @@
 - P7 可有条件开工：证据链、状态机、经验候选治理和 4 条/600-token AUXILIARY 槽位可复用；生产 `experience_hint_provider` 未安装，是首要施工项。
 - 本单只改 Markdown；未启动/停止正式 Peter，未访问或写正式数据，未部署，未运行付费实验，未启动 P7。
 
-## 关键事实
+## 状态入口
 
-| 事项 | 当前事实 | 证据入口 |
-| --- | --- | --- |
-| P6-S7（工单 465 / PR #466） | 已合并 `a5db802`；Actions 测试/安全检查成功；未部署、无 Lan 验收 | `docs/ACCEPTANCE.md` B-14 |
-| PR #434–#466 | 33/33 已合并 | 审计报告 §5 |
-| PR #464 | Actions 成功；最新 Sourcery review FAILURE | 审计报告 GOV-01 |
-| P2/P3 | 已部署并有开发/维护验证；无整体 Lan 验收 | 报告 §2.1–2.2 |
-| P4/P5 | #456 已部署；#459 部署未知；#462 未部署；均无 Lan 验收 | 报告 §2.3–2.4 |
-| P6 | S0–S7 已合并；S3–S7 无部署证据；终验归 P8 | 报告 §2.5–2.6 |
-| P7 | 候选形成/治理/查询与槽位就绪；生产 provider 未接线 | 报告 §7 |
+当前进度、PR、部署与阶段结论只看 [STATUS.md](STATUS.md)；Lan 验收状态只看 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)；证据矩阵、遗留编号与 P7 接入条件见 [专项审计报告](docs/reports/p2-p6-delivery-summary-p7-readiness-20261128.md)。本文件不重复维护状态表。
 
 ## 遗留边界
 
@@ -29,7 +21,7 @@
 - P6-S5-01：隐式工作 `trap` + 同轮判官联合门控未关闭。
 - P6-RERANK-01：Qwen3 Reranker 仅实验/契约，未上线。
 - P6-LONG-01：动态评价、保护性衰减、自主联想、认知巩固的多日真实效果待 P8。
-- P7-WIRE/MATCH/SIGNAL/BEHAVIOR：provider、语义匹配、触发信号、冲突/回退/行为诊断待 P7 实现。
+- P7-WIRE/EVIDENCE/MATCH/SIGNAL/BEHAVIOR：provider、全类型证据新鲜度、语义匹配、触发信号、冲突/回退/行为诊断待 P7 实现。
 - 正式恢复和 Embedding 重建仍必须先 dry-run，经 Lan 明确授权后执行。
 
 ## 下一个窗口第一步

@@ -101,7 +101,7 @@ P7 应继续默认关闭、只注入 `confirmed`、建议只读、不得扩大�
 
 ### 2.5 P6-0 · 41 项研究与消融
 
-权威逐项矩阵仍是 `docs/reports/p6-s4-requirements-coverage-audit-20261126.md:67-128`，本审计确认未被 S5–S7 推翻：
+权威逐项矩阵原始结论于 2026-11-26 随 PR #455 合并提交 `a1f2255` 入库；P6-S7 实施注记于 2026-11-28 提交 `a998ded` 更新，并最终包含在本次基线 `a5db802`。本审计以 `docs/reports/p6-s4-requirements-coverage-audit-20261126.md:67-128` 对照 S5–S7 后续实现，确认原实验结论未被推翻：
 
 | 分组 | 原始项 | 当前结论 |
 | --- | --- | --- |
@@ -138,7 +138,7 @@ P7 应继续默认关闭、只注入 `confirmed`、建议只读、不得扩大�
 | 19 | 权重/判官/联想/预算协同 | 工程联调完成；正式全链效果待验 | S3–S7/P8 |
 | 20 | 日常体验改善 | S4 盲评完成；最终日常终验未完成 | P8 |
 
-S0–S7 PR #449–#466 已全部合并。被否决的 AB-C2b、AB-C3 和纯轮换联想未误实施。详表与决策见 `docs/reports/p6-s4-requirements-coverage-audit-20261126.md:132-165`。
+S0–S7 PR #449–#466 已全部合并。被否决的 AB-C2b、AB-C3 和纯轮换联想未误实施。20 项原始责任矩阵与决策同样源自 2026-11-26 的 `a1f2255`，S7 状态由 2026-11-28 的 `a998ded` 补记；本审计在 `a5db802` 上复核。详表见 `docs/reports/p6-s4-requirements-coverage-audit-20261126.md:132-165`。
 
 ## 3. 记忆系统能力总览
 
@@ -224,6 +224,7 @@ S0–S7 PR #449–#466 已全部合并。被否决的 AB-C2b、AB-C3 和纯轮�
 | P6-LONG-01 | 动态评价、衰减、巩固、自主联想的多日真实效果未证明 | P8 长期灰度 |
 | P6-S7-01 | 缓存命中、费用、首 token 延迟仅结构改善，无供应商实测 | 部署后看 usage；不新增本单费用 |
 | P7-WIRE-01 | 生产 `experience_hint_provider` 未安装 | P7 首要施工项 |
+| P7-EVIDENCE-01 | 查询仅复核已删除的 `memory:`，未逐类复核 `event:` / `chat:` / `autonomy:` 证据新鲜度 | P7 provider 接入前补齐，失效证据不得注入 |
 | P7-MATCH-01 | 当前候选查询为词法重合，中文改写/隐含场景可能漏召回 | P7 语义匹配与判官设计 |
 | P7-SIGNAL-01 | provider situation 仅本轮背景，未定义 S5 signal/历史/判官复用 | P7 明确触发契约 |
 | P7-BEHAVIOR-01 | 建议冲突、行为选择、失败回退和诊断未实现 | P7 核心验收 |
@@ -235,7 +236,7 @@ S0–S7 PR #449–#466 已全部合并。被否决的 AB-C2b、AB-C3 和纯轮�
 ### 7.1 可直接复用
 
 - 权威经历/事件：`brain.db`、`EventMemory`、`event_ledger`。
-- 证据链：仅允许实际发送批次的 `memory:/event:/chat:/autonomy:` 引用；删除/不可用证据会过滤。
+- 证据链：候选生成只接受实际发送批次的 `memory:/event:/chat:/autonomy:` 引用；当前查询会复核已删除的 `memory:` 证据，但**尚未逐类复核 `event:` / `chat:` / `autonomy:` 的新鲜度**，P7 注入前必须补齐。
 - 状态机：`uncertain / confirmed / outdated / vetoed`，修订链 `supersedes/superseded_by`。
 - 用户主权：confirm/veto/outdated/restore；veto 永久账本；锁定/纠正/否决高于模型建议。
 - 查询：`experience_interface_contract()`、`list_experience_candidates()`、`query_experience_candidates()`、`decide_experience_candidate()`。
@@ -246,7 +247,7 @@ S0–S7 PR #449–#466 已全部合并。被否决的 AB-C2b、AB-C3 和纯轮�
 ### 7.2 P7 开工验收门槛
 
 1. 从当前 `main a5db802` 开独立工单，不重建第二套状态机或经历库。
-2. provider 必须调用 `query_experience_candidates()`，不得直接读 JSON 绕过锁、veto、删除过滤与角色隔离。
+2. provider 必须调用 `query_experience_candidates()`，不得直接读 JSON 绕过锁、veto、删除过滤与角色隔离；在返回可注入项前逐类复核 `memory:` / `event:` / `chat:` / `autonomy:` 证据仍有效。
 3. 明确 situation 信号、语义匹配、候选排序、冲突优先级和 0 命中行为。
 4. 默认关闭；只注入 confirmed；无命中 0 Token；最多 4 条/600 tokens；建议不能直接执行工具。
 5. 失败为空槽位，不阻断聊天；诊断能区分 no_provider、no_match、filtered、budget_trimmed、injected、error。
