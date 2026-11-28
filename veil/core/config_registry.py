@@ -359,3 +359,43 @@ def recall_config_overview(*, role_id: str, memory_cfg: Mapping | None = None,
             Observation(Source.RUNTIME, int(rot_eff.get('leisure_association_pool_size', 36)))),
     }
     return recall_config_registry().overview(role_id=role_id, evidence=evidence)
+
+
+# P6-S6-3: cognitive consolidation configuration registry (read-only projection).
+_CONSOLIDATION_DEFINITIONS = ConfigRegistry((
+    ConfigDefinition('memory.consolidation.enabled', '后台认知巩固开关（灰度默认关闭）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.consolidation.interval_hours', '认知巩固执行间隔（小时）',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.consolidation.max_runs_per_day', '认知巩固每日最多次数',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.consolidation.daily_budget_cny', '认知巩固每日费用上限（元）',
+                     Scope.ROLE, ValueType.NUMBER, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.consolidation.timeout_seconds', '认知巩固单次超时（秒）',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.consolidation.auto_apply_importance', '巩固重要度建议自动应用安全增量',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_TASK, sensitive=False),
+))
+
+
+def consolidation_config_registry() -> ConfigRegistry:
+    return _CONSOLIDATION_DEFINITIONS
+
+
+def consolidation_config_overview(*, role_id: str, persisted: Mapping | None = None,
+                                  runtime: Mapping | None = None) -> dict:
+    from veil.brain.cognitive_consolidation import settings_from
+
+    saved = persisted if isinstance(persisted, Mapping) else {}
+    cfg_vals = settings_from(saved)
+    eff_vals = settings_from(runtime) if isinstance(runtime, Mapping) else cfg_vals
+    evidence = {}
+    for key in ('enabled', 'interval_hours', 'max_runs_per_day', 'daily_budget_cny',
+                'timeout_seconds', 'auto_apply_importance'):
+        src = Source.SAVED if key in saved else Source.SETTINGS_DEFAULT
+        evidence[f'memory.consolidation.{key}'] = ConfigEvidence(
+            role_id,
+            Observation(src, cfg_vals[key]),
+            Observation(Source.RUNTIME, eff_vals[key]),
+        )
+    return consolidation_config_registry().overview(role_id=role_id, evidence=evidence)

@@ -8,6 +8,7 @@
     experience_memory: '经历整理',
     recall_judge: '想起判官',
     calendar_agreements: '日历约定',
+    cognitive_consolidation: '认知巩固',
   };
   const verificationReasons = new Map(Object.entries({
     budget: '额度不足', budget_exhausted: '额度不足', timeout: '核验超时', contradicted: '原话反驳',
@@ -108,7 +109,39 @@
     semanticNote.setAttribute('role', 'status');
     semanticForm.append(capLabel, timeoutLabel, semanticSave, semanticNote);
     semanticCard.append(semanticTitle, semanticCost, semanticCounts, semanticReasons, semanticForm);
-    root.append(summaryCard, semanticCard, catCard);
+
+    const consCard = create('article', 'veil-card');
+    consCard.hidden = true;
+    let consLoaded = null;
+    let consRevision = null;
+    const consTitle = create('h3', '', '后台认知巩固 · 当前角色（默认关闭灰度）');
+    const consCost = create('p');
+    const consCounts = create('p');
+    const consForm = create('form', 'filter-bar');
+    const consEnLabel = create('label', '', '启用后台巩固 ');
+    const consEnInput = document.createElement('input');
+    consEnInput.type = 'checkbox';
+    consEnLabel.append(consEnInput);
+    const consCapLabel = create('label', '', '巩固日上限 ¥（0 暂停）');
+    const consCapInput = document.createElement('input');
+    Object.assign(consCapInput, { type: 'number', min: '0', max: '5', step: '0.01', required: true });
+    consCapLabel.append(consCapInput);
+    const consIntervalLabel = create('label', '', '间隔（小时）');
+    const consIntervalInput = document.createElement('input');
+    Object.assign(consIntervalInput, { type: 'number', min: '1', max: '168', step: '1', required: true });
+    consIntervalLabel.append(consIntervalInput);
+    const consMaxLabel = create('label', '', '每日最多次数');
+    const consMaxInput = document.createElement('input');
+    Object.assign(consMaxInput, { type: 'number', min: '1', max: '12', step: '1', required: true });
+    consMaxLabel.append(consMaxInput);
+    const consSave = create('button', 'veil-btn primary sm', '保存巩固预算与频率');
+    consSave.type = 'submit';
+    const consNote = create('small');
+    consNote.setAttribute('role', 'status');
+    consForm.append(consEnLabel, consCapLabel, consIntervalLabel, consMaxLabel, consSave, consNote);
+    consCard.append(consTitle, consCost, consCounts, consForm);
+
+    root.append(summaryCard, semanticCard, consCard, catCard);
     host.replaceChildren(root);
 
     async function load() {
@@ -177,6 +210,29 @@
             }
             if (!reasons.length) semanticReasons.append(create('li', '', '暂无失败或未通过原因。'));
           }
+        }
+
+        const cons = data.cognitive_consolidation;
+        consCard.hidden = !cons;
+        if (cons) {
+          consLoaded = {
+            enabled: Boolean(cons.enabled),
+            daily_budget_cny: Number(cons.daily_cap_cny ?? 0.05),
+            interval_hours: Number(cons.interval_hours ?? 24),
+            max_runs_per_day: Number(cons.max_runs_per_day ?? 2),
+          };
+          consRevision = typeof cons.settings_revision === 'number' ? cons.settings_revision : null;
+          consEnInput.checked = consLoaded.enabled;
+          consCapInput.value = String(cons.daily_cap_cny ?? '0.05');
+          consIntervalInput.value = String(cons.interval_hours ?? 24);
+          consMaxInput.value = String(cons.max_runs_per_day ?? 2);
+          consCost.textContent = '今日已用 ' + currency(cons.spent_cny)
+            + ' · 预留 ' + currency(cons.pending_cny) + ' · 额度余额 '
+            + currency(cons.remaining_cny) + ' · ' + (cons.status_text || (cons.enabled ? '已启用' : '已关闭'));
+          consCounts.textContent = '今日运行 ' + (cons.runs_today ?? 0) + '/' + (cons.max_runs_per_day ?? 2)
+            + ' 次 · 累计认知新增 ' + (cons.cognition_written ?? 0)
+            + ' / 修订 ' + (cons.cognition_revised ?? 0)
+            + ' · 重要度建议 ' + (cons.importance_proposed ?? 0);
         }
 
         catBody.replaceChildren();
@@ -250,6 +306,46 @@
         semanticNote.textContent = err.message || '保存失败';
       } finally {
         semanticSave.disabled = false;
+      }
+    });
+
+    consForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const next = {
+        enabled: Boolean(consEnInput.checked),
+        daily_budget_cny: Number(consCapInput.value),
+        interval_hours: Number(consIntervalInput.value),
+        max_runs_per_day: Number(consMaxInput.value),
+      };
+      const changed = {};
+      for (const [k, v] of Object.entries(next)) {
+        if (!consLoaded || consLoaded[k] !== v) changed[k] = v;
+      }
+      if (!Object.keys(changed).length) {
+        consNote.textContent = '配置未改动。';
+        return;
+      }
+      consSave.disabled = true;
+      consNote.textContent = '正在保存…';
+      try {
+        const body = { values: changed };
+        if (consRevision !== null) body.expected_revision = consRevision;
+        const res = await request('/api/brain/consolidation/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok || !payload?.ok) {
+          if (res.status === 409) await load();
+          throw new Error(payload?.error || '保存失败');
+        }
+        consNote.textContent = '已保存并持久化，下次巩固周期生效，无需重启。';
+        await load();
+      } catch (err) {
+        consNote.textContent = err.message || '保存失败';
+      } finally {
+        consSave.disabled = false;
       }
     });
 

@@ -324,6 +324,115 @@
     return sub;
   }
 
+  function buildConsolidationPanel(req, host, data) {
+    const initial = { ...(data.settings || {}) };
+    const draft = { ...initial };
+    const dirty = {};
+    const expectedRevision = typeof data.settings_revision === 'number' ? data.settings_revision : null;
+    const eff = data.effective || {};
+    const budget = data.budget || {};
+    const totals = data.totals || {};
+    const p7 = data.p7_interface || {};
+    const p7Counts = p7.counts || {};
+    const sub = el('div', 'veil-subpanel');
+    sub.style.marginTop = '10px';
+    const head = el('div', 'veil-card-head');
+    const tone = eff.code === 'active' ? 'good' : (eff.code === 'budget_exhausted' || eff.code === 'paused_budget_zero' ? 'warn' : '');
+    head.append(
+      el('strong', '', '后台认知巩固与经验提炼（灰度）'),
+      pill('策略 ' + (data.policy_version || 's6-3.v1'), ''),
+      pill(eff.status_text || (draft.enabled ? '已启用' : '已关闭（默认灰度关闭）'), tone),
+    );
+    const mark = (key, value) => {
+      draft[key] = value;
+      dirty[key] = value;
+    };
+    const grid = el('div', 'six-layer-grid');
+    grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
+    grid.append(
+      memorySwitchRow('启用后台认知巩固', draft.enabled === true,
+        '默认关闭供灰度体验；复用 S3 证据核验与锁定/否决治理、S6-1 重要度重评与独立费用上限。',
+        v => mark('enabled', v)),
+      memorySwitchRow('允许自动应用安全重要度增量', draft.auto_apply_importance === true,
+        '默认关闭（仅生成待确认建议）；开启后仍严格受 S6-1 硬上限（≤7、单步+1、尊重锁定与置顶）约束。',
+        v => mark('auto_apply_importance', v)),
+      memoryNumberRow('执行间隔（小时）', draft.interval_hours ?? 24, {
+        min: 1, max: 168, step: 1, detail: '两次定时巩固之间的最小间隔，支持增量处理与跨日连续。',
+      }, v => mark('interval_hours', v)),
+      memoryNumberRow('每日最多次数', draft.max_runs_per_day ?? 2, {
+        min: 1, max: 12, step: 1, detail: '防止无限循环与重复费用。',
+      }, v => mark('max_runs_per_day', v)),
+      memoryNumberRow('每日费用上限（¥）', draft.daily_budget_cny ?? 0.05, {
+        min: 0, max: 5, step: 0.01, detail: '独立日预算硬上限（对照 AB-E1 约 ¥0.03/夜）；填 0 暂停付费运行。',
+      }, v => mark('daily_budget_cny', v)),
+      memoryNumberRow('单次超时（秒）', draft.timeout_seconds ?? 25, {
+        min: 5, max: 120, step: 1, detail: '后台单次巩固模型请求超时，不阻塞正常聊天。',
+      }, v => mark('timeout_seconds', v)),
+    );
+    const summaryLine = el('small', 'muted',
+      `今日费用 ¥${budget.spent_cny ?? '0'} / 上限 ¥${budget.daily_cap_cny ?? draft.daily_budget_cny ?? '0.05'}（余额 ¥${budget.remaining_cny ?? '0'}） · `
+      + `今日运行 ${eff.runs_today ?? 0}/${eff.max_runs_per_day ?? draft.max_runs_per_day ?? 2} 次 · `
+      + `已处理记忆 ${eff.processed_memories ?? 0} 条 / 自主经历 ${eff.processed_autonomy ?? 0} 条 · `
+      + `认知新增 ${totals.cognition_written ?? 0} / 修订 ${totals.cognition_revised ?? 0} / 拦截 ${totals.cognition_blocked ?? 0} · `
+      + `重要度建议 ${totals.importance_proposed ?? 0} · P7 经验候选 ${p7Counts.total ?? 0} 条`);
+    const actions = el('div', 'workspace-links');
+    const saveBtn = btn('保存巩固设置', 'sm primary');
+    const runBtn = btn('立即运行一次巩固', 'sm');
+    if (initial.enabled !== true) {
+      runBtn.disabled = true;
+      runBtn.title = '请先开启「启用后台认知巩固」并保存后再手动运行';
+    }
+    const viewBtn = btn('查看巩固结果与演化', 'sm');
+    const statusLine = el('small', 'muted', '');
+    saveBtn.addEventListener('click', async () => {
+      if (!Object.keys(dirty).length) {
+        statusLine.textContent = '配置未改动。';
+        return;
+      }
+      saveBtn.disabled = true;
+      statusLine.textContent = '正在保存并持久化巩固配置…';
+      const payload = { values: { ...dirty } };
+      if (expectedRevision !== null) payload.expected_revision = expectedRevision;
+      const res = await reqJson(req, '/api/brain/consolidation/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      saveBtn.disabled = false;
+      if (!res.ok || !res.data?.ok) {
+        statusLine.textContent = res.data?.error || '保存失败，已保留原设置。';
+        if (res.status === 409 && typeof renderBrainHome === 'function') renderBrainHome(host, req);
+        return;
+      }
+      statusLine.textContent = '已保存到 ' + (res.data.persistence_path || '本机数据目录') + '，下次周期生效，重启保留。';
+      if (typeof renderBrainHome === 'function') renderBrainHome(host, req);
+    });
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      statusLine.textContent = '正在执行增量巩固检查…';
+      const res = await reqJson(req, '/api/brain/consolidation/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: false }),
+      });
+      runBtn.disabled = false;
+      if (!res.ok) {
+        statusLine.textContent = res.data?.error || res.data?.reason || '巩固运行失败。';
+        return;
+      }
+      const st = res.data?.status || '';
+      const rsn = res.data?.reason || '';
+      statusLine.textContent = st === 'completed'
+        ? '本次巩固已完成，结果已写入治理链路。'
+        : `已跳过或未执行：${rsn || st || '暂无新增可巩固素材'}`;
+      if (typeof renderBrainHome === 'function') renderBrainHome(host, req);
+    });
+    viewBtn.addEventListener('click', () => window.veilWorkspace?.go('brain-cognition'));
+    actions.append(saveBtn, runBtn, viewBtn);
+    sub.append(head, grid, summaryLine, actions, statusLine);
+    return sub;
+  }
+
   async function openMemoryProposals(req, memoryId, refresh) {
     const query = '/api/brain/memory-proposals?status=pending'
       + (memoryId ? '&memory_id=' + encodeURIComponent(memoryId) : '');
@@ -596,9 +705,15 @@
     }
 
     // 2c. P6-S6-1 memory weights: activation, protective decay and versioned re-evaluation.
-    const weightsRes = await reqJson(req, '/api/brain/memory-weights');
+    const [weightsRes, consRes] = await Promise.all([
+      reqJson(req, '/api/brain/memory-weights'),
+      reqJson(req, '/api/brain/consolidation'),
+    ]);
     if (weightsRes.ok && weightsRes.data?.available) {
       layerCard.append(buildMemoryWeightsPanel(req, host, weightsRes.data));
+    }
+    if (consRes.ok && consRes.data?.available) {
+      layerCard.append(buildConsolidationPanel(req, host, consRes.data));
     }
 
     // 3. Memory Growth Analysis & One-Click Report
@@ -1626,9 +1741,10 @@
   // =========================================================================
   async function renderCognitionWorkspace(host, req) {
     host.replaceChildren(el('p', '', '正在加载关系底座与习得认知…'));
-    const [pageRes, verRes] = await Promise.all([
+    const [pageRes, verRes, consRes] = await Promise.all([
       reqJson(req, '/api/peter-page'),
       reqJson(req, '/api/peter-page/versions'),
+      reqJson(req, '/api/brain/consolidation'),
     ]);
     const page = pageRes.data || {};
     const learned = page.learned || {};
@@ -1748,6 +1864,164 @@
 
     grid.append(relCard, factsCard, ongoingCard, growthCard);
 
+    // P6-S6-3: Consolidation results, evidence provenance, cognitive evolution & P7 experience candidates.
+    const consNodes = [];
+    const consData = consRes.ok && consRes.data?.available ? consRes.data : null;
+    if (consData) {
+      const eff = consData.effective || {};
+      const budget = consData.budget || {};
+      const consCard = el('article', 'veil-card');
+      const cHead = el('div', 'veil-card-head');
+      cHead.append(
+        el('h3', '', '后台认知巩固结果与演化记录'),
+        pill(eff.status_text || '已关闭', eff.code === 'active' ? 'good' : ''),
+      );
+      consCard.append(
+        cHead,
+        el('small', 'muted',
+          `今日费用 ¥${budget.spent_cny ?? '0'} / 上限 ¥${budget.daily_cap_cny ?? '0.05'} · `
+          + `最近运行：${eff.last_run_at ? formatTime(eff.last_run_at) : '暂无'}（${eff.last_status || 'never'}${eff.last_reason ? ' · ' + eff.last_reason : ''}）`),
+      );
+      const effLabels = {
+        effective_confirmed: '已生效（已确认）',
+        queued_semantic_verify: '已写入（待 S3 语义核验）',
+        effective_uncertain: '已写入（未确认）',
+        effective_learned: '已生效（已通过 S3 语义核验）',
+        pending_review: '待审（未写入有效上下文）',
+        blocked_sovereignty: '已拦截（尊重锁定/纠正/否决）',
+        rejected_budget: '未写入（分区预算已满）',
+        rejected_ungrounded_content: '未写入（初筛未通过）',
+        rejected_semantic_contradicted: '未写入（S3 语义核验冲突）',
+        rejected: '未写入（治理拒绝）',
+      };
+      const runs = Array.isArray(consData.recent_runs) ? consData.recent_runs : [];
+      if (!runs.length) {
+        consCard.append(el('p', 'muted', '暂无后台认知巩固记录。可在「记忆监控」或「预算管理」页开启灰度体验。'));
+      } else {
+        for (const run of runs.slice(0, 6)) {
+          const box = el('div', 'veil-subpanel');
+          const res = run.results || {};
+          const cogList = Array.isArray(res.cognition_updates) ? res.cognition_updates : [];
+          const impList = Array.isArray(res.importance_proposals) ? res.importance_proposals : [];
+          const expList = Array.isArray(res.experience_candidates) ? res.experience_candidates : [];
+          box.append(
+            el('strong', '', `${formatTime(run.finished_at || run.started_at)} · ${run.status || ''}${run.reason ? '（' + run.reason + '）' : ''} · ¥${run.cost_cny ?? 0}`),
+            el('small', 'muted', `输入：新记忆 ${(run.inputs?.new_memory_ids || []).length} 条 / 历史锚点 ${(run.inputs?.anchor_memory_ids || []).length} 条 / 自主经历 ${(run.inputs?.autonomy_ids || []).length} 条`),
+          );
+          for (const u of cogList) {
+            const row = el('div', 'flat-entry');
+            const kindLbl = u.kind === 'revision' ? '修订认知' : '新增认知';
+            row.append(
+              el('strong', '', `[${kindLbl} · ${u.section}] ${effLabels[u.effective_status] || u.effective_status || ''}`),
+              el('div', 'reader-prose', u.replace_old_text ? `旧：${u.replace_old_text}\n新：${u.text}` : (u.text || '')),
+              el('small', 'muted', `形成原因：${u.reason || '无'} · 证据来源：${(u.evidence_refs || []).join('、') || '无'}`),
+            );
+            box.append(row);
+          }
+          for (const p of impList) {
+            const row = el('div', 'flat-entry');
+            row.append(
+              el('small', '', `重要度重评：${p.memory_title || p.memory_id}（${p.current_importance} → ${p.proposed_importance}）· 状态：${p.outcome || ''} · 原因：${p.reason || ''}`),
+            );
+            box.append(row);
+          }
+          if (expList.length) {
+            box.append(el('small', 'muted', `提炼 P7 情境经验候选 ${expList.length} 条（不占 HEAD 前缀）`));
+          }
+          consCard.append(box);
+        }
+      }
+
+      const pendingCogs = Array.isArray(consData.pending_cognition_updates) ? consData.pending_cognition_updates : [];
+      if (pendingCogs.length) {
+        const pendBox = el('div', 'veil-subpanel');
+        pendBox.append(el('strong', '', `待审认知候选（${pendingCogs.length} 条 · 未经 S3 语义核验通过前不会进入对话上下文）`));
+        for (const item of pendingCogs) {
+          const row = el('div', 'layer-item');
+          row.append(
+            el('strong', '', `[${item.kind === 'revision' ? '修订' : '新增'} · ${item.section}] ${item.verify_reason || '待人工确认'}`),
+            el('div', 'reader-prose', item.replace_old_text ? `旧：${item.replace_old_text}\n新：${item.text}` : (item.text || '')),
+            el('small', 'muted', `原因：${item.reason || '无'} · 证据：${(item.evidence_refs || []).join('、') || '无'}`),
+          );
+          const act = el('div', 'workspace-links');
+          const okBtn = btn('批准写入', 'sm primary');
+          okBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            await reqJson(req, '/api/brain/consolidation/cognition', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: item.id, action: 'approve' }),
+            });
+            renderCognitionWorkspace(host, req);
+          });
+          const rejBtn = btn('拒绝', 'sm');
+          rejBtn.addEventListener('click', async () => {
+            rejBtn.disabled = true;
+            await reqJson(req, '/api/brain/consolidation/cognition', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: item.id, action: 'reject' }),
+            });
+            renderCognitionWorkspace(host, req);
+          });
+          act.append(okBtn, rejBtn);
+          row.append(act);
+          pendBox.append(row);
+        }
+        consCard.append(pendBox);
+      }
+
+      const p7Items = Array.isArray(consData.experience_candidates) ? consData.experience_candidates : [];
+      const p7Card = el('article', 'veil-card');
+      const p7Head = el('div', 'veil-card-head');
+      p7Head.append(el('h3', '', '预留 P7 情境经验候选'), pill(`${p7Items.length} 条`, ''));
+      p7Card.append(p7Head);
+      if (!p7Items.length) {
+        p7Card.append(el('p', 'muted', '暂无预留给 P7 情境触发注入的经验候选。'));
+      } else {
+        // Surface pending items first and render every returned candidate so none are unreachable.
+        const sortedP7 = [...p7Items].sort((a, b) => {
+          const rank = s => (s === 'uncertain' ? 0 : s === 'confirmed' ? 1 : 2);
+          return rank(a.status) - rank(b.status);
+        });
+        for (const item of sortedP7) {
+          const row = el('div', 'layer-item');
+          const stLbl = { confirmed: '已确认', uncertain: '待确认', outdated: '已过时', vetoed: '已否决' }[item.status] || item.status;
+          row.append(
+            el('strong', '', `[${item.kind || 'experience'}] ${stLbl} · 触发情境：${item.trigger_condition || ''}`),
+            el('div', 'reader-prose', item.guidance || ''),
+            el('small', 'muted', `原因：${item.reason || ''} · 证据：${(item.evidence_refs || []).join('、')}`),
+          );
+          if (item.status === 'uncertain' || item.status === 'confirmed') {
+            const act = el('div', 'workspace-links');
+            if (item.status !== 'confirmed') {
+              const okBtn = btn('确认生效', 'sm primary');
+              okBtn.addEventListener('click', async () => {
+                okBtn.disabled = true;
+                await reqJson(req, '/api/brain/consolidation/experience', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: item.id, action: 'confirm' }),
+                });
+                renderCognitionWorkspace(host, req);
+              });
+              act.append(okBtn);
+            }
+            const vetoBtn = btn('否决', 'sm');
+            vetoBtn.addEventListener('click', async () => {
+              vetoBtn.disabled = true;
+              await reqJson(req, '/api/brain/consolidation/experience', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: item.id, action: 'veto' }),
+              });
+              renderCognitionWorkspace(host, req);
+            });
+            act.append(vetoBtn);
+            row.append(act);
+          }
+          p7Card.append(row);
+        }
+      }
+      consNodes.push(consCard, p7Card);
+    }
+
     // Versions & Technical Details (collapsed)
     const techCard = el('article', 'veil-card');
     const techDet = el('details');
@@ -1764,7 +2038,7 @@
     }
     techCard.append(techDet);
 
-    host.replaceChildren(budgetCard, grid, techCard);
+    host.replaceChildren(budgetCard, grid, ...consNodes, techCard);
   }
 
   // =========================================================================

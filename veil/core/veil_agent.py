@@ -1729,22 +1729,28 @@ class Budget:
         return count
 
     @synchronized
-    def reconcile_unsettled(self, accountings):
+    def reconcile_unsettled(self, accountings, *, character=None, request_ids=None):
         """Convert interrupted memory reservations to their full conservative charge.
 
         Unknown outcomes are never released: after restart the reserved upper
         estimate becomes settled spend, so it cannot permanently occupy pending.
+        Optional `character` and `request_ids` scope recovery so one role never
+        prematurely settles another role's active in-flight reservation.
         """
         self.totals()  # Validate the full ledger before recovering any entry.
         rows = self.store.read_incremental('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        req_filter = set(request_ids) if request_ids is not None else None
+        count = 0
         for row in rows:
             if (row.get('type') == 'reserve' and row.get('accounting') in accountings
-                    and row.get('id') not in settled):
+                    and row.get('id') not in settled
+                    and (character is None or row.get('character') == character)
+                    and (req_filter is None or row.get('id') in req_filter)):
                 self.settle_estimate((row['id'], Decimal(row['amount'])),
                                      accounting=f"{row['accounting']}-recovered")
-        return len([row for row in rows if row.get('type') == 'reserve'
-                    and row.get('accounting') in accountings and row.get('id') not in settled])
+                count += 1
+        return count
 
     @synchronized
     def input_token_ratio(self, cfg):
@@ -1865,13 +1871,15 @@ class Budget:
         all_experience, _ = self.category_totals(None, stamp, 'experience_memory')
         all_judge, _ = self.category_totals(None, stamp, 'recall_judge')
         all_calendar, _ = self.category_totals(None, stamp, 'calendar_agreements')
+        all_consolidation, _ = self.category_totals(None, stamp, 'cognitive_consolidation')
         autonomy = all_autonomy if character is None else self.category_totals(character, stamp)[0]
         glance = all_glance if character is None else self.category_totals(character, stamp, 'glance')[0]
         short_term = (all_short_term if character is None else
                       self.category_totals(character, stamp, 'short_term_notes')[0])
         delegate = (all_delegate if character is None else
                     self.category_totals(character, stamp, 'delegate')[0])
-        chat = day - all_autonomy - all_glance - all_short_term - all_delegate - all_experience - all_judge - all_calendar
+        chat = (day - all_autonomy - all_glance - all_short_term - all_delegate
+                - all_experience - all_judge - all_calendar - all_consolidation)
         warning = ('【费用账本有待核实的记录，已暂停所有付费请求；见 python -m veil.system.data_repair ledger-status】'
                    if ledger_recovery.is_unverified(self.store.root) else '')
         return (warning + f'今天 ¥{day:.6f} / {self.daily_limit()}；本月 ¥{month:.6f} / {self.monthly_limit()}；'
@@ -1880,7 +1888,8 @@ class Budget:
                 f'{self.glance_daily}/日，委派任务 ¥{delegate:.6f}，短期便签提取 ¥{short_term:.6f}'
                 + (f'，经历整理 ¥{all_experience:.6f}' if all_experience else '')
                 + (f'，想起判官 ¥{all_judge:.6f}' if all_judge else '')
-                + (f'，日历约定判断 ¥{all_calendar:.6f}' if all_calendar else ''))
+                + (f'，日历约定判断 ¥{all_calendar:.6f}' if all_calendar else '')
+                + (f'，认知巩固 ¥{all_consolidation:.6f}' if all_consolidation else ''))
 
     @synchronized
     def model_display(self, stamp=None):
@@ -2390,6 +2399,7 @@ class Chat:
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
         self.relationship_semantic_scheduler = None
+        self.relationship_semantic_verifier = None
         semantic_settings = getattr(getattr(cfg, 'models', None), 'semantic_verification', None)
         if (callable(getattr(self.profile, 'pending_relationship_semantics', None))
                 and callable(semantic_settings) and background_model is not None):
@@ -2402,6 +2412,7 @@ class Chat:
                 background_cfg(cfg), budget, request,
                 semantic_settings, profile=self.profile,
             )
+            self.relationship_semantic_verifier = verifier
             self.relationship_semantic_scheduler = PeriodicBackgroundTick(
                 f'{cfg.id}-relationship-semantic', TICK_SECONDS, verifier.tick)
         notes_config = getattr(cfg, 'short_term_notes', None) or {}
@@ -2418,6 +2429,19 @@ class Chat:
             from veil.brain.experience_memory import ExperienceMemory, load_settings
             self.experience = ExperienceMemory(cfg, store, budget, model, self.path, self.memory,
                                                load_settings(experience_config))
+        # P6-S6-3: background cognitive consolidation (default disabled for gray-scale rollout).
+        self.consolidation = None
+        if store is not None and budget is not None:
+            from veil.brain.cognitive_consolidation import CognitiveConsolidator
+            # Keep budget pricing/limits strictly aligned with the actually invoked model adapter.
+            cons_cfg = background_cfg(cfg) if background_model is not None else cfg
+            cons_src = background_model if background_model is not None else model
+            cons_request = getattr(cons_src, '__dict__', {}).get('raw') or cons_src
+            self.consolidation = CognitiveConsolidator(
+                cons_cfg, store, budget, cons_request,
+                memory=self.memory, profile=self.profile,
+                semantic_verifier=self.relationship_semantic_verifier,
+            )
 
     def start_short_term_notes_scheduler(self):
         if self.relationship_semantic_scheduler:
@@ -2426,6 +2450,8 @@ class Chat:
             self.short_term_notes.start()
         if self.experience:
             self.experience.start()
+        if self.consolidation:
+            self.consolidation.start()
 
     def stop_short_term_notes_scheduler(self):
         if self.relationship_semantic_scheduler:
@@ -2434,6 +2460,8 @@ class Chat:
             self.short_term_notes.stop()
         if self.experience:
             self.experience.stop()
+        if self.consolidation:
+            self.consolidation.stop()
 
     def refresh_tool_inventory(self):
         """Ticket 357: keep a finished copy of the tool list for the desktop page. Called on the chat's own
