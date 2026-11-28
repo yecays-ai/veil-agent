@@ -2531,6 +2531,7 @@ def make_handler(hub, token):
                         'cognition_written': int(cs_tot.get('cognition_written', 0)),
                         'cognition_revised': int(cs_tot.get('cognition_revised', 0)),
                         'importance_proposed': int(cs_tot.get('importance_proposed', 0)),
+                        'settings_revision': int(cs.get('settings_revision', 1)),
                     }
             except Exception:
                 consolidation_budget = None
@@ -2820,7 +2821,11 @@ def make_handler(hub, token):
                 if not getattr(cfg, 'id', None):
                     self._send(503, {'error': '角色配置尚未就绪。'})
                     return
-                from veil.core.config_registry import model_config_overview, semantic_config_overview
+                from veil.core.config_registry import (
+                    consolidation_config_overview,
+                    model_config_overview,
+                    semantic_config_overview,
+                )
                 models = getattr(cfg, 'models', None)
                 try:
                     settings = models.public() if models is not None else None
@@ -2835,6 +2840,18 @@ def make_handler(hub, token):
                     except SettingsError:
                         observation = None
                     view['entries'].extend(semantic_config_overview(role_id=cfg.id, observation=observation))
+                cons = getattr(hub.chat, 'consolidation', None)
+                if cons is not None:
+                    try:
+                        from veil.brain.cognitive_consolidation import load_persisted as load_cons_persisted
+                        persisted_cons = load_cons_persisted(getattr(hub.chat, 'store', None), cfg.id)
+                        runtime_cons = cons.settings()
+                        cons_view = consolidation_config_overview(
+                            role_id=cfg.id, persisted=persisted_cons, runtime=runtime_cons,
+                        )
+                        view['entries'].extend(cons_view.get('entries') or [])
+                    except Exception:
+                        pass
                 self._send(200, view)
             elif url.path == '/api/config/inventory':
                 if not self._guard(self.headers.get('X-Token')):
@@ -3946,14 +3963,24 @@ def make_handler(hub, token):
                     return
                 from veil.brain.brain_p4_api import set_consolidation_settings
                 values = body.get('values') if isinstance(body.get('values'), dict) else body
-                res = set_consolidation_settings(hub, values)
+                exp_rev = body.get('expected_revision')
+                if exp_rev is not None and (type(exp_rev) is bool or not isinstance(exp_rev, int) or exp_rev < 1):
+                    self._send(400, {'ok': False, 'error': 'expected_revision 必须是正整数。'})
+                    return
+                if values is body and 'expected_revision' in body:
+                    values = {k: v for k, v in body.items() if k != 'expected_revision'}
+                res = set_consolidation_settings(hub, values, expected_revision=exp_rev)
                 code = 200 if res.get('ok') else int(res.get('status_code') or 400)
                 self._send(code, res)
             elif url.path == '/api/brain/consolidation/run':
                 if not self._guard(self.headers.get('X-Token')):
                     return
+                raw_force = body.get('force', False)
+                if type(raw_force) is not bool:
+                    self._send(400, {'ok': False, 'error': 'force 必须是布尔值。'})
+                    return
                 from veil.brain.brain_p4_api import run_consolidation
-                res = run_consolidation(hub, force=bool(body.get('force')))
+                res = run_consolidation(hub, force=raw_force)
                 code = 200 if res.get('ok') or res.get('status') in ('skipped', 'budget_exhausted') else int(res.get('status_code') or 500)
                 self._send(code, res)
             elif url.path == '/api/brain/consolidation/experience':

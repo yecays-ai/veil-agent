@@ -1729,22 +1729,28 @@ class Budget:
         return count
 
     @synchronized
-    def reconcile_unsettled(self, accountings):
+    def reconcile_unsettled(self, accountings, *, character=None, request_ids=None):
         """Convert interrupted memory reservations to their full conservative charge.
 
         Unknown outcomes are never released: after restart the reserved upper
         estimate becomes settled spend, so it cannot permanently occupy pending.
+        Optional `character` and `request_ids` scope recovery so one role never
+        prematurely settles another role's active in-flight reservation.
         """
         self.totals()  # Validate the full ledger before recovering any entry.
         rows = self.store.read_incremental('costs.jsonl')
         settled = {row.get('id') for row in rows if row.get('type') == 'settle'}
+        req_filter = set(request_ids) if request_ids is not None else None
+        count = 0
         for row in rows:
             if (row.get('type') == 'reserve' and row.get('accounting') in accountings
-                    and row.get('id') not in settled):
+                    and row.get('id') not in settled
+                    and (character is None or row.get('character') == character)
+                    and (req_filter is None or row.get('id') in req_filter)):
                 self.settle_estimate((row['id'], Decimal(row['amount'])),
                                      accounting=f"{row['accounting']}-recovered")
-        return len([row for row in rows if row.get('type') == 'reserve'
-                    and row.get('accounting') in accountings and row.get('id') not in settled])
+                count += 1
+        return count
 
     @synchronized
     def input_token_ratio(self, cfg):
@@ -2425,10 +2431,12 @@ class Chat:
         self.consolidation = None
         if store is not None and budget is not None:
             from veil.brain.cognitive_consolidation import CognitiveConsolidator
-            bg_src = background_model or model
-            bg_request = getattr(bg_src, '__dict__', {}).get('raw') or bg_src
+            # Keep budget pricing/limits strictly aligned with the actually invoked model adapter.
+            cons_cfg = background_cfg(cfg) if background_model is not None else cfg
+            cons_src = background_model if background_model is not None else model
+            cons_request = getattr(cons_src, '__dict__', {}).get('raw') or cons_src
             self.consolidation = CognitiveConsolidator(
-                background_cfg(cfg), store, budget, bg_request,
+                cons_cfg, store, budget, cons_request,
                 memory=self.memory, profile=self.profile,
             )
 

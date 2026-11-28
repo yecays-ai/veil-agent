@@ -13,7 +13,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 
 | 工单 | PR | 合并提交 | 合并时间（UTC） | 部署 | 验收入口（以 ACCEPTANCE 为准） |
 | --- | --- | --- | --- | --- | --- |
-| 464 · P6-S6-3 后台认知巩固与经验提炼 | 待创建 PR | — | — | 未部署 | [§3 B-13](docs/ACCEPTANCE.md#b-13-p6-s6-3-后台认知巩固与经验提炼工单-464) |
+| 464 · P6-S6-3 后台认知巩固与经验提炼 | #465 | — | — | 未部署 | [§3 B-13](docs/ACCEPTANCE.md#b-13-p6-s6-3-后台认知巩固与经验提炼工单-464) |
 | 462 · P6-S6-1 记忆动态评价、强化与保护性衰减 | #464 | `90846bd` | 2026-11-27 23:15 UTC | 未部署 | [§3 B-12](docs/ACCEPTANCE.md#b-12-p6-s6-1-记忆动态评价强化与保护性衰减工单-462--pr-464) |
 | 463 · P6-S6-2 自主闲暇自然联想 | #463 | `81dba35` | 2026-11-27 17:05 UTC | 未部署 | [§3 B-11](docs/ACCEPTANCE.md#b-11-自主闲暇自然联想p6-s6-2--工单-463) |
 | 461 · P5 健康巡检补齐 + S6 开工门禁 | #462 | `ead71b6` | 2026-11-27 15:38 UTC | 未部署 | [§3 B-9 / B-10](docs/ACCEPTANCE.md#b-9-p5-健康巡检补齐工单-461) |
@@ -81,7 +81,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 - **认知演进与 S3 严格治理**：零平行认知存储，全部新认知与冲突修订经 S3 `LearnedContext.submit_candidate()` / `reverify_relationship_evidence()` 与 `RelationshipSemanticWorker` 落库；幻觉引用与重复总结拦截、S6-2 不洁自主输出过滤、纯自主无用户原话降级 `uncertain`（防循环自证）、锁定与用户主权硬保护、冲突修订保留 `outdated` + `superseded_by` 历史版本。
 - **跨模块协作与 P7 接口**：接通 S6-1 `MemoryWeights.propose()`（含去重与拒绝尊重，默认不自动应用）、读取 S6-2 审计后 `autonomy.jsonl`，巩固结果经 `LearnedContext` 进入后续聊天与自主活动上下文；预留 `p7.experience.v1` 结构化情境经验接口与确认/否决治理（不注入 `HEAD`）。
 - **调度、预算、恢复与界面**：独立 `PeriodicBackgroundTick`、共享 `Budget` 类目 `cognitive_consolidation`（默认 `¥0.05/日`、24h/2次日上限，精确费率结算并在 `/cost` 单列）、`in_flight` 崩溃恢复与指数退避、脱敏运行日志；复用 Brain 首页/「关系与成长」页与费用管理页及 Electron `main.cjs` 路由白名单，配置持久化。
-- **验证**：新增 `tests/test_p6_s6_3_cognitive_consolidation.py`（7 项端到端场景）与 `desktop/tests/cognitive-consolidation.test.cjs`（4 项）；定向 15 个 Python 测试模块 **262/262** 通过，桌面 **69/69** 通过；VEIL Lab 完整生产快照 `peter-20261127T170245/r3` 隔离 run `p6-s6-3-final-20261128T074609`（mock，¥0，零触碰正式数据）完成跨日全链路演练且 `veil-lab run verify` 通过；报告见 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md`。
+- **验证**：新增 `tests/test_p6_s6_3_cognitive_consolidation.py`（14 项端到端与复查回归场景）与 `desktop/tests/cognitive-consolidation.test.cjs`（6 项）；定向 15 个 Python 测试模块 **269/269** 通过，桌面 **71/71** 通过；VEIL Lab 完整生产快照 `peter-20261127T170245/r3` 隔离 run `p6-s6-3-r2-20261128T082548`（mock，¥0，零触碰正式数据）完成跨日全链路演练且 `veil-lab run verify` 通过；报告见 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md`。
 
 ## S6 开工门禁与 S6 子阶段状态
 
@@ -95,7 +95,7 @@ P3、P4/P5（#456/#459）、P6-S0/S1/S2/S3/S4（#449–#455、#460）、文档�
 | 情境自然联想隐式 `trap` 穿透 + 同轮判官联合门控 | **未关闭**（S5 延期项，不在本单范围） | 见 `docs/tickets/460-p6-s5-retrieval-judge-association.md`；仍待专项关闭 |
 | S6-1 送达激活、保护性衰减与版本化重评（工单 462 / PR #464） | 已合并 `90846bd`，未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-12；报告 `docs/reports/p6-s6-1-memory-reinforcement-20261128.md` |
 | S6-2 自主闲暇联想（工单 463 / PR #463） | 已合并 `81dba35`，默认关闭；未部署、待验收 | 见 `docs/ACCEPTANCE.md` B-11 |
-| S6-3 后台认知巩固与经验提炼（工单 464） | **开发侧完成，默认关闭**（待 PR / 审核 / CI / 体验） | 262/262 Python + 69/69 桌面；VEIL Lab run `p6-s6-3-final-20261128T074609`；报告 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md` |
+| S6-3 后台认知巩固与经验提炼（工单 464 / PR #465） | **开发与复查收尾完成，默认关闭**（待复审 / CI / 体验） | 269/269 Python + 71/71 桌面；VEIL Lab run `p6-s6-3-r2-20261128T082548`；报告 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md` |
 
 ## 等 lan 定的事
 

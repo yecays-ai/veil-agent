@@ -112,6 +112,8 @@
 
     const consCard = create('article', 'veil-card');
     consCard.hidden = true;
+    let consLoaded = null;
+    let consRevision = null;
     const consTitle = create('h3', '', '后台认知巩固 · 当前角色（默认关闭灰度）');
     const consCost = create('p');
     const consCounts = create('p');
@@ -213,7 +215,14 @@
         const cons = data.cognitive_consolidation;
         consCard.hidden = !cons;
         if (cons) {
-          consEnInput.checked = Boolean(cons.enabled);
+          consLoaded = {
+            enabled: Boolean(cons.enabled),
+            daily_budget_cny: Number(cons.daily_cap_cny ?? 0.05),
+            interval_hours: Number(cons.interval_hours ?? 24),
+            max_runs_per_day: Number(cons.max_runs_per_day ?? 2),
+          };
+          consRevision = typeof cons.settings_revision === 'number' ? cons.settings_revision : null;
+          consEnInput.checked = consLoaded.enabled;
           consCapInput.value = String(cons.daily_cap_cny ?? '0.05');
           consIntervalInput.value = String(cons.interval_hours ?? 24);
           consMaxInput.value = String(cons.max_runs_per_day ?? 2);
@@ -302,23 +311,33 @@
 
     consForm.addEventListener('submit', async event => {
       event.preventDefault();
+      const next = {
+        enabled: Boolean(consEnInput.checked),
+        daily_budget_cny: Number(consCapInput.value),
+        interval_hours: Number(consIntervalInput.value),
+        max_runs_per_day: Number(consMaxInput.value),
+      };
+      const changed = {};
+      for (const [k, v] of Object.entries(next)) {
+        if (!consLoaded || consLoaded[k] !== v) changed[k] = v;
+      }
+      if (!Object.keys(changed).length) {
+        consNote.textContent = '配置未改动。';
+        return;
+      }
       consSave.disabled = true;
       consNote.textContent = '正在保存…';
       try {
+        const body = { values: changed };
+        if (consRevision !== null) body.expected_revision = consRevision;
         const res = await request('/api/brain/consolidation/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            values: {
-              enabled: Boolean(consEnInput.checked),
-              daily_budget_cny: Number(consCapInput.value),
-              interval_hours: Number(consIntervalInput.value),
-              max_runs_per_day: Number(consMaxInput.value),
-            },
-          }),
+          body: JSON.stringify(body),
         });
         const payload = await res.json().catch(() => null);
         if (!res.ok || !payload?.ok) {
+          if (res.status === 409) await load();
           throw new Error(payload?.error || '保存失败');
         }
         consNote.textContent = '已保存并持久化，下次巩固周期生效，无需重启。';

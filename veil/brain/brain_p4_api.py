@@ -227,12 +227,15 @@ def consolidation_status(hub, *, runs_limit=12):
         return {'available': False, 'error': type(exc).__name__}
 
 
-def set_consolidation_settings(hub, values):
+def set_consolidation_settings(hub, values, *, expected_revision=None):
     cons = _consolidator_for(hub)
     if cons is None:
         return {'ok': False, 'error': '认知巩固模块未就绪', 'status_code': 503}
     try:
-        result = cons.update_settings(values if isinstance(values, dict) else {})
+        result = cons.update_settings(
+            values if isinstance(values, dict) else {},
+            expected_revision=expected_revision,
+        )
     except Exception as exc:
         return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
     return {**result, 'status': cons.status()}

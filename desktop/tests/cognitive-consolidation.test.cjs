@@ -49,6 +49,7 @@ function descendants(node, tag) {
 const sampleConsolidation = {
   available: true,
   policy_version: 's6-3.v1',
+  settings_revision: 3,
   persistence_path: 'peter/cognitive-consolidation.json',
   settings: {
     enabled: false, interval_hours: 24, max_runs_per_day: 2,
@@ -116,6 +117,80 @@ test('Brain Home renders cognitive consolidation panel with default-off switch, 
   assert.match(out, /执行间隔（小时）/);
   assert.match(out, /每日费用上限（¥）/);
   assert.match(out, /立即运行一次巩固/);
+  // Run button must be disabled when consolidation is off.
+  const runButton = descendants(host, 'button').find(b => b.textContent === '立即运行一次巩固');
+  assert.equal(runButton.disabled, true);
+});
+
+test('Brain Home sends only dirty fields + expected_revision when saving consolidation settings', async () => {
+  const document = {
+    createElement: tag => new Element(tag),
+    getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+    body: new Element('body'), addEventListener() {}, removeEventListener() {},
+  };
+  const window = { confirm: () => false };
+  vm.runInNewContext(brainSource, { window, document, navigator: {} });
+  const host = new Element('section');
+  const posts = [];
+  const request = async (url, options) => {
+    const target = String(url);
+    if (options?.method === 'POST') {
+      posts.push([target, JSON.parse(options.body)]);
+      return { ok: true, status: 200, json: async () => ({ ok: true, persistence_path: 'peter/cognitive-consolidation.json' }) };
+    }
+    if (target.includes('/api/brain/consolidation')) return { ok: true, status: 200, json: async () => sampleConsolidation };
+    if (target.includes('/api/brain/memory-weights')) return { ok: true, status: 200, json: async () => ({ available: false }) };
+    if (target.includes('/api/brain/overview')) return {
+      ok: true, status: 200, json: async () => ({
+        counts: { active: 2, pinned: 1, archived: 0, events_total: 1, events_pending_story: 0, events_pending_review: 0, week_added: 1, pending_vector: 0, tombstones: 0, week_updated: 1 },
+        health_summary: {}, layers: [], recall_association: null,
+      }),
+    };
+    return { ok: true, status: 200, json: async () => ({ summary: {}, days: [] }) };
+  };
+  await window.veilBrain.renderPage('brain-home', host, request);
+  // Modify ONLY the timeout field (last numeric input in consolidation panel).
+  const numInputs = descendants(host, 'input').filter(i => i.type === 'number');
+  const timeoutInput = numInputs[numInputs.length - 1];
+  timeoutInput.value = '40';
+  timeoutInput.listeners.change();
+  const saveBtn = descendants(host, 'button').find(b => b.textContent === '保存巩固设置');
+  await saveBtn.listeners.click();
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0][1], { values: { timeout_seconds: 40 }, expected_revision: 3 });
+});
+
+test('Brain Cognition renders all returned P7 candidates beyond 12 with uncertain first', async () => {
+  const document = {
+    createElement: tag => new Element(tag),
+    getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+    body: new Element('body'), addEventListener() {}, removeEventListener() {},
+  };
+  const window = { confirm: () => false };
+  vm.runInNewContext(brainSource, { window, document, navigator: {}, Blob: global.Blob });
+  const host = new Element('section');
+  const manyP7 = Array.from({ length: 15 }, (_, idx) => ({
+    id: `exp-${idx}`, kind: 'tool_lesson', status: idx === 14 ? 'uncertain' : 'confirmed',
+    trigger_condition: `情境 ${idx}`, guidance: `经验条目编号_${idx}`,
+    reason: '测试不截断', evidence_refs: ['memory:m1'],
+  }));
+  const request = async (url) => {
+    const target = String(url);
+    if (target.includes('/api/brain/consolidation')) {
+      return { ok: true, status: 200, json: async () => ({ ...sampleConsolidation, experience_candidates: manyP7 }) };
+    }
+    if (target.includes('/api/peter-page/versions')) return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    return {
+      ok: true, status: 200, json: async () => ({
+        learned: { max_bytes: 6200, sections: { facts: { text: '' }, growth: { text: '' } }, relationship: { items: [] }, ongoing: { items: [] } },
+      }),
+    };
+  };
+  await window.veilBrain.renderPage('brain-cognition', host, request);
+  const out = texts(host).join('\n');
+  assert.match(out, /经验条目编号_0/);
+  assert.match(out, /经验条目编号_14/);
+  assert.ok(out.indexOf('经验条目编号_14') < out.indexOf('经验条目编号_0'));
 });
 
 test('Brain Cognition displays consolidation results, evidence sources, cognitive changes and P7 candidates', async () => {
@@ -168,7 +243,7 @@ test('Budget page renders cognitive consolidation cap/frequency form and persist
     cognitive_consolidation: {
       enabled: false, daily_cap_cny: '0.05', spent_cny: '0.012', pending_cny: '0', remaining_cny: '0.038',
       interval_hours: 24, max_runs_per_day: 2, runs_today: 1, status_text: '已关闭（默认灰度关闭）',
-      cognition_written: 2, cognition_revised: 1, importance_proposed: 1,
+      cognition_written: 2, cognition_revised: 1, importance_proposed: 1, settings_revision: 5,
     },
   };
   const request = async (url, options) => {
@@ -199,6 +274,7 @@ test('Budget page renders cognitive consolidation cap/frequency form and persist
   assert.equal(posts[0][0], '/api/brain/consolidation/settings');
   assert.deepEqual(posts[0][1], {
     values: { enabled: true, daily_budget_cny: 0.08, interval_hours: 12, max_runs_per_day: 3 },
+    expected_revision: 5,
   });
 });
 

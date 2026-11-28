@@ -70,17 +70,17 @@
 | **5. 数据** | 角色隔离文件：`data/<role>/cognitive-consolidation.json`（配置）、`cognitive-consolidation-state.json`（游标与 P7 候选）、`cognitive-consolidation-runs.jsonl`（脱敏运行记录）；认知写回 `learned-context.json`，重要度写回 `brain.db`（经 `MemoryWeights.propose()` 保持 canonical digest 一致）。 |
 | **6. 状态可见** | Brain 首页实时展示开关状态、实际生效状态、上次运行结果/时间/费用、今日次数与花费、待审 P7 候选数；Brain「关系与成长」页展示每次巩固的新增/修订认知、证据来源、形成原因、S3 实际生效状态、S6-1 重评结果与 P7 候选确认/否决操作；`config_registry.py` 收录全部只读配置项。 |
 | **7. 升级与回滚** | 默认关闭（`enabled=False`），对未开启用户零额外调用与零行为改变；关闭开关即刻停止后台调度，既有 S3/S6-1 数据与历史版本完整可查可撤回。 |
-| **8. 真实环境验证** | 在 VEIL Lab 隔离副本（基于完整生产快照 `peter-20261127T170245/r3`，mock 模型 ¥0，零触碰正式 `data/peter`）完成跨日全链路演练与 `veil-lab run verify` 通过（run `p6-s6-3-final-20261128T074609`），详见验收报告 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md`。 |
+| **8. 真实环境验证** | 在 VEIL Lab 隔离副本（基于完整生产快照 `peter-20261127T170245/r3`，mock 模型 ¥0，零触碰正式 `data/peter`）完成跨日全链路演练与 `veil-lab run verify` 通过（run `p6-s6-3-r2-20261128T082548`），详见验收报告 `docs/reports/p6-s6-3-cognitive-consolidation-20261128.md`。 |
 
 ## 5. 影响与回归矩阵（`impact-complete`）
 
 | 改动文件 | 影响模块 | 回归验证 |
 | --- | --- | --- |
 | `veil/prompts/defaults/memory.consolidation.prompt.md`、`veil/prompts/registry.py` | 提示词注册表、内联提示词扫描器 | `tests/test_prompt_registry.py` 通过 |
-| `veil/brain/cognitive_consolidation.py` | S3 `LearnedContext`、S6-1 `MemoryWeights`、S6-2 `autonomy.jsonl`、共享 `Budget` | `tests/test_p6_s6_3_cognitive_consolidation.py` + VEIL Lab `p6-s6-3-final-20261128T074609` |
-| `veil/core/veil_agent.py`、`veil/core/config_registry.py` | `Chat` 启动/停止、`/cost` 展示、全量配置清单 | `tests/test_tool_budget.py`、`tests/test_config_registry.py`、`tests/test_autonomy.py` |
-| `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py` | Brain API、`GET /api/budget/summary` | `tests/test_p4_p5_brain_routes.py`、`tests/test_budget_workspace_route.py`、`tests/test_p6_s6_3_cognitive_consolidation.py` |
-| `desktop/main.cjs`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js` | Electron 路由白名单、Brain 首页/关系与成长页、费用管理页 | `node --test desktop/tests/*.test.cjs`（69/69 通过，含新增 `cognitive-consolidation.test.cjs` 4 项） |
+| `veil/brain/cognitive_consolidation.py` | S3 `LearnedContext`、S6-1 `MemoryWeights`、S6-2 `autonomy.jsonl`、共享 `Budget` | `tests/test_p6_s6_3_cognitive_consolidation.py`（14 项）+ VEIL Lab `p6-s6-3-r2-20261128T082548` |
+| `veil/core/veil_agent.py`、`veil/core/config_registry.py` | `Chat` 启动/停止、模型配置对齐、跨角色 `Budget.reconcile_unsettled`、`/cost` 展示、全量配置总览 | `tests/test_tool_budget.py`、`tests/test_config_registry.py`、`tests/test_autonomy.py` |
+| `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py` | Brain API、`GET /api/budget/summary`、`GET /api/config/overview`、跨窗口 `expected_revision` | `tests/test_p4_p5_brain_routes.py`、`tests/test_budget_workspace_route.py`、`tests/test_p6_s6_3_cognitive_consolidation.py` |
+| `desktop/main.cjs`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js` | Electron 路由白名单、Brain 首页/关系与成长页、费用管理页（增量脏字段保存与并发修订号） | `node --test desktop/tests/*.test.cjs`（71/71 通过，含新增 `cognitive-consolidation.test.cjs` 6 项） |
 
 ## 6. 对照「做完后的效果」的诚实审视与未证明边界
 

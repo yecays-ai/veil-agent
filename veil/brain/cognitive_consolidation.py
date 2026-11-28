@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -210,8 +211,8 @@ def parse_consolidation_output(raw_text):
     if not isinstance(parsed, dict):
         raise ValueError('response_not_object')
     allowed = {'cognition_updates', 'importance_proposals', 'experience_candidates'}
-    if not set(parsed.keys()).issubset(allowed) or not parsed.keys():
-        raise ValueError('unexpected_top_keys')
+    if set(parsed.keys()) != allowed:
+        raise ValueError('unexpected_or_missing_top_keys')
 
     updates = []
     raw_updates = parsed.get('cognition_updates', [])
@@ -337,6 +338,90 @@ def _empty_state():
             'experience_revised': 0,
         },
         'experience_candidates': [],
+        'vetoed_experiences': [],
+        'recent_ui_runs': [],
+    }
+
+
+_INJECTION_RE = re.compile(
+    r'(?i)(ignore\s+(all\s+)?(previous|prior|above)\s+instructions?|'
+    r'disregard\s+(all\s+)?(previous|prior)\s+instructions?|'
+    r'system\s+prompt|you\s+must\s+always|always\s+obey|'
+    r'忽略(以上|之前|前面)(所有)?指令|无视(以上|之前)规则|覆盖系统提示|写入\s*(facts|growth))'
+)
+
+
+def _strip_injection_lines(text):
+    lines = []
+    for line in str(text or '').splitlines():
+        if not _INJECTION_RE.search(line):
+            lines.append(line)
+    return '\n'.join(lines)
+
+
+def _redact_run_for_log(record):
+    """Strip personal cognitive prose from append-only operational run logs."""
+    res = record.get('results') if isinstance(record.get('results'), dict) else {}
+    redacted_res = {}
+    if res:
+        redacted_res = {
+            'reverify': dict(res.get('reverify') or {}),
+            'rejected_ungrounded': int(res.get('rejected_ungrounded') or 0),
+            'skipped_duplicates': int(res.get('skipped_duplicates') or 0),
+            'cognition_updates': [
+                {
+                    'kind': u.get('kind', ''),
+                    'section': u.get('section', ''),
+                    'item_id': u.get('item_id', ''),
+                    'evidence_refs': list(u.get('evidence_refs') or []),
+                    'requested_status': u.get('requested_status', ''),
+                    'governance_outcome': u.get('governance_outcome', ''),
+                    'effective_status': u.get('effective_status', ''),
+                }
+                for u in (res.get('cognition_updates') or []) if isinstance(u, dict)
+            ],
+            'importance_proposals': [
+                {
+                    'memory_id': p.get('memory_id', ''),
+                    'current_importance': p.get('current_importance'),
+                    'proposed_importance': p.get('proposed_importance'),
+                    'evidence_refs': list(p.get('evidence_refs') or []),
+                    'outcome': p.get('outcome', ''),
+                    'proposal_id': p.get('proposal_id', ''),
+                    'applied': bool(p.get('applied')),
+                    'version_seq': p.get('version_seq'),
+                }
+                for p in (res.get('importance_proposals') or []) if isinstance(p, dict)
+            ],
+            'experience_candidates': [
+                {
+                    'id': e.get('id', ''),
+                    'kind': e.get('kind', ''),
+                    'status': e.get('status', ''),
+                    'supersedes_id': e.get('supersedes_id', ''),
+                    'outcome': e.get('outcome', ''),
+                    'evidence_refs': list(e.get('evidence_refs') or []),
+                }
+                for e in (res.get('experience_candidates') or []) if isinstance(e, dict)
+            ],
+        }
+    return {
+        'run_id': record.get('run_id', ''),
+        'started_at': record.get('started_at', ''),
+        'finished_at': record.get('finished_at', ''),
+        'trigger': record.get('trigger', ''),
+        'status': record.get('status', ''),
+        'reason': record.get('reason', ''),
+        'batch_key': record.get('batch_key', ''),
+        'policy_version': record.get('policy_version', POLICY_VERSION),
+        'inputs': dict(record.get('inputs') or {}),
+        'results': redacted_res,
+        'cost_cny': record.get('cost_cny', 0.0),
+        'prompt_tokens': record.get('prompt_tokens'),
+        'completion_tokens': record.get('completion_tokens'),
+        'cached_tokens': record.get('cached_tokens'),
+        'cache_status': record.get('cache_status'),
+        'duration_ms': record.get('duration_ms'),
     }
 
 
@@ -356,11 +441,6 @@ class CognitiveConsolidator:
         self._settings = None
         self._settings_sig = None
         self._scheduler = None
-        if getattr(self.budget, 'reconcile_unsettled', None):
-            try:
-                self.budget.reconcile_unsettled({COST_ACCOUNTING})
-            except Exception:
-                pass
         self.recover_interrupted()
 
     # ------------------------------------------------------------------ paths & settings
@@ -422,7 +502,13 @@ class CognitiveConsolidator:
             self._settings, self._settings_sig = values, sig
             return dict(values)
 
-    def update_settings(self, values):
+    def settings_revision(self):
+        with self.mutex:
+            raw = _load_json_dict(self._settings_file())
+            rev = raw.get('_revision')
+            return rev if (type(rev) is int and rev >= 1) else 1
+
+    def update_settings(self, values, *, expected_revision=None):
         updates = {}
         rejected = {}
         for key, value in (values or {}).items():
@@ -435,14 +521,27 @@ class CognitiveConsolidator:
                 continue
             updates[key] = validated
         with self.mutex:
+            raw = _load_json_dict(self._settings_file())
+            cur_rev = raw.get('_revision')
+            cur_rev = cur_rev if (type(cur_rev) is int and cur_rev >= 1) else 1
+            if expected_revision is not None and int(expected_revision) != cur_rev:
+                return {
+                    'ok': False,
+                    'error': '配置已在其他窗口被更新，请刷新后再保存。',
+                    'status_code': 409,
+                    'settings_revision': cur_rev,
+                    'settings': dict(self.settings()),
+                }
             current = load_persisted(self.store, self.cfg.id)
-            merged = {**current, **updates}
+            next_rev = cur_rev + 1 if updates else cur_rev
+            merged = {**current, **updates, '_revision': next_rev}
             self.store.replace(self.settings_path(), merged)
             self._settings = settings_from(merged)
             self._settings_sig = self._sig()
             return {
                 'ok': True,
                 'settings': dict(self._settings),
+                'settings_revision': next_rev,
                 'updated': updates,
                 'rejected': rejected,
                 'persistence_path': self.settings_path(),
@@ -472,11 +571,9 @@ class CognitiveConsolidator:
                 state[key] = raw[key]
         return state
 
-    def _save_state(self, state):
-        # Bound maps so state file never grows without limit across months of operation.
+    def _save_state(self, state, *, active_memory_ids=None, active_autonomy_ids=None):
+        # Bound auxiliary maps without evicting live active memory/autonomy fingerprints.
         for key, cap in (
-            ('processed_memories', MAX_PROCESSED_MEMORIES),
-            ('processed_autonomy', MAX_PROCESSED_AUTONOMY),
             ('processed_batches', MAX_PROCESSED_BATCHES),
             ('importance_proposed', MAX_IMPORTANCE_LEDGER),
         ):
@@ -484,16 +581,35 @@ class CognitiveConsolidator:
             if isinstance(mapping, dict) and len(mapping) > cap:
                 keys = list(mapping.keys())[-cap:]
                 state[key] = {k: mapping[k] for k in keys}
+        pm = state.get('processed_memories')
+        if isinstance(pm, dict) and len(pm) > MAX_PROCESSED_MEMORIES and active_memory_ids is not None:
+            active_set = set(active_memory_ids)
+            state['processed_memories'] = {k: v for k, v in pm.items() if k in active_set}
+        pa = state.get('processed_autonomy')
+        if isinstance(pa, dict) and len(pa) > MAX_PROCESSED_AUTONOMY and active_autonomy_ids is not None:
+            active_set = set(active_autonomy_ids)
+            state['processed_autonomy'] = {k: v for k, v in pa.items() if k in active_set}
+
+        # Never evict confirmed or vetoed experience candidates when bounding list size.
         exps = state.get('experience_candidates')
         if isinstance(exps, list) and len(exps) > MAX_EXPERIENCE_CANDIDATES:
-            confirmed = [e for e in exps if isinstance(e, dict) and e.get('status') == 'confirmed']
-            others = [e for e in exps if isinstance(e, dict) and e.get('status') != 'confirmed']
-            keep_other = max(0, MAX_EXPERIENCE_CANDIDATES - len(confirmed))
-            state['experience_candidates'] = (confirmed + others[-keep_other:])[-MAX_EXPERIENCE_CANDIDATES:]
+            protected = [e for e in exps if isinstance(e, dict) and e.get('status') in ('confirmed', 'vetoed')]
+            uncertain = [e for e in exps if isinstance(e, dict) and e.get('status') == 'uncertain']
+            outdated = [e for e in exps if isinstance(e, dict) and e.get('status') == 'outdated']
+            room = max(0, MAX_EXPERIENCE_CANDIDATES - len(protected))
+            keep_unc = uncertain[-room:] if room > 0 else []
+            rem = max(0, room - len(keep_unc))
+            keep_out = outdated[-rem:] if rem > 0 else []
+            state['experience_candidates'] = protected + keep_out + keep_unc
+
+        ui_runs = state.get('recent_ui_runs')
+        if isinstance(ui_runs, list) and len(ui_runs) > 16:
+            state['recent_ui_runs'] = ui_runs[-16:]
+
         self.store.replace(self.state_path(), state)
 
     def _append_run(self, record):
-        self.store.append(self.runs_path(), record)
+        self.store.append(self.runs_path(), _redact_run_for_log(record))
 
     def recent_runs(self, limit=20):
         try:
@@ -502,24 +618,44 @@ class CognitiveConsolidator:
             return []
         return list(reversed([r for r in rows if isinstance(r, dict)]))
 
+    def _reconcile_role_reservation(self, request_id=''):
+        reconcile = getattr(self.budget, 'reconcile_unsettled', None)
+        if not callable(reconcile):
+            return
+        try:
+            req_ids = {request_id} if request_id else None
+            reconcile({COST_ACCOUNTING}, character=self.cfg.id, request_ids=req_ids)
+        except TypeError:
+            try:
+                reconcile({COST_ACCOUNTING})
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def recover_interrupted(self):
-        """Recover cleanly from an interrupted in-flight run after crash/restart."""
+        """Recover cleanly from an interrupted in-flight run scoped strictly to this role."""
         with self.mutex:
             state = self._load_state()
             in_flight = state.get('in_flight')
             if not isinstance(in_flight, dict):
                 return False
-            if getattr(self.budget, 'reconcile_unsettled', None):
-                try:
-                    self.budget.reconcile_unsettled({COST_ACCOUNTING})
-                except Exception:
-                    pass
+            req_id = str(in_flight.get('request_id') or '').strip()
+            phase = str(in_flight.get('phase') or '').strip()
+            self._reconcile_role_reservation(req_id)
             stamp = self._now()
+            today = stamp[:10]
+            if phase in ('dispatched', 'applying', 'apply_failed') and not in_flight.get('counted_run'):
+                if state.get('day') == today:
+                    state['runs_today'] = int(state.get('runs_today') or 0) + 1
+                else:
+                    state['day'] = today
+                    state['runs_today'] = 1
             failures = int(state.get('consecutive_failures') or 0) + 1
             state['in_flight'] = None
             state['last_run_at'] = stamp
             state['last_status'] = 'interrupted'
-            state['last_reason'] = 'recovered_after_restart'
+            state['last_reason'] = f'recovered_after_restart:{phase or "unknown"}'
             state['consecutive_failures'] = failures
             backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
             now_dt = _parse_dt(stamp)
@@ -527,20 +663,22 @@ class CognitiveConsolidator:
                 state['cooldown_until'] = (now_dt + timedelta(minutes=backoff_min)).isoformat(timespec='seconds')
             state['totals']['runs'] += 1
             state['totals']['failed'] += 1
-            self._save_state(state)
-            self._append_run({
+            rec = {
                 'run_id': str(in_flight.get('run_id') or uuid.uuid4().hex[:12]),
                 'started_at': str(in_flight.get('started_at') or stamp),
                 'finished_at': stamp,
                 'trigger': str(in_flight.get('trigger') or 'scheduled'),
                 'status': 'interrupted',
-                'reason': 'recovered_after_restart',
+                'reason': state['last_reason'],
                 'batch_key': str(in_flight.get('batch_key') or ''),
                 'policy_version': POLICY_VERSION,
                 'inputs': in_flight.get('inputs') or {},
                 'results': {},
                 'cost_cny': 0.0,
-            })
+            }
+            state.setdefault('recent_ui_runs', []).append(rec)
+            self._save_state(state)
+            self._append_run(rec)
             return True
 
     # ------------------------------------------------------------------ scheduler lifecycle
@@ -604,31 +742,34 @@ class CognitiveConsolidator:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if 'memories' not in tables:
                 return [], {}, {}, {}
-            mem_cols = (
-                'm.id', 'm.title', 'm.body', 'm.body_sha256', 'm.created', 'm.last_active',
-                'm.type', 'm.bucket', 'm.importance', 'm.pinned', 'm.meaning', 'm.why_remembered',
-                's.locked', 's.links_json',
-            )
-            mem_sql = (
-                'SELECT ' + ', '.join(mem_cols)
-                + ' FROM memories m LEFT JOIN sidecar_state s ON s.memory_id=m.id'
-                + ' WHERE m.is_tombstone=0 AND m.is_deleted=0'
-                + " AND COALESCE(m.bucket,'')!='archive' AND COALESCE(m.type,'')!='archived'"
-                + ' ORDER BY m.created DESC, m.id DESC'
-            )
-            rows = conn.execute(mem_sql).fetchall()
+            pending_deletes = set()
+            if 'delete_requests' in tables:
+                for dr in conn.execute("SELECT memory_id FROM delete_requests WHERE status='pending'"):
+                    if dr[0]:
+                        pending_deletes.add(str(dr[0]))
+
+            locked_mems = set()
+            if 'sidecar_state' in tables:
+                for lr in conn.execute('SELECT memory_id FROM sidecar_state WHERE locked=1'):
+                    if lr[0]:
+                        locked_mems.add(str(lr[0]))
+
+            rows = conn.execute(
+                'SELECT id, title, body, body_sha256, created, last_active, '
+                'type, bucket, importance, pinned, meaning, why_remembered '
+                'FROM memories WHERE is_tombstone=0 AND is_deleted=0 '
+                'ORDER BY created DESC, id DESC'
+            ).fetchall()
 
             events_by_mem = {}
             stage_counts = {}
             if 'events' in tables:
                 ev_cols = {r[1] for r in conn.execute('PRAGMA table_info(events)')}
-                select_cols = ['event_id', 'memory_id']
-                for opt in ('title', 'story', 'first_at', 'last_at', 'updated_at'):
-                    select_cols.append(opt if opt in ev_cols else f"'' AS {opt}")
-                for er in conn.execute(
-                    f"SELECT {', '.join(select_cols)} FROM events WHERE memory_id IS NOT NULL"
-                ):
-                    events_by_mem[er['memory_id']] = dict(er)
+                for er in conn.execute('SELECT * FROM events WHERE memory_id IS NOT NULL'):
+                    rec = {'event_id': er['event_id'], 'memory_id': er['memory_id']}
+                    for opt in ('title', 'story', 'first_at', 'last_at', 'updated_at'):
+                        rec[opt] = er[opt] if opt in ev_cols else ''
+                    events_by_mem[er['memory_id']] = rec
             if 'event_stages' in tables:
                 for sr in conn.execute('SELECT event_id, COUNT(*) AS cnt FROM event_stages GROUP BY event_id'):
                     stage_counts[sr['event_id']] = int(sr['cnt'] or 0)
@@ -680,6 +821,10 @@ class CognitiveConsolidator:
             memories = []
             for row in rows:
                 mid = row['id']
+                if mid in pending_deletes:
+                    continue
+                if str(row['bucket'] or '') == 'archive' or str(row['type'] or '') == 'archived':
+                    continue
                 ev = events_by_mem.get(mid)
                 ev_id = ev['event_id'] if ev else ''
                 sc = stage_counts.get(ev_id, 0) if ev_id else 0
@@ -689,7 +834,10 @@ class CognitiveConsolidator:
                     chat_refs.update(user_chat_refs.get('ev:' + ev_id) or ())
                 fp = _sha([
                     mid,
+                    str(row['title'] or ''),
                     row['body_sha256'] or hashlib.sha256((row['body'] or '').encode('utf-8')).hexdigest()[:16],
+                    str(row['meaning'] or ''),
+                    str(row['why_remembered'] or ''),
                     int(row['importance'] or 5),
                     int(bool(row['pinned'])),
                     ev_id,
@@ -706,7 +854,7 @@ class CognitiveConsolidator:
                     'bucket': str(row['bucket'] or ''),
                     'importance': int(row['importance'] or 5),
                     'pinned': bool(row['pinned']),
-                    'locked': bool(row['locked']),
+                    'locked': mid in locked_mems,
                     'meaning': str(row['meaning'] or ''),
                     'why_remembered': str(row['why_remembered'] or ''),
                     'event_id': ev_id,
@@ -723,11 +871,17 @@ class CognitiveConsolidator:
             conn.close()
 
     def _read_autonomy_experiences(self):
-        """Read clean, audited autonomous wakes (excludes S6-2 flagged narration/roleplay)."""
+        """Read full autonomy history and strictly separate audited-clean / unclean / unaudited rows.
+
+        Only explicitly audited-clean rows (`output_audit.clean is True` with no issues) are
+        admitted as verified autonomous experiences; both explicitly unclean and unaudited/malformed
+        rows are excluded and counted in diagnostics.
+        """
+        stats = {'audited_clean': 0, 'excluded_unclean': 0, 'excluded_unaudited': 0}
         try:
-            rows = self.store.read_tail(f'{self.cfg.id}/autonomy.jsonl', 200)
+            rows = self.store.read(f'{self.cfg.id}/autonomy.jsonl')
         except Exception:
-            return []
+            return [], stats
         out = []
         for row in rows:
             if not isinstance(row, dict):
@@ -736,9 +890,14 @@ class CognitiveConsolidator:
             if not started:
                 continue
             audit = row.get('output_audit')
-            # S6-2 safety boundary: never ingest roleplay/third-person narration as real experience.
             if isinstance(audit, dict) and audit.get('clean') is False:
+                stats['excluded_unclean'] += 1
                 continue
+            issues = audit.get('issues') if isinstance(audit, dict) else None
+            if not (isinstance(audit, dict) and audit.get('clean') is True and (issues is None or (isinstance(issues, list) and not issues))):
+                stats['excluded_unaudited'] += 1
+                continue
+            stats['audited_clean'] += 1
             decision = str(row.get('decision') or '').strip()
             result = str(row.get('result') or '').strip()
             focus = str(row.get('current_focus') or '').strip()
@@ -758,6 +917,7 @@ class CognitiveConsolidator:
             out.append({
                 'id': aid,
                 'started_at': started,
+                'audit_status': 'audited_clean',
                 'result': result,
                 'decision': _clip(decision, 240),
                 'focus': _clip(focus, 140),
@@ -768,7 +928,7 @@ class CognitiveConsolidator:
                 'wake_mode': str(la.get('wake_mode') or ''),
                 'fingerprint': fp,
             })
-        return out
+        return out, stats
 
     def _existing_cognition_snapshot(self):
         snap = {
@@ -860,13 +1020,15 @@ class CognitiveConsolidator:
                 chosen_new.append(mem)
                 chosen_ids.add(mem['id'])
 
-        auto_rows = self._read_autonomy_experiences()
+        auto_rows, auto_audit_stats = self._read_autonomy_experiences()
         new_auto = [
             row for row in auto_rows
             if processed_auto.get(row['started_at']) != row['fingerprint']
             and not _contains_secret(row['decision'], row['focus'], row['next_step'])
         ]
-        chosen_auto = new_auto[-int(values['max_autonomy_items']):] if int(values['max_autonomy_items']) > 0 else []
+        # Process oldest unprocessed audited autonomy rows first so earlier records never starve.
+        limit_auto = int(values['max_autonomy_items'])
+        chosen_auto = new_auto[:limit_auto] if limit_auto > 0 else []
 
         # Build relevance set to select historical anchors that connect to the new batch.
         new_tokens = set()
@@ -916,6 +1078,7 @@ class CognitiveConsolidator:
         # Build exact verified reference universe for anti-hallucination grounding.
         batch_refs = set()
         mem_by_id = {}
+        auto_by_id = {}
         for mem in (*chosen_new, *chosen_anchors):
             mem_by_id[mem['id']] = mem
             batch_refs.add('memory:' + mem['id'])
@@ -924,6 +1087,7 @@ class CognitiveConsolidator:
             for cref in mem['chat_refs']:
                 batch_refs.add(cref)
         for auto in chosen_auto:
+            auto_by_id[auto['id']] = auto
             batch_refs.add(auto['id'])
 
         return {
@@ -935,7 +1099,13 @@ class CognitiveConsolidator:
             'existing_experiences': active_exps,
             'batch_refs': batch_refs,
             'mem_by_id': mem_by_id,
+            'auto_by_id': auto_by_id,
             'new_count': len(chosen_new) + len(chosen_auto),
+            'autonomy_audit_stats': auto_audit_stats,
+            'active_memory_ids': [m['id'] for m in memories],
+            'active_autonomy_ids': [a['started_at'] for a in auto_rows],
+            'trimmed_new_count': 0,
+            'trimmed_auto_count': 0,
         }
 
     # ------------------------------------------------------------------ step 2: model analysis
@@ -1002,8 +1172,47 @@ class CognitiveConsolidator:
             ],
         }
 
+    @staticmethod
+    def _build_sent_batch(batch, cur_new, cur_anc, cur_auto):
+        """Rebuild exact batch metadata matching the trimmed subset actually sent to the model."""
+        sent_new = list(batch['new_memories'][:cur_new])
+        sent_anc = list(batch['anchor_memories'][:cur_anc])
+        sent_auto = list(batch['autonomy_items'][:cur_auto])
+        existing = batch['existing_cognition']
+        batch_refs = set()
+        mem_by_id = {}
+        auto_by_id = {}
+        for mem in (*sent_new, *sent_anc):
+            mem_by_id[mem['id']] = mem
+            batch_refs.add('memory:' + mem['id'])
+            if mem['event_id']:
+                batch_refs.add('event:' + mem['event_id'])
+            for cref in mem['chat_refs']:
+                batch_refs.add(cref)
+        for auto in sent_auto:
+            auto_by_id[auto['id']] = auto
+            batch_refs.add(auto['id'])
+        batch_key = _sha([
+            [(m['id'], m['fingerprint']) for m in sent_new],
+            [(a['started_at'], a['fingerprint']) for a in sent_auto],
+            _sha([existing['facts'], existing['growth'], [r['text'] for r in existing['relationship_items']]])[:12],
+        ])[:24]
+        return {
+            **batch,
+            'batch_key': batch_key,
+            'new_memories': sent_new,
+            'anchor_memories': sent_anc,
+            'autonomy_items': sent_auto,
+            'batch_refs': batch_refs,
+            'mem_by_id': mem_by_id,
+            'auto_by_id': auto_by_id,
+            'new_count': len(sent_new) + len(sent_auto),
+            'trimmed_new_count': len(batch['new_memories']) - len(sent_new),
+            'trimmed_auto_count': len(batch['autonomy_items']) - len(sent_auto),
+        }
+
     def _fit_messages(self, system, batch, max_bytes):
-        """Adaptively bound payload size (UTF-8 bytes) so CJK production batches never overflow."""
+        """Adaptively bound payload size (UTF-8 bytes) and return the exact sent subset."""
         from veil.core.veil_agent import request_byte_size
 
         new_n = len(batch['new_memories'])
@@ -1011,13 +1220,13 @@ class CognitiveConsolidator:
         auto_n = len(batch['autonomy_items'])
         for excerpt_chars in (260, 180, 120):
             cur_new, cur_anc, cur_auto = new_n, anc_n, auto_n
-            for _ in range(12):
+            for _ in range(16):
                 payload = self._build_payload(
                     batch, excerpt_chars=excerpt_chars,
                     new_limit=cur_new, anchor_limit=cur_anc, auto_limit=cur_auto,
                 )
                 if _contains_secret(payload, system):
-                    return None, 0, 'sensitive_payload'
+                    return None, 0, 'sensitive_payload', None
                 body = json.dumps(payload, ensure_ascii=False, allow_nan=False)
                 messages = [
                     {'role': 'system', 'content': system},
@@ -1025,22 +1234,37 @@ class CognitiveConsolidator:
                 ]
                 size = request_byte_size(messages)
                 if size <= max_bytes:
-                    return messages, size, ''
-                if cur_anc > 2:
+                    sent_batch = self._build_sent_batch(batch, cur_new, cur_anc, cur_auto)
+                    return messages, size, '', sent_batch
+                if cur_anc > 0:
                     cur_anc = max(0, cur_anc - 2)
-                elif cur_auto > 2:
+                elif cur_auto > 1:
                     cur_auto = max(1, cur_auto - 2)
-                elif cur_new > 2:
-                    cur_new = max(2, cur_new - 2)
+                elif cur_new > 1:
+                    cur_new = max(1, cur_new - 2)
+                elif cur_auto > 0 and cur_new > 0:
+                    cur_auto = 0
                 else:
                     break
-        return None, 0, 'payload_too_large'
+        return None, 0, 'payload_too_large', None
+
+    @staticmethod
+    def _normalize_cache_usage(cached_tok):
+        if cached_tok is None:
+            return None, 'unreported'
+        if hasattr(cached_tok, 'tokens'):
+            toks = cached_tok.tokens
+            status = str(getattr(cached_tok, 'status', '') or ('reported' if toks is not None else 'unreported'))
+            return (toks if type(toks) is int and toks >= 0 else None), status
+        if type(cached_tok) is int and cached_tok >= 0:
+            return cached_tok, 'reported'
+        return None, 'unreported'
 
     def _call_model(self, batch, cap, timeout, stopped, *, state):
         from veil.core.veil_agent import RequestNotSent
 
         if self.model is None or getattr(self.cfg, 'provider', {}).get('missing'):
-            return {'ok': False, 'status': 'failed', 'reason': 'model_unavailable'}
+            return {'ok': False, 'status': 'failed', 'reason': 'model_unavailable', 'dispatched': False, 'sent_batch': batch}
 
         system = prompts.text(PROMPT_ID)
         provider = dict(self.cfg.provider)
@@ -1055,9 +1279,9 @@ class CognitiveConsolidator:
                 affordable_bytes = int((avail_in * Decimal(1_000_000)) / in_rate)
                 if affordable_bytes >= 4_000:
                     max_bytes = min(max_bytes, affordable_bytes)
-        messages, input_bytes, fit_err = self._fit_messages(system, batch, max_bytes)
-        if fit_err:
-            return {'ok': False, 'status': 'failed', 'reason': fit_err}
+        messages, input_bytes, fit_err, sent_batch = self._fit_messages(system, batch, max_bytes)
+        if fit_err or sent_batch is None:
+            return {'ok': False, 'status': 'failed', 'reason': fit_err or 'payload_too_large', 'dispatched': False, 'sent_batch': batch}
         provider['max_input_tokens'] = input_bytes
         request_cfg = replace(
             self.cfg,
@@ -1065,27 +1289,34 @@ class CognitiveConsolidator:
             max_output_tokens=out_tokens,
         )
         if stopped():
-            return {'ok': False, 'status': 'skipped', 'reason': 'stopped'}
+            return {'ok': False, 'status': 'skipped', 'reason': 'stopped', 'dispatched': False, 'sent_batch': sent_batch}
         try:
             reservation = self.budget.reserve(
                 request_cfg, category=COST_CATEGORY,
                 accounting=COST_ACCOUNTING, category_daily=cap,
             )
         except BudgetExceeded:
-            return {'ok': False, 'status': 'budget_exhausted', 'reason': 'budget_exhausted'}
+            return {'ok': False, 'status': 'budget_exhausted', 'reason': 'budget_exhausted', 'dispatched': False, 'sent_batch': sent_batch}
         except UserError:
-            return {'ok': False, 'status': 'failed', 'reason': 'ledger_unavailable'}
+            return {'ok': False, 'status': 'failed', 'reason': 'ledger_unavailable', 'dispatched': False, 'sent_batch': sent_batch}
 
         request_id, reserved_amount = reservation
         marked = False
         try:
             if stopped():
-                return {'ok': False, 'status': 'skipped', 'reason': 'stopped'}
+                return {'ok': False, 'status': 'skipped', 'reason': 'stopped', 'dispatched': False, 'sent_batch': sent_batch}
             with self.mutex:
-                if isinstance(state.get('in_flight'), dict):
-                    state['in_flight']['request_id'] = request_id
-                    state['in_flight']['phase'] = 'dispatched'
-                    self._save_state(state)
+                fresh = self._load_state()
+                if isinstance(fresh.get('in_flight'), dict):
+                    fresh['in_flight']['request_id'] = request_id
+                    fresh['in_flight']['phase'] = 'dispatched'
+                    fresh['in_flight']['batch_key'] = sent_batch['batch_key']
+                    fresh['in_flight']['inputs'] = {
+                        'new_memory_ids': [m['id'] for m in sent_batch['new_memories']],
+                        'anchor_memory_ids': [m['id'] for m in sent_batch['anchor_memories']],
+                        'autonomy_ids': [a['id'] for a in sent_batch['autonomy_items']],
+                    }
+                    self._save_state(fresh)
             self.budget.mark_dispatched(request_id)
             marked = True
         finally:
@@ -1097,7 +1328,11 @@ class CognitiveConsolidator:
                 self.budget.settle_estimate(reservation, accounting=COST_ACCOUNTING + '-unknown-usage')
             except Exception:
                 pass
-            return {'ok': False, 'status': 'failed', 'reason': reason, 'cost_cny': float(reserved_amount)}
+            return {
+                'ok': False, 'status': 'failed', 'reason': reason,
+                'dispatched': True, 'sent_batch': sent_batch,
+                'cost_cny': float(reserved_amount),
+            }
 
         start = time.monotonic()
         try:
@@ -1107,20 +1342,31 @@ class CognitiveConsolidator:
             )
         except RequestNotSent:
             self.budget.release_not_sent(request_id)
-            return {'ok': False, 'status': 'failed', 'reason': 'request_not_sent', 'cost_cny': 0.0}
+            return {
+                'ok': False, 'status': 'failed', 'reason': 'request_not_sent',
+                'dispatched': False, 'sent_batch': sent_batch, 'cost_cny': 0.0,
+            }
         except (TimeoutError, APITimeoutError):
             return retain_upper('timeout')
         except Exception:
             return retain_upper('provider_error')
 
         late = time.monotonic() - start > timeout
+        cached_val, cache_status = self._normalize_cache_usage(cached_tok)
         try:
-            self.budget.settle(
+            settled_ok = self.budget.settle(
                 request_id, request_cfg, prompt_tok, completion_tok, cached_tok,
                 input_bytes=input_bytes, category=COST_CATEGORY, accounting=COST_ACCOUNTING,
             )
-            cached_count = cached_tok.tokens if hasattr(cached_tok, 'tokens') else (cached_tok or 0)
-            cached_count = int(cached_count) if type(cached_count) is int and cached_count >= 0 else 0
+            if settled_ok is False:
+                return {
+                    'ok': False, 'status': 'failed', 'reason': 'settlement_conflict',
+                    'dispatched': True, 'sent_batch': sent_batch,
+                    'cost_cny': float(reserved_amount),
+                    'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok,
+                    'cached_tokens': cached_val, 'cache_status': cache_status,
+                }
+            cached_count = cached_val if isinstance(cached_val, int) else 0
             p = request_cfg.provider
             if p.get('cny_per_call'):
                 settled_dec = Decimal(str(p['cny_per_call']))
@@ -1137,30 +1383,39 @@ class CognitiveConsolidator:
             return {
                 'ok': False, 'status': 'failed',
                 'reason': 'timeout' if late else 'stopped',
+                'dispatched': True, 'sent_batch': sent_batch,
                 'cost_cny': cost_val,
-                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok, 'cached_tokens': cached_tok,
+                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok,
+                'cached_tokens': cached_val, 'cache_status': cache_status,
             }
         if stop_reason != 'stop':
             return {
                 'ok': False, 'status': 'failed', 'reason': 'invalid_response',
+                'dispatched': True, 'sent_batch': sent_batch,
                 'cost_cny': cost_val,
-                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok, 'cached_tokens': cached_tok,
+                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok,
+                'cached_tokens': cached_val, 'cache_status': cache_status,
             }
         try:
             parsed = parse_consolidation_output(output)
         except (ValueError, RecursionError):
             return {
                 'ok': False, 'status': 'failed', 'reason': 'invalid_response',
+                'dispatched': True, 'sent_batch': sent_batch,
                 'cost_cny': cost_val,
-                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok, 'cached_tokens': cached_tok,
+                'prompt_tokens': prompt_tok, 'completion_tokens': completion_tok,
+                'cached_tokens': cached_val, 'cache_status': cache_status,
             }
         return {
             'ok': True,
             'parsed': parsed,
+            'dispatched': True,
+            'sent_batch': sent_batch,
             'cost_cny': cost_val,
             'prompt_tokens': prompt_tok,
             'completion_tokens': completion_tok,
-            'cached_tokens': cached_tok,
+            'cached_tokens': cached_val,
+            'cache_status': cache_status,
         }
 
     # ------------------------------------------------------------------ step 3: governance & collaboration
@@ -1264,10 +1519,85 @@ class CognitiveConsolidator:
                     pass
         return ev_list[:8]
 
+    @staticmethod
+    def _verify_content_evidence(section, text, valid_refs, mem_by_id, auto_by_id):
+        """Content-level grounding check for facts/growth against cited batch evidence.
+
+        Guards against indirect prompt injection inside a memory body poisoning facts/growth
+        with claims unsupported by the actual non-directive content of cited sources.
+        """
+        if _INJECTION_RE.search(text or ''):
+            return False
+        cand_tokens = _lexical_tokens(text)
+        if not cand_tokens:
+            return False
+
+        cited_mems = []
+        seen_mids = set()
+        ev_texts = []
+        has_user_chat_origin = False
+
+        for ref in valid_refs:
+            if ref.startswith('memory:'):
+                mid = ref.split(':', 1)[1]
+                mem = mem_by_id.get(mid)
+                if mem and mid not in seen_mids:
+                    seen_mids.add(mid)
+                    cited_mems.append(mem)
+                    if mem.get('chat_refs'):
+                        has_user_chat_origin = True
+                    ev_texts.append(_strip_injection_lines(
+                        f"{mem.get('title', '')}\n{mem.get('body', '')}\n"
+                        f"{mem.get('event_story', '')}\n{mem.get('meaning', '')}\n{mem.get('why_remembered', '')}"
+                    ))
+            elif ref.startswith('event:'):
+                ev_id = ref.split(':', 1)[1]
+                for mem in mem_by_id.values():
+                    if mem.get('event_id') == ev_id and mem['id'] not in seen_mids:
+                        seen_mids.add(mem['id'])
+                        cited_mems.append(mem)
+                        if mem.get('chat_refs'):
+                            has_user_chat_origin = True
+                        ev_texts.append(_strip_injection_lines(
+                            f"{mem.get('title', '')}\n{mem.get('event_story', '')}\n{mem.get('body', '')}"
+                        ))
+            elif ref.startswith('chat:'):
+                has_user_chat_origin = True
+            elif ref.startswith('autonomy:') and section == 'growth':
+                auto = auto_by_id.get(ref)
+                if auto:
+                    ev_texts.append(_strip_injection_lines(
+                        f"{auto.get('decision', '')}\n{auto.get('focus', '')}\n{auto.get('next_step', '')}"
+                    ))
+
+        if section == 'facts':
+            # High-trust facts require non-autonomy memory grounding AND either verified user-chat
+            # origin or corroboration across >=2 distinct cited memories.
+            if not cited_mems:
+                return False
+            if not has_user_chat_origin and len(cited_mems) < 2:
+                return False
+
+        ev_tokens = _lexical_tokens('\n'.join(ev_texts))
+        if not ev_tokens:
+            return False
+        overlap = len(cand_tokens & ev_tokens)
+        min_overlap = 1 if len(cand_tokens) <= 3 else 2
+        return overlap >= min_overlap
+
+    @staticmethod
+    def _is_related_experience(old_item, new_exp):
+        if old_item.get('kind') == new_exp.get('kind'):
+            return True
+        old_toks = _lexical_tokens(f"{old_item.get('trigger_condition', '')} {old_item.get('guidance', '')}")
+        new_toks = _lexical_tokens(f"{new_exp.get('trigger_condition', '')} {new_exp.get('guidance', '')}")
+        return bool(old_toks & new_toks)
+
     def _apply_outputs(self, parsed, batch, state, values, run_id):
         batch_refs = batch['batch_refs']
         mem_by_id = batch['mem_by_id']
-        existing = batch['existing_cognition']
+        auto_by_id = batch.get('auto_by_id') or {}
+        existing = self._existing_cognition_snapshot()
 
         existing_corpus = []
         for sec_text in (existing['facts'], existing['growth']):
@@ -1285,6 +1615,7 @@ class CognitiveConsolidator:
             'rejected_ungrounded': 0,
             'skipped_duplicates': 0,
         }
+        retryable_refs = set()
 
         # 0. Periodically reverify existing relationship evidence (never mutates locked/lan items).
         if self.profile is not None and hasattr(self.profile, 'reverify_relationship_evidence'):
@@ -1296,7 +1627,7 @@ class CognitiveConsolidator:
 
         # 1. Cognition updates -> S3 LearnedContext.submit_candidate() (zero parallel store).
         batch_seen_texts = list(existing_corpus)
-        for idx, upd in enumerate(parsed['cognition_updates']):
+        for upd in parsed['cognition_updates']:
             valid_refs = [r for r in upd['evidence_refs'] if r in batch_refs]
             if not valid_refs:
                 summary['rejected_ungrounded'] += 1
@@ -1311,6 +1642,25 @@ class CognitiveConsolidator:
             if kind == 'revision' and not replace_old:
                 summary['rejected_ungrounded'] += 1
                 continue
+
+            if section in ('facts', 'growth'):
+                if not self._verify_content_evidence(section, text, valid_refs, mem_by_id, auto_by_id):
+                    summary['rejected_ungrounded'] += 1
+                    summary['cognition_updates'].append({
+                        'kind': kind,
+                        'section': section,
+                        'text': text,
+                        'replace_old_text': replace_old,
+                        'reason': upd['reason'],
+                        'evidence_refs': valid_refs,
+                        's3_sources': [],
+                        'requested_status': 'uncertain',
+                        'governance_outcome': 'rejected_ungrounded_content',
+                        'effective_status': 'rejected_ungrounded_content',
+                        'message': 'content not grounded in cited evidence',
+                        'item_id': '',
+                    })
+                    continue
 
             s3_sources = self._expand_s3_sources(valid_refs, mem_by_id, section=section)
             has_non_autonomy = bool(s3_sources)
@@ -1335,7 +1685,8 @@ class CognitiveConsolidator:
                 'item_id': '',
             }
             if self.profile is not None and hasattr(self.profile, 'submit_candidate'):
-                idem_key = f"cons:{batch['batch_key']}:c{idx}"
+                # Content-deterministic idempotency key survives partial crashes & batch shifts.
+                idem_key = f"cons:{section}:{kind}:{_sha([_norm_text(text), _norm_text(replace_old)])[:16]}"
                 msg, st_label, _ = self.profile.submit_candidate(
                     section,
                     text,
@@ -1354,7 +1705,6 @@ class CognitiveConsolidator:
                     else:
                         state['totals']['cognition_written'] += 1
                     if section == 'relationship':
-                        # Inspect actual live status from S3 so UI shows true effective state.
                         rel_state = self._find_relationship_state(text)
                         entry['item_id'] = rel_state.get('id', '')
                         sem = rel_state.get('semantic_state', '')
@@ -1377,15 +1727,18 @@ class CognitiveConsolidator:
                     elif 'limit is' in lower or '超出' in lower:
                         entry['governance_outcome'] = 'rejected_budget'
                         entry['effective_status'] = 'rejected_budget'
+                        retryable_refs.update(valid_refs)
                     else:
                         entry['governance_outcome'] = 'rejected'
                         entry['effective_status'] = 'rejected'
+            else:
+                retryable_refs.update(valid_refs)
             summary['cognition_updates'].append(entry)
 
         # Refresh relationship items after S3 writes so S6-1 can see newly confirmed refs.
         refreshed_rel = self._existing_cognition_snapshot()['relationship_items']
 
-        # 2. Importance proposals -> S6-1 MemoryWeights.propose() (no bypass).
+        # 2. Importance proposals -> S6-1 MemoryWeights.propose() (no bypass, crash-idempotent).
         weights = self._weights()
         imp_ledger = state.setdefault('importance_proposed', {})
         for prop in parsed['importance_proposals']:
@@ -1424,14 +1777,29 @@ class CognitiveConsolidator:
                 'version_seq': None,
             }
             if weights is not None:
-                # Respect prior Lan rejection on the same memory/direction without nagging.
-                recent_hist = weights.history(mid, limit=5)
+                recent_hist = weights.history(mid, limit=10)
                 if any(
                     h.get('status') == 'rejected'
                     and h.get('proposed_importance') == prop['proposed_importance']
                     for h in recent_hist
                 ):
                     item_rec['outcome'] = 'skipped_previously_rejected'
+                    summary['skipped_duplicates'] += 1
+                    summary['importance_proposals'].append(item_rec)
+                    continue
+                if any(
+                    h.get('trigger') == 'consolidation'
+                    and h.get('status') in ('pending', 'applied')
+                    and h.get('proposed_importance') == prop['proposed_importance']
+                    for h in recent_hist
+                ):
+                    item_rec['outcome'] = 'skipped_already_proposed'
+                    imp_ledger[mid] = {
+                        'evidence_fp': ev_fp,
+                        'proposed_at': self._now(),
+                        'proposal_id': '',
+                        'proposed_importance': prop['proposed_importance'],
+                    }
                     summary['skipped_duplicates'] += 1
                     summary['importance_proposals'].append(item_rec)
                     continue
@@ -1473,14 +1841,15 @@ class CognitiveConsolidator:
 
         # 3. P7 unified experience candidates (structured, versioned, veto-aware, never in HEAD).
         exp_list = state.setdefault('experience_candidates', [])
+        vetoed_ledger = state.setdefault('vetoed_experiences', [])
         profile_data = self._read_profile_raw()
         for exp in parsed['experience_candidates']:
             valid_refs = [r for r in exp['evidence_refs'] if r in batch_refs]
             if not valid_refs:
                 summary['rejected_ungrounded'] += 1
                 continue
-            # Honor Lan vetoes in LearnedContext AND in P7 candidate list.
-            if self._is_vetoed_experience(exp['guidance'], exp_list, profile_data):
+            # Honor Lan vetoes in LearnedContext, P7 candidate list, AND permanent veto ledger.
+            if self._is_vetoed_experience(exp['guidance'], exp_list, profile_data, vetoed_ledger):
                 summary['experience_candidates'].append({
                     'id': '',
                     'kind': exp['kind'],
@@ -1494,16 +1863,22 @@ class CognitiveConsolidator:
                 state['totals']['cognition_blocked'] += 1
                 continue
 
-            # Dedup against active P7 candidates unless explicitly superseding.
+            # Dedup against active P7 candidates (including crash-replay identical candidates).
             supersedes_id = exp['supersedes_id']
+            content_key = _sha([exp['kind'], _norm_text(exp['trigger_condition']), _norm_text(exp['guidance'])])[:16]
             dup = next(
                 (
                     e for e in exp_list
                     if isinstance(e, dict)
                     and e.get('status') in ('confirmed', 'uncertain')
-                    and e.get('id') != supersedes_id
-                    and (_norm_text(e.get('guidance')) == _norm_text(exp['guidance'])
-                         or _jaccard_similar(e.get('guidance', ''), exp['guidance']))
+                    and (
+                        e.get('content_key') == content_key
+                        or (
+                            e.get('id') != supersedes_id
+                            and (_norm_text(e.get('guidance')) == _norm_text(exp['guidance'])
+                                 or _jaccard_similar(e.get('guidance', ''), exp['guidance']))
+                        )
+                    )
                 ),
                 None,
             )
@@ -1515,7 +1890,7 @@ class CognitiveConsolidator:
             new_id = 'exp-' + uuid.uuid4().hex[:10]
             superseded_target = None
             if supersedes_id:
-                superseded_target = next(
+                cand_target = next(
                     (
                         e for e in exp_list
                         if isinstance(e, dict) and e.get('id') == supersedes_id
@@ -1523,9 +1898,13 @@ class CognitiveConsolidator:
                     ),
                     None,
                 )
+                if cand_target is not None and self._is_related_experience(cand_target, exp):
+                    superseded_target = cand_target
+
             record = {
                 'id': new_id,
                 'schema_version': EXPERIENCE_SCHEMA_VERSION,
+                'content_key': content_key,
                 'kind': exp['kind'],
                 'trigger_condition': exp['trigger_condition'],
                 'guidance': exp['guidance'],
@@ -1542,11 +1921,16 @@ class CognitiveConsolidator:
                 'effective_in': 'p7_reserved',
             }
             if superseded_target is not None:
-                superseded_target['status'] = 'outdated'
-                superseded_target['superseded_by'] = new_id
-                superseded_target['updated_at'] = now_stamp
-                state['totals']['experience_revised'] += 1
-                outcome = 'revised'
+                if superseded_target.get('status') == 'confirmed':
+                    # Never retire a Lan-confirmed experience until Lan approves the revision!
+                    state['totals']['experience_revised'] += 1
+                    outcome = 'pending_revision'
+                else:
+                    superseded_target['status'] = 'outdated'
+                    superseded_target['superseded_by'] = new_id
+                    superseded_target['updated_at'] = now_stamp
+                    state['totals']['experience_revised'] += 1
+                    outcome = 'revised'
             else:
                 state['totals']['experience_created'] += 1
                 outcome = 'created'
@@ -1563,7 +1947,7 @@ class CognitiveConsolidator:
                 'outcome': outcome,
             })
 
-        return summary
+        return summary, retryable_refs
 
     def _find_relationship_state(self, text):
         if self.profile is None:
@@ -1586,11 +1970,14 @@ class CognitiveConsolidator:
         except Exception:
             return None
 
-    def _is_vetoed_experience(self, guidance, exp_list, profile_data):
+    def _is_vetoed_experience(self, guidance, exp_list, profile_data, vetoed_ledger=None):
         for item in exp_list:
             if isinstance(item, dict) and item.get('status') == 'vetoed':
                 if _matches_governed_claim(guidance, item.get('guidance', '')):
                     return True
+        for veto_text in (vetoed_ledger or ()):
+            if isinstance(veto_text, str) and veto_text and _matches_governed_claim(guidance, veto_text):
+                return True
         if profile_data is not None and self.profile is not None and hasattr(self.profile, '_is_rebutted_by_lan'):
             try:
                 if self.profile._is_rebutted_by_lan(guidance, profile_data):
@@ -1601,7 +1988,7 @@ class CognitiveConsolidator:
 
     # ------------------------------------------------------------------ execution engine
     def _due_check(self, state, values, *, trigger, force):
-        if trigger == 'scheduled' and not values['enabled']:
+        if not values['enabled']:
             return False, 'disabled'
         cap = Decimal(str(values['daily_budget_cny']))
         if cap <= 0:
@@ -1610,7 +1997,8 @@ class CognitiveConsolidator:
         now_dt = _parse_dt(now_stamp)
         today = now_stamp[:10]
         runs_today = int(state.get('runs_today') or 0) if state.get('day') == today else 0
-        if not force and runs_today >= int(values['max_runs_per_day']):
+        # Daily run cap is a hard budget guard and is never bypassed by `force`.
+        if runs_today >= int(values['max_runs_per_day']):
             return False, 'daily_run_limit'
         if not force and state.get('cooldown_until'):
             cd_dt = _parse_dt(state['cooldown_until'])
@@ -1624,6 +2012,21 @@ class CognitiveConsolidator:
                     return False, 'interval_not_elapsed'
         return True, ''
 
+    @staticmethod
+    def _inputs_summary_for(batch):
+        audit_stats = batch.get('autonomy_audit_stats') or {}
+        return {
+            'new_memory_ids': [m['id'] for m in batch['new_memories']],
+            'anchor_memory_ids': [m['id'] for m in batch['anchor_memories']],
+            'autonomy_ids': [a['id'] for a in batch['autonomy_items']],
+            'trimmed_new_count': int(batch.get('trimmed_new_count') or 0),
+            'trimmed_auto_count': int(batch.get('trimmed_auto_count') or 0),
+            'excluded_autonomy_unclean': int(audit_stats.get('excluded_unclean') or 0),
+            'excluded_autonomy_unaudited': int(audit_stats.get('excluded_unaudited') or 0),
+            'existing_relationship_count': len(batch['existing_cognition']['relationship_items']),
+            'existing_experience_count': len(batch['existing_experiences']),
+        }
+
     def run_once(self, *, trigger='manual', force=False, stopped=lambda: False):
         """Execute at most one bounded, idempotent consolidation pass."""
         if not self._run_lock.acquire(blocking=False):
@@ -1632,6 +2035,9 @@ class CognitiveConsolidator:
             values = self.settings()
             with self.mutex:
                 state = self._load_state()
+                if isinstance(state.get('in_flight'), dict):
+                    self.recover_interrupted()
+                    state = self._load_state()
                 due, reason = self._due_check(state, values, trigger=trigger, force=force)
                 if not due:
                     return {'ok': False, 'status': 'skipped', 'reason': reason}
@@ -1652,29 +2058,27 @@ class CognitiveConsolidator:
             run_id = 'cons-' + uuid.uuid4().hex[:10]
             started_at = self._now()
             start_mono = time.monotonic()
-            inputs_summary = {
-                'new_memory_ids': [m['id'] for m in batch['new_memories']],
-                'anchor_memory_ids': [m['id'] for m in batch['anchor_memories']],
-                'autonomy_ids': [a['id'] for a in batch['autonomy_items']],
-                'existing_relationship_count': len(batch['existing_cognition']['relationship_items']),
-                'existing_experience_count': len(batch['existing_experiences']),
-            }
+            initial_inputs = self._inputs_summary_for(batch)
 
             with self.mutex:
-                state['in_flight'] = {
+                fresh = self._load_state()
+                fresh['in_flight'] = {
                     'run_id': run_id,
                     'batch_key': batch['batch_key'],
                     'started_at': started_at,
                     'trigger': trigger,
                     'phase': 'starting',
-                    'inputs': inputs_summary,
+                    'counted_run': False,
+                    'inputs': initial_inputs,
                 }
-                self._save_state(state)
+                self._save_state(fresh)
 
             cap = Decimal(str(values['daily_budget_cny']))
             model_res = self._call_model(
-                batch, cap, int(values['timeout_seconds']), stopped, state=state,
+                batch, cap, int(values['timeout_seconds']), stopped, state=fresh,
             )
+            sent_batch = model_res.get('sent_batch') or batch
+            inputs_summary = self._inputs_summary_for(sent_batch)
             finished_at = self._now()
             duration_ms = int((time.monotonic() - start_mono) * 1000)
             today = finished_at[:10]
@@ -1683,12 +2087,20 @@ class CognitiveConsolidator:
                 fail_status = model_res.get('status') or 'failed'
                 fail_reason = model_res.get('reason') or 'unknown'
                 with self.mutex:
+                    # Reload latest state so concurrent Lan decisions during HTTP call are preserved.
+                    state = self._load_state()
                     state['in_flight'] = None
                     state['last_run_at'] = finished_at
                     state['last_run_id'] = run_id
                     state['last_status'] = fail_status
                     state['last_reason'] = fail_reason
                     state['totals']['runs'] += 1
+                    if model_res.get('dispatched'):
+                        if state.get('day') == today:
+                            state['runs_today'] = int(state.get('runs_today') or 0) + 1
+                        else:
+                            state['day'] = today
+                            state['runs_today'] = 1
                     if fail_status == 'budget_exhausted':
                         state['totals']['budget_exhausted'] += 1
                     elif fail_status == 'skipped':
@@ -1703,47 +2115,95 @@ class CognitiveConsolidator:
                             state['cooldown_until'] = (
                                 now_dt + timedelta(minutes=backoff_min)
                             ).isoformat(timespec='seconds')
-                    self._save_state(state)
                     run_record = {
                         'run_id': run_id, 'started_at': started_at, 'finished_at': finished_at,
                         'trigger': trigger, 'status': fail_status, 'reason': fail_reason,
-                        'batch_key': batch['batch_key'], 'policy_version': POLICY_VERSION,
+                        'batch_key': sent_batch['batch_key'], 'policy_version': POLICY_VERSION,
                         'inputs': inputs_summary, 'results': {},
                         'cost_cny': round(float(model_res.get('cost_cny') or 0.0), 6),
                         'prompt_tokens': model_res.get('prompt_tokens'),
                         'completion_tokens': model_res.get('completion_tokens'),
                         'cached_tokens': model_res.get('cached_tokens'),
+                        'cache_status': model_res.get('cache_status'),
                         'duration_ms': duration_ms,
                     }
+                    state.setdefault('recent_ui_runs', []).append(run_record)
+                    self._save_state(state)
                     self._append_run(run_record)
                 return {'ok': False, **run_record}
 
             with self.mutex:
+                # Reload latest state under lock before applying so concurrent Lan decisions survive.
+                state = self._load_state()
+                if state.get('day') == today:
+                    state['runs_today'] = int(state.get('runs_today') or 0) + 1
+                else:
+                    state['day'] = today
+                    state['runs_today'] = 1
                 if isinstance(state.get('in_flight'), dict):
                     state['in_flight']['phase'] = 'applying'
+                    state['in_flight']['counted_run'] = True
+                    state['in_flight']['batch_key'] = sent_batch['batch_key']
+                    state['in_flight']['inputs'] = inputs_summary
+                self._save_state(state)
+
+                try:
+                    applied, retryable_refs = self._apply_outputs(
+                        model_res['parsed'], sent_batch, state, values, run_id,
+                    )
+                except Exception as exc:
+                    # Cleanly record apply failure so in_flight never lingers and retry is safe.
+                    state['in_flight'] = None
+                    state['last_run_at'] = finished_at
+                    state['last_run_id'] = run_id
+                    state['last_status'] = 'apply_failed'
+                    state['last_reason'] = type(exc).__name__
+                    state['totals']['runs'] += 1
+                    state['totals']['failed'] += 1
+                    failures = int(state.get('consecutive_failures') or 0) + 1
+                    state['consecutive_failures'] = failures
+                    backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
+                    now_dt = _parse_dt(finished_at)
+                    if now_dt is not None:
+                        state['cooldown_until'] = (
+                            now_dt + timedelta(minutes=backoff_min)
+                        ).isoformat(timespec='seconds')
+                    fail_rec = {
+                        'run_id': run_id, 'started_at': started_at, 'finished_at': finished_at,
+                        'trigger': trigger, 'status': 'apply_failed', 'reason': type(exc).__name__,
+                        'batch_key': sent_batch['batch_key'], 'policy_version': POLICY_VERSION,
+                        'inputs': inputs_summary, 'results': {},
+                        'cost_cny': round(float(model_res.get('cost_cny') or 0.0), 6),
+                        'prompt_tokens': model_res.get('prompt_tokens'),
+                        'completion_tokens': model_res.get('completion_tokens'),
+                        'cached_tokens': model_res.get('cached_tokens'),
+                        'cache_status': model_res.get('cache_status'),
+                        'duration_ms': duration_ms,
+                    }
+                    state.setdefault('recent_ui_runs', []).append(fail_rec)
                     self._save_state(state)
-                applied = self._apply_outputs(model_res['parsed'], batch, state, values, run_id)
-                for mem in batch['new_memories']:
-                    state['processed_memories'][mem['id']] = mem['fingerprint']
-                for auto in batch['autonomy_items']:
-                    state['processed_autonomy'][auto['started_at']] = auto['fingerprint']
-                state['processed_batches'][batch['batch_key']] = finished_at
+                    self._append_run(fail_rec)
+                    return {'ok': False, **fail_rec}
+
+                # Only mark items that were actually sent AND had no retryable S3 write rejection.
+                for mem in sent_batch['new_memories']:
+                    if f"memory:{mem['id']}" not in retryable_refs:
+                        state['processed_memories'][mem['id']] = mem['fingerprint']
+                for auto in sent_batch['autonomy_items']:
+                    if auto['id'] not in retryable_refs:
+                        state['processed_autonomy'][auto['started_at']] = auto['fingerprint']
+                if not retryable_refs:
+                    state['processed_batches'][sent_batch['batch_key']] = finished_at
                 state['in_flight'] = None
                 state['last_run_at'] = finished_at
                 state['last_success_at'] = finished_at
                 state['last_run_id'] = run_id
                 state['last_status'] = 'completed'
                 state['last_reason'] = ''
-                if state.get('day') == today:
-                    state['runs_today'] = int(state.get('runs_today') or 0) + 1
-                else:
-                    state['day'] = today
-                    state['runs_today'] = 1
                 state['consecutive_failures'] = 0
                 state['cooldown_until'] = ''
                 state['totals']['runs'] += 1
                 state['totals']['completed'] += 1
-                self._save_state(state)
                 run_record = {
                     'run_id': run_id,
                     'started_at': started_at,
@@ -1751,7 +2211,7 @@ class CognitiveConsolidator:
                     'trigger': trigger,
                     'status': 'completed',
                     'reason': '',
-                    'batch_key': batch['batch_key'],
+                    'batch_key': sent_batch['batch_key'],
                     'policy_version': POLICY_VERSION,
                     'inputs': inputs_summary,
                     'results': applied,
@@ -1759,8 +2219,15 @@ class CognitiveConsolidator:
                     'prompt_tokens': model_res.get('prompt_tokens'),
                     'completion_tokens': model_res.get('completion_tokens'),
                     'cached_tokens': model_res.get('cached_tokens'),
+                    'cache_status': model_res.get('cache_status'),
                     'duration_ms': duration_ms,
                 }
+                state.setdefault('recent_ui_runs', []).append(run_record)
+                self._save_state(
+                    state,
+                    active_memory_ids=sent_batch.get('active_memory_ids'),
+                    active_autonomy_ids=sent_batch.get('active_autonomy_ids'),
+                )
                 self._append_run(run_record)
             return {'ok': True, **run_record}
         finally:
@@ -1802,6 +2269,7 @@ class CognitiveConsolidator:
         with self.mutex:
             state = self._load_state()
             rows = list(state.get('experience_candidates') or [])
+            vetoed_ledger = list(state.get('vetoed_experiences') or [])
         valid_mems = self._existing_memory_ids()
         scored = []
         for row in rows:
@@ -1811,7 +2279,7 @@ class CognitiveConsolidator:
                 continue
             if allowed_kinds is not None and row.get('kind') not in allowed_kinds:
                 continue
-            if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data):
+            if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data, vetoed_ledger):
                 continue
             # Filter out candidates whose memory evidence was all hard-deleted.
             refs = list(row.get('evidence_refs') or [])
@@ -1837,10 +2305,17 @@ class CognitiveConsolidator:
             return None
         try:
             conn = sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True, timeout=3.0)
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            pending_deletes = set()
+            if 'delete_requests' in tables:
+                for dr in conn.execute("SELECT memory_id FROM delete_requests WHERE status='pending'"):
+                    if dr[0]:
+                        pending_deletes.add(str(dr[0]))
             ids = {
                 row[0] for row in conn.execute(
                     'SELECT id FROM memories WHERE is_tombstone=0 AND is_deleted=0'
                 )
+                if row[0] not in pending_deletes
             }
             conn.close()
             return ids
@@ -1861,13 +2336,43 @@ class CognitiveConsolidator:
             target = next((r for r in rows if isinstance(r, dict) and r.get('id') == cid), None)
             if target is None:
                 return {'ok': False, 'error': 'candidate_not_found', 'status_code': 404}
+            if action == 'confirm' and target.get('status') == 'vetoed':
+                return {
+                    'ok': False,
+                    'error': '已否决的经验候选不能直接确认，请使用显式恢复操作。',
+                    'status_code': 409,
+                }
             mapping = {'confirm': 'confirmed', 'veto': 'vetoed', 'outdated': 'outdated', 'restore': 'confirmed'}
+            now_stamp = self._now()
             target['status'] = mapping[action]
             target['decided_by'] = 'lan'
-            target['decided_at'] = self._now()
-            target['updated_at'] = target['decided_at']
+            target['decided_at'] = now_stamp
+            target['updated_at'] = now_stamp
             if note:
                 target['note'] = _clip(note, 200)
+            vetoed_ledger = state.setdefault('vetoed_experiences', [])
+            if action == 'veto':
+                g = str(target.get('guidance') or '').strip()
+                if g and not any(_matches_governed_claim(g, v) for v in vetoed_ledger if isinstance(v, str)):
+                    vetoed_ledger.append(g)
+            elif action == 'restore':
+                g = str(target.get('guidance') or '').strip()
+                if g:
+                    state['vetoed_experiences'] = [
+                        v for v in vetoed_ledger
+                        if not (isinstance(v, str) and _matches_governed_claim(g, v))
+                    ]
+            if action in ('confirm', 'restore') and target.get('supersedes'):
+                old_id = target['supersedes']
+                old_row = next(
+                    (r for r in rows if isinstance(r, dict) and r.get('id') == old_id
+                     and r.get('status') in ('confirmed', 'uncertain')),
+                    None,
+                )
+                if old_row is not None:
+                    old_row['status'] = 'outdated'
+                    old_row['superseded_by'] = cid
+                    old_row['updated_at'] = now_stamp
             self._save_state(state)
             return {'ok': True, 'candidate': dict(target)}
 
@@ -1909,11 +2414,14 @@ class CognitiveConsolidator:
             'outdated': sum(1 for e in exps if isinstance(e, dict) and e.get('status') == 'outdated'),
             'vetoed': sum(1 for e in exps if isinstance(e, dict) and e.get('status') == 'vetoed'),
         }
+        ui_runs = list(reversed([r for r in (state.get('recent_ui_runs') or []) if isinstance(r, dict)]))
+        shown_runs = ui_runs[:max(1, min(16, int(runs_limit or 12)))] if ui_runs else self.recent_runs(limit=runs_limit)
         return {
             'available': True,
             'policy_version': POLICY_VERSION,
             'persistence_path': self.settings_path(),
             'settings': values,
+            'settings_revision': self.settings_revision(),
             'defaults': dict(DEFAULTS),
             'effective': {
                 'code': eff_code,
@@ -1936,13 +2444,14 @@ class CognitiveConsolidator:
                 **self.experience_interface_contract(),
                 'counts': exp_counts,
             },
-            'experience_candidates': self.list_experience_candidates(limit=30),
-            'recent_runs': self.recent_runs(limit=runs_limit),
+            'experience_candidates': self.list_experience_candidates(limit=MAX_EXPERIENCE_CANDIDATES),
+            'recent_runs': shown_runs,
             'guards': {
                 'default_disabled': True,
                 'reuses_s3_governance': True,
                 'reuses_s6_1_weights': True,
-                'filters_unclean_autonomy': True,
+                'filters_unclean_and_unaudited_autonomy': True,
                 'respects_lan_locks_and_vetoes': True,
+                'content_grounded_facts_and_growth': True,
             },
         }

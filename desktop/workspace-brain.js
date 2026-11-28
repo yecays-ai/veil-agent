@@ -325,7 +325,10 @@
   }
 
   function buildConsolidationPanel(req, host, data) {
-    const draft = { ...(data.settings || {}) };
+    const initial = { ...(data.settings || {}) };
+    const draft = { ...initial };
+    const dirty = {};
+    const expectedRevision = typeof data.settings_revision === 'number' ? data.settings_revision : null;
     const eff = data.effective || {};
     const budget = data.budget || {};
     const totals = data.totals || {};
@@ -340,27 +343,31 @@
       pill('策略 ' + (data.policy_version || 's6-3.v1'), ''),
       pill(eff.status_text || (draft.enabled ? '已启用' : '已关闭（默认灰度关闭）'), tone),
     );
+    const mark = (key, value) => {
+      draft[key] = value;
+      dirty[key] = value;
+    };
     const grid = el('div', 'six-layer-grid');
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(240px, 1fr))';
     grid.append(
       memorySwitchRow('启用后台认知巩固', draft.enabled === true,
         '默认关闭供灰度体验；复用 S3 证据核验与锁定/否决治理、S6-1 重要度重评与独立费用上限。',
-        v => { draft.enabled = v; }),
+        v => mark('enabled', v)),
       memorySwitchRow('允许自动应用安全重要度增量', draft.auto_apply_importance === true,
         '默认关闭（仅生成待确认建议）；开启后仍严格受 S6-1 硬上限（≤7、单步+1、尊重锁定与置顶）约束。',
-        v => { draft.auto_apply_importance = v; }),
+        v => mark('auto_apply_importance', v)),
       memoryNumberRow('执行间隔（小时）', draft.interval_hours ?? 24, {
         min: 1, max: 168, step: 1, detail: '两次定时巩固之间的最小间隔，支持增量处理与跨日连续。',
-      }, v => { draft.interval_hours = v; }),
+      }, v => mark('interval_hours', v)),
       memoryNumberRow('每日最多次数', draft.max_runs_per_day ?? 2, {
         min: 1, max: 12, step: 1, detail: '防止无限循环与重复费用。',
-      }, v => { draft.max_runs_per_day = v; }),
+      }, v => mark('max_runs_per_day', v)),
       memoryNumberRow('每日费用上限（¥）', draft.daily_budget_cny ?? 0.05, {
         min: 0, max: 5, step: 0.01, detail: '独立日预算硬上限（对照 AB-E1 约 ¥0.03/夜）；填 0 暂停付费运行。',
-      }, v => { draft.daily_budget_cny = v; }),
+      }, v => mark('daily_budget_cny', v)),
       memoryNumberRow('单次超时（秒）', draft.timeout_seconds ?? 25, {
         min: 5, max: 120, step: 1, detail: '后台单次巩固模型请求超时，不阻塞正常聊天。',
-      }, v => { draft.timeout_seconds = v; }),
+      }, v => mark('timeout_seconds', v)),
     );
     const summaryLine = el('small', 'muted',
       `今日费用 ¥${budget.spent_cny ?? '0'} / 上限 ¥${budget.daily_cap_cny ?? draft.daily_budget_cny ?? '0.05'}（余额 ¥${budget.remaining_cny ?? '0'}） · `
@@ -371,19 +378,30 @@
     const actions = el('div', 'workspace-links');
     const saveBtn = btn('保存巩固设置', 'sm primary');
     const runBtn = btn('立即运行一次巩固', 'sm');
+    if (initial.enabled !== true) {
+      runBtn.disabled = true;
+      runBtn.title = '请先开启「启用后台认知巩固」并保存后再手动运行';
+    }
     const viewBtn = btn('查看巩固结果与演化', 'sm');
     const statusLine = el('small', 'muted', '');
     saveBtn.addEventListener('click', async () => {
+      if (!Object.keys(dirty).length) {
+        statusLine.textContent = '配置未改动。';
+        return;
+      }
       saveBtn.disabled = true;
       statusLine.textContent = '正在保存并持久化巩固配置…';
+      const payload = { values: { ...dirty } };
+      if (expectedRevision !== null) payload.expected_revision = expectedRevision;
       const res = await reqJson(req, '/api/brain/consolidation/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values: draft }),
+        body: JSON.stringify(payload),
       });
       saveBtn.disabled = false;
       if (!res.ok || !res.data?.ok) {
         statusLine.textContent = res.data?.error || '保存失败，已保留原设置。';
+        if (res.status === 409 && typeof renderBrainHome === 'function') renderBrainHome(host, req);
         return;
       }
       statusLine.textContent = '已保存到 ' + (res.data.persistence_path || '本机数据目录') + '，下次周期生效，重启保留。';
@@ -1871,6 +1889,7 @@
         effective_learned: '已生效（已进入习得认知）',
         blocked_sovereignty: '已拦截（尊重锁定/纠正/否决）',
         rejected_budget: '未写入（分区预算已满）',
+        rejected_ungrounded_content: '未写入（内容与证据不匹配）',
         rejected: '未写入（治理拒绝）',
       };
       const runs = Array.isArray(consData.recent_runs) ? consData.recent_runs : [];
@@ -1919,7 +1938,12 @@
       if (!p7Items.length) {
         p7Card.append(el('p', 'muted', '暂无预留给 P7 情境触发注入的经验候选。'));
       } else {
-        for (const item of p7Items.slice(0, 12)) {
+        // Surface pending items first and render every returned candidate so none are unreachable.
+        const sortedP7 = [...p7Items].sort((a, b) => {
+          const rank = s => (s === 'uncertain' ? 0 : s === 'confirmed' ? 1 : 2);
+          return rank(a.status) - rank(b.status);
+        });
+        for (const item of sortedP7) {
           const row = el('div', 'layer-item');
           const stLbl = { confirmed: '已确认', uncertain: '待确认', outdated: '已过时', vetoed: '已否决' }[item.status] || item.status;
           row.append(
