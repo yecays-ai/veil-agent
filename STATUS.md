@@ -1,13 +1,11 @@
 # 当前状态
 
-> 更新：2026-11-28 23:20 +08:00 · 基线 `main = 73d93e7`（工单 469 · PR #470 已合并）· 正式运行目录仍为 `d7fe9ec` · **工单 471 · PR #472 / P7-S2** 最后交付核查已补齐 HEAD 后台维护、有界分批候选读取、独立语义场景及工具/自主真实入口回归；本地定向合计 297/297。Issue #471 已关闭；PR 未合并、未部署。
+> 更新：2026-11-29 00:15 +08:00 · 基线 `main = 64fa112`（工单 471 · PR #472 已合并）· 正式运行目录仍为 `d7fe9ec` · **工单 473 / P7-S3** 四级证据晋升、自主判断与反馈演化闭环已完成隔离实现与集中回归，待 PR 复审；未部署、默认关闭。
 > **待你验收的事项与唯一验收状态统一在 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。** 本文只写进度，不另存验收状态。
 
 ## 一句话现状
 
-工单 471 · PR #472 已补齐 HEAD 语义去重长期入口：显式预热后由 Chat 后台每 15 分钟检测自然 HEAD/模型/端点变化并维护，普通轮次零新增 Embed；候选池按 256 条分批、单轮最多 2048 条且跨轮续扫，不按新旧评分前截断。中文改写、双向跨语言、三类隐含情境及工具/自主生产入口均有独立回归，本地定向合计 **297/297**。Issue #471 已关闭，PR 未合并、未部署。
-
-P7-S2 的混合匹配、多入口、灰区预算与 `P7-MATCH-02` 已实现。同秒缓存并发阻断已通过写锁内分配的候选级单调 `generation` 解决，固定同秒 model-A → model-B → 旧快照保存回归先红后绿；缓存专项 29/29、最终定向回归 182/182 通过，等待 PR 复审。正式 Peter 与正式数据未改动，未部署，P7 默认关闭。
+工单 473（P7-S3）已按 P7-0 §7.2 在独立 worktree 完成 L1–L4 四级证据程序化核验与分域授权晋升、低风险单次实践队列、`memory_admin` 组 `experience_reflect` 自主判断工具与按需扩组发现、原子幂等可恢复的 `experience-feedback.jsonl` 账本及 `pending_delivery` 恢复，并接通「经验注入 → 实际行为 → 客观反馈 → 认知巩固 → 经验修订」闭环。正式 Peter 与正式数据未改动，未部署，P7 默认关闭；不提前施工 S4/S5。
 
 ## 近期工单真实状态
 
@@ -15,7 +13,8 @@ P7-S2 的混合匹配、多入口、灰区预算与 `P7-MATCH-02` 已实现。�
 
 | 工单 | PR | 合并提交 | 合并时间（UTC） | 部署 | 验收入口（以 ACCEPTANCE 为准） |
 | --- | --- | --- | --- | --- | --- |
-| 471 · P7-S2 情境识别、语义匹配与经验注入 | #472（待复审；issue 已关闭） | — | — | **未部署**：首次 CI 已修复，新增普通召回去重回归后本地 230/230，待新 CI | [B-16](docs/ACCEPTANCE.md#b-16-p7-s2-情境识别语义匹配与经验注入工单-471) |
+| 473 · P7-S3 四级证据晋升、自主判断与反馈演化闭环 | 待开 PR（Issue #473） | — | — | 未部署，默认关闭，开发侧集中回归通过 | [B-17](docs/ACCEPTANCE.md#b-17-p7-s3-四级证据晋升自主判断与反馈演化闭环工单-473) |
+| 471 · P7-S2 情境识别、语义匹配与经验注入 | #472 | `64fa112` | 2026-11-28 15:40 UTC | 未部署，默认关闭 | [B-16](docs/ACCEPTANCE.md#b-16-p7-s2-情境识别语义匹配与经验注入工单-471) |
 | 469 · P7-S1 生产经验 Provider、证据新鲜度与协同恢复 | #470 | `73d93e7` | 2026-11-28 09:23 UTC | 未部署，默认关闭 | [B-15](docs/ACCEPTANCE.md#b-15-p7-s1-生产经验-provider证据新鲜度与协同恢复工单-469--pr-470) |
 | 467 · P7-0 情境触发式经验注入与自主判断力完整施工规划 | #468 | `c7f23ed` | 2026-11-28 07:29 UTC | 文档类 | [P7-0 规划报告](docs/reports/p7-0-experience-injection-construction-plan-20261128.md) |
 | 468 · P2–P6 正式环境验收缺陷修复与数据维护 | #469 | `a7615ab` | 2026-11-28 06:50 UTC | 正式库维护已完成；代码尚未部署 | [§0 看板](docs/ACCEPTANCE.md#0-一眼看板) |
@@ -46,11 +45,18 @@ P7-S2 的混合匹配、多入口、灰区预算与 `P7-MATCH-02` 已实现。�
 
 ## 当前开发阶段
 
-- 产品阶段：A 陪伴核心（P7 行为经验层进入 S2 交付）。
-- 工程阶段：P7-S1 已合并；P7-S2 同秒向量缓存阻断已解决，定向回归通过，待 PR 复审；S3～S5 未施工。
-- 正式底座：`main = 73d93e7`，正式运行目录仍为 `d7fe9ec`；本单未启停正式 Peter、未写正式记忆、未部署。
+- 产品阶段：A 陪伴核心（P7 行为经验层进入 S3 复审交付）。
+- 工程阶段：P7-S1（#470）、P7-S2（#472）已合并；P7-S3（工单 473）已完成开发与集中回归，待开 PR 与复审；S4～S5 未施工。
+- 正式底座：`main = 64fa112`，正式运行目录仍为 `d7fe9ec`；本单未启停正式 Peter、未写正式记忆、未部署。
 
-## 本单（工单 471 · P7-S2）做了什么
+## 本单（工单 473 · P7-S3）做了什么
+
+- **L1–L4 四级证据核验与分域晋升**：在 `EvidenceValidator` 扩展 `ongoing:` 证据新鲜度与程序化 `inspect_ref_tier()`，由程序核验来源真实性与角色发言人（不采信模型自报等级）；L3/L4 自评循环自证率严格为 0%；`relationship_consensus` 仅允许 L1 + S3 `supported`、`commitment_accountability` 独立受 `auto_promote_commitment` 授权、`work_method`/`autonomous_practice` 需 ≥2 次独立 L2 运行 + 0 失败反例 + S3 `supported` 且独立受 `auto_promote_objective` 授权；P7 默认关闭时不额外调用 S3 核验。
+- **待验证改进硬拦截与低风险单次实践队列**：`unverified_improvement` 在确认端点（409）、候选查询、确认边界、Provider 和 Chat 渲染多层拦截；仅低风险且无额外权限/付费/外部副作用的方案可获一次独立 `trial_id` 实践机会（不反复弹出、不自动确认），获得 1 次 L1 或 2 次独立 L2 正向结果后由巩固器生成新 `success` 版本并淘汰旧项。
+- **自主判断工具 `experience_reflect`**：新增于 `memory_admin` 工具组（不进 `ALWAYS_ON`，≤1500B），在 P7 开启时由 `memory.experience.hints.md` 与 `expand_capability` 引导按需发现；只写反馈记录、悬置冷却（`suspension_until`）或 `uncertain` 修订草案，绝不改写已确认正文、绕过 Lan 否决或放宽工具权限；不虚构 `adopted`/`adjusted` 统计。
+- **原子幂等反馈账本与闭环接线**：新增 `veil/brain/experience_feedback.py`（`ExperienceFeedbackLedger`，跨进程写锁 + `(request_id, exp_id, event_type, result_id)` 幂等键 + 脱敏 + `brain_backup.py` `idem_key` 去重合并）；发送前原子落盘 `pending_delivery`，`_finalize_recall_delivery()` 按真实送达落盘 `delivery_sent`/`delivery_cancelled` 与多条客观工具结果，`ongoing_update` 与 `AutonomyController` 自动关联承诺与自主结果；崩溃后按 `chat.jsonl`/`autonomy.jsonl`/`tools.jsonl` 事实自动协调；连续 2 次客观负结果自动降级 `objective_corroboration` 项，巩固器消费未结算反馈并形成可追溯 `supersedes` 修订链且在下轮实际生效。
+
+## 上一单（工单 471 · PR #472 · P7-S2）已合并
 
 - **混合匹配**：复用同轮查询向量，按语义 0.55 + 情境 0.25 + 词法 0.20 做本地评分；支持零词项中文改写、跨语言与隐含场景，严格阈值、例外关门、短应和和无关场景 0 注入。
 - **费用与缓存**：P7 关闭时 0 候选查询/0 候选向量；显式开启时按文本指纹、模型和维度一次性预热 confirmed 候选，聊天轮次不新增 Embed；可选灰区复核默认关闭，独立 `p7_experience_gate` 日预算。

@@ -9,11 +9,14 @@ import re
 import sqlite3
 import threading
 import time
+import uuid
 import weakref
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from veil.brain.experience_feedback import ExperienceFeedbackLedger, is_low_risk_trial
 from veil.brain.learned_context import _lexical_tokens
 from veil.brain.storage.brain_lock import write_lock
 
@@ -44,10 +47,10 @@ EVIDENCE_BUDGET_MS = 150
 MAX_EVIDENCE_BYTES = 512 * 1024
 MAX_CACHE_ENTRIES = 512
 MAX_TOPIC_CHARS = 400
-EVIDENCE_KINDS = frozenset({'memory', 'event', 'chat', 'autonomy', 'tool', 'long_task'})
+EVIDENCE_KINDS = frozenset({'memory', 'event', 'chat', 'autonomy', 'tool', 'long_task', 'ongoing'})
 _CORE_KINDS = {
     'L1_user_feedback': frozenset({'chat', 'memory', 'event'}),
-    'L2_objective_action': frozenset({'tool', 'long_task', 'autonomy'}),
+    'L2_objective_action': frozenset({'tool', 'long_task', 'autonomy', 'ongoing'}),
     'L3_autonomy_reflection': frozenset({'autonomy'}),
 }
 _DATA_START = '<<<EXPERIENCE_DATA'
@@ -412,14 +415,43 @@ class EvidenceValidator:
             return 'invalid', ''
         return 'valid', _digest(row)
 
+    def _validate_ongoing(self, ref_id, deadline):
+        if deadline.expired():
+            return 'unavailable', ''
+        path = self.role_dir / 'learned-context.json'
+        try:
+            if not path.is_file():
+                return 'invalid', ''
+            raw = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeError):
+            return 'unavailable', ''
+        if not isinstance(raw, dict):
+            return 'unavailable', ''
+        ongoing = raw.get('ongoing')
+        items = ongoing.get('items') if isinstance(ongoing, dict) else ongoing
+        if not isinstance(items, list):
+            return 'invalid', ''
+        for item in items:
+            if not isinstance(item, dict) or str(item.get('id') or '') != ref_id:
+                continue
+            if item.get('deleted') or item.get('withdrawn') or item.get('retracted'):
+                return 'invalid', ''
+            return 'valid', _digest({
+                'id': item.get('id'), 'text': item.get('text'), 'status': item.get('status'),
+                'due': item.get('due'), 'due_at': item.get('due_at'), 'overdue': item.get('overdue'),
+            })
+        return 'invalid', ''
+
     def _resolve(self, kind, ref_id, deadline):
         if kind == 'chat':
             return self._validate_chat(ref_id, deadline)
-        if kind in ('autonomy', 'tool', 'long_task'):
+        if kind in ('autonomy', 'tool', 'long_task', 'ongoing'):
             if kind == 'autonomy':
                 return self._validate_autonomy(ref_id, deadline)
             if kind == 'tool':
                 return self._validate_tool(ref_id, deadline)
+            if kind == 'ongoing':
+                return self._validate_ongoing(ref_id, deadline)
             return self._validate_long_task(ref_id, deadline)
         if kind not in ('memory', 'event'):
             return 'unavailable', ''
@@ -510,6 +542,144 @@ class EvidenceValidator:
         deadline = deadline or _Deadline(milliseconds)
         return [self.validate(candidate, deadline=deadline) for candidate in candidates]
 
+    def inspect_ref_tier(self, ref, *, deadline=None):
+        """Programmatically verify one evidence_ref and determine its objective L1-L4 capability.
+
+        Never trusts model self-classification: checks actual speaker role, DB quotes/sources,
+        clean autonomy audit + real tools, tool execution logs, and ongoing commitments.
+        """
+        if not isinstance(ref, str) or ':' not in ref:
+            return {'state': 'invalid', 'tier': 'L4_self_eval', 'kind': '', 'ref': str(ref or ''), 'run_key': '', 'text': ''}
+        kind, ref_id = ref.split(':', 1)
+        deadline = deadline or _Deadline(max(EVIDENCE_BUDGET_MS, 500))
+        state, _fp = self._resolve(kind, ref_id, deadline)
+        base = {'state': state, 'tier': 'L4_self_eval', 'kind': kind, 'ref': ref, 'run_key': '', 'text': '', 'objective_kind': ''}
+        if state != 'valid':
+            return base
+        if kind == 'chat':
+            row = None
+            lookup = getattr(self.profile, '_chat_lookup', None)
+            if callable(lookup):
+                try:
+                    found, status = lookup(ref_id, deadline)
+                    if status == 'ok' and isinstance(found, dict):
+                        row = found
+                except Exception:
+                    row = None
+            if row is None:
+                rows, _ = self._jsonl_rows('chat.jsonl', deadline)
+                row = next((r for r in (rows or ()) if self._row_matches(r, ref_id, ('message_id', 'id'))), None)
+            if isinstance(row, dict):
+                base['text'] = str(row.get('content') or row.get('text') or '')[:400]
+                if str(row.get('role') or '').lower() == 'user':
+                    base['tier'] = 'L1_user_feedback'
+                    base['run_key'] = f'chat:{ref_id}'
+            return base
+        if kind == 'tool':
+            rows, _ = self._jsonl_rows('tools.jsonl', deadline)
+            row = next((r for r in (rows or ()) if self._row_matches(r, ref_id, ('call_id', 'request_id', 'result_id', 'id'))), None)
+            if isinstance(row, dict):
+                base['tier'] = 'L2_objective_action'
+                base['objective_kind'] = 'tool'
+                base['run_key'] = str(row.get('autonomy_run_id') or row.get('session_key') or row.get('request_id') or ref_id)
+                base['tool_state'] = str(row.get('state') or '')
+                base['text'] = f"tool={row.get('tool', '')} state={row.get('state', '')} {str(row.get('summary') or row.get('result') or '')[:300]}".strip()
+            return base
+        if kind == 'long_task':
+            path = self.role_dir / 'long-task.json'
+            try:
+                row = json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                row = None
+            if isinstance(row, dict) and str(row.get('task_id') or '') == ref_id:
+                base['tier'] = 'L2_objective_action'
+                base['objective_kind'] = 'long_task'
+                base['run_key'] = f'long_task:{ref_id}'
+                base['text'] = f"long_task={ref_id} status={row.get('status', '')} {str(row.get('summary') or row.get('goal') or '')[:300]}".strip()
+            return base
+        if kind == 'ongoing':
+            path = self.role_dir / 'learned-context.json'
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except Exception:
+                data = None
+            ongoing = data.get('ongoing') if isinstance(data, dict) else None
+            items = ongoing.get('items') if isinstance(ongoing, dict) else ongoing
+            row = next((i for i in (items or ()) if isinstance(i, dict) and str(i.get('id') or '') == ref_id), None)
+            if isinstance(row, dict):
+                base['tier'] = 'L2_objective_action'
+                base['objective_kind'] = 'commitment'
+                base['run_key'] = f'ongoing:{ref_id}'
+                base['text'] = f"ongoing={ref_id} status={row.get('status', '')} overdue={bool(row.get('overdue'))} {str(row.get('text') or '')[:300]}".strip()
+            return base
+        if kind == 'autonomy':
+            rows, _ = self._jsonl_rows('autonomy.jsonl', deadline)
+            row = next((r for r in (rows or ()) if str(r.get('started_at') or '') == ref_id), None)
+            if isinstance(row, dict) and self._clean_audit(row):
+                tools = row.get('tools') if isinstance(row.get('tools'), list) else []
+                real_tools = [t for t in tools if isinstance(t, dict) and str(t.get('tool') or '').strip()]
+                base['text'] = f"autonomy={ref_id} result={row.get('result', '')} {str(row.get('decision') or row.get('summary') or '')[:260]}".strip()
+                if real_tools:
+                    base['tier'] = 'L2_objective_action'
+                    base['objective_kind'] = 'autonomy_tool'
+                    base['run_key'] = f'autonomy:{ref_id}'
+                    base['ok_tools'] = [t for t in real_tools if t.get('state') == '成功']
+                    base['failed_tools'] = [t for t in real_tools if t.get('state') != '成功']
+                    tool_desc = '; '.join(f"{t.get('tool')}:{t.get('state')}" for t in real_tools[:6])
+                    base['text'] = f"{base['text']} tools=[{tool_desc}]"[:400]
+                else:
+                    base['tier'] = 'L3_autonomy_reflection'
+                    base['run_key'] = f'autonomy:{ref_id}'
+            return base
+        if kind in ('memory', 'event'):
+            path = self._db_path()
+            if path.is_file():
+                try:
+                    conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.2)
+                    try:
+                        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                        mem_ids = []
+                        if kind == 'memory':
+                            mem_ids = [ref_id]
+                            row = conn.execute('SELECT title, body FROM memories WHERE id=?', (ref_id,)).fetchone()
+                            if row:
+                                base['text'] = f"{row[0] or ''} {row[1] or ''}".strip()[:400]
+                        else:
+                            ev = conn.execute('SELECT memory_id, title, story FROM events WHERE event_id=?', (ref_id,)).fetchone()
+                            if ev:
+                                if ev[0]:
+                                    mem_ids.append(str(ev[0]))
+                                base['text'] = f"{ev[1] or ''} {ev[2] or ''}".strip()[:400]
+                            if 'event_sources' in tables:
+                                mem_ids.extend(str(r[0]) for r in conn.execute(
+                                    'SELECT memory_id FROM event_sources WHERE event_id=?', (ref_id,)) if r[0])
+                        has_user = False
+                        for mid in mem_ids[:6]:
+                            if 'quotes' in tables:
+                                q = conn.execute(
+                                    "SELECT 1 FROM quotes WHERE memory_id=? AND lower(COALESCE(speaker,'')) IN ('user','lan') LIMIT 1",
+                                    (mid,),
+                                ).fetchone()
+                                if q:
+                                    has_user = True
+                                    break
+                            if 'sources' in tables:
+                                s = conn.execute(
+                                    "SELECT 1 FROM sources WHERE memory_id=? AND (kind='chat' OR ref LIKE 'chat:%') LIMIT 1",
+                                    (mid,),
+                                ).fetchone()
+                                if s:
+                                    has_user = True
+                                    break
+                        if has_user:
+                            base['tier'] = 'L1_user_feedback'
+                            base['run_key'] = ref
+                    finally:
+                        conn.close()
+                except sqlite3.Error:
+                    pass
+        return base
+
 
 class ExperienceHintProvider:
     """Role-isolated P7 provider with deterministic local hybrid matching."""
@@ -534,6 +704,7 @@ class ExperienceHintProvider:
         self.semantic_gate = semantic_gate
         self.budget = budget
         self.validator = EvidenceValidator(cfg, store, memory=memory, profile=profile)
+        self.feedback = getattr(consolidator, 'feedback_ledger', None) or ExperienceFeedbackLedger(store, cfg.id)
         self.mutex = threading.RLock()
         warm_key = (os.path.normcase(os.path.abspath(str(store.root))), str(cfg.id))
         with self._WARM_LOCKS_MUTEX:
@@ -990,6 +1161,107 @@ class ExperienceHintProvider:
         except Exception:
             return []
 
+    @staticmethod
+    def _is_suspended(row):
+        verification = row.get('verification') if isinstance(row.get('verification'), dict) else {}
+        until = str(verification.get('suspension_until') or '').strip()
+        if not until:
+            return False
+        if until.endswith('Z'):
+            until = until[:-1] + '+00:00'
+        try:
+            until_dt = datetime.fromisoformat(until)
+            if until_dt.tzinfo is None:
+                until_dt = until_dt.replace(tzinfo=timezone.utc)
+            return until_dt > datetime.now(timezone.utc)
+        except ValueError:
+            return False
+
+    def select_trial(self, situation, *, injected_ids=()):
+        """Select at most one matching, strictly low-risk unverified improvement for a single trial.
+
+        Never promotes the unverified plan to confirmed, never enters normal confirmed slots,
+        and never re-offers a candidate that already has an active or completed trial.
+        """
+        envelope = SituationEnvelope.from_value(situation)
+        values = self.settings()
+        if not values['enabled']:
+            return None
+        if envelope.entry_mode in ('glance', 'codex_watch'):
+            return None
+        if envelope.entry_mode == 'autonomy' and not values['allow_in_autonomy']:
+            return None
+        if envelope.entry_mode == 'tool_step' and not values['allow_tool_step_recheck']:
+            return None
+        normalized = re.sub(r'[^\w\s]', '', ' '.join(str(envelope.text or '').casefold().split())).strip()
+        if envelope.entry_mode in ('chat', 'mobile', 'voice') and (
+                not normalized or normalized in self._SHORT_ACKS or not _lexical_tokens(normalized)):
+            return None
+        try:
+            pool = self.consolidator.query_experience_candidates(
+                situation='', statuses=('uncertain',), semantic_pool=True, limit=64, semantic_offset=0,
+            )
+        except Exception:
+            return None
+        already_tried = self.feedback.active_or_completed_trial_exp_ids()
+        excluded = set(str(item) for item in (injected_ids or ()) if item) | already_tried
+        tokens = _lexical_tokens(envelope.text)
+        deadline = _Deadline(EVIDENCE_BUDGET_MS)
+        best = None
+        for row in pool or ():
+            exp_id = str(row.get('id') or '')
+            if not exp_id or exp_id in excluded:
+                continue
+            if not is_low_risk_trial(row):
+                continue
+            if self._is_suspended(row):
+                continue
+            ver = row.get('verification') if isinstance(row.get('verification'), dict) else {}
+            if ver.get('review_flag') or int(ver.get('negative_outcomes') or 0) > 0:
+                continue
+            if not self._allowed_domain(row, envelope):
+                continue
+            if self._exception_matches(row, tokens, envelope.text):
+                continue
+            candidate_tokens = _lexical_tokens(
+                f"{row.get('trigger_condition', '')} {row.get('guidance', '')}")
+            overlap = len(tokens & candidate_tokens)
+            lexical = min(1.0, overlap / 2.0)
+            signal = self._signal_score(row, envelope)
+            vector = self._cached_candidate_vector(row, envelope.query_vector)
+            semantic = self._cosine(envelope.query_vector, vector)
+            if semantic is None:
+                trigger_tokens = _lexical_tokens(str(row.get('trigger_condition') or ''))
+                trigger_overlap = len(tokens & trigger_tokens)
+                if trigger_overlap < 2 or trigger_overlap / max(1, len(trigger_tokens)) < 0.6:
+                    continue
+                total = 0.25 * signal + 0.20 * lexical
+            else:
+                total = 0.55 * semantic + 0.25 * signal + 0.20 * lexical
+                if semantic < 0.36 or total < 0.42:
+                    continue
+            if deadline.expired():
+                break
+            evidence_state = self.validator.validate(row, deadline=deadline)
+            if evidence_state not in ('valid', 'partial_stale'):
+                continue
+            if best is None or total > best[0]:
+                best = (total, row, evidence_state)
+        if best is None:
+            return None
+        score, row, evidence_state = best
+        return {
+            'trial_id': 'trial-' + uuid.uuid4().hex[:10],
+            'experience_id': str(row.get('id') or ''),
+            'trigger_condition': str(row.get('trigger_condition') or ''),
+            'guidance': str(row.get('guidance') or ''),
+            'reason': str(row.get('reason') or ''),
+            'domain': self._domain(row),
+            'experience_type': 'unverified_improvement',
+            'evidence_state': evidence_state,
+            'match_score': round(float(score), 6),
+        }
+
     def __call__(self, situation):
         envelope = SituationEnvelope.from_value(situation)
         values = self.settings()
@@ -1039,6 +1311,12 @@ class ExperienceHintProvider:
         self._candidate_cursor = 0 if exhausted else offset
         scored, gray, dropped = [], [], []
         for row in pool:
+            if row.get('experience_type') == 'unverified_improvement':
+                dropped.append((row.get('id'), 'unverified_improvement'))
+                continue
+            if self._is_suspended(row):
+                dropped.append((row.get('id'), 'suspended'))
+                continue
             if not self._allowed_domain(row, envelope):
                 dropped.append((row.get('id'), 'domain'))
                 continue

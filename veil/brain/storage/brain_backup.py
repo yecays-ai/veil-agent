@@ -72,6 +72,8 @@ def _jsonl_identity(item):
     """Stable identity of one experience-memory row, or None when the row has none."""
     if not isinstance(item, dict):
         return None
+    if isinstance(item.get('idem_key'), str) and item.get('idem_key'):
+        return ('p7-feedback-key', item['idem_key'])
     if all(isinstance(item.get(key), str) and item.get(key)
            for key in ('request_id', 'exp_id', 'event_type', 'result_id')):
         return ('p7-feedback', item['request_id'], item['exp_id'], item['event_type'], item['result_id'])

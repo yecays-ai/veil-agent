@@ -32,6 +32,13 @@ from pathlib import Path
 from openai import APITimeoutError
 
 from veil import prompts
+from veil.brain.experience_feedback import (
+    ExperienceFeedbackLedger,
+    VALID_EVIDENCE_REF_RE,
+    VALID_STANCES,
+    _sanitize_refs,
+    _sanitize_text,
+)
 from veil.brain.learned_context import (
     SOURCE_REF,
     _jaccard_similar,
@@ -57,6 +64,7 @@ MAX_OUTPUT_TOKENS = 1_400
 MAX_RESPONSE_CHARS = 32_000
 MAX_PROCESSED_MEMORIES = 4000
 MAX_PROCESSED_AUTONOMY = 2000
+MAX_PROCESSED_FEEDBACK = 4000
 MAX_PROCESSED_BATCHES = 500
 MAX_EXPERIENCE_CANDIDATES = 200
 MAX_IMPORTANCE_LEDGER = 2000
@@ -341,6 +349,7 @@ def _empty_state():
         'version': 1,
         'processed_memories': {},
         'processed_autonomy': {},
+        'processed_feedback_ids': {},
         'processed_batches': {},
         'importance_proposed': {},
         'in_flight': None,
@@ -422,6 +431,8 @@ def _normalise_experience(row):
         if isinstance(stored_core, list) else []
     decision = str(out.get('decision') or '')
     out['decision'] = decision if decision in ('confirm', 'veto', 'outdated', 'restore') else ''
+    out['supersedes'] = str(out.get('supersedes') or '')
+    out['superseded_by'] = str(out.get('superseded_by') or '')
     out['trigger_embedding'] = out.get('trigger_embedding') if isinstance(out.get('trigger_embedding'), dict) else None
     verification = out.get('verification') if isinstance(out.get('verification'), dict) else {}
     def count(key):
@@ -518,6 +529,37 @@ def _merge_candidate_embedding(row, disk_row):
         row.pop('trigger_embedding', None)
 
 
+def _merge_verification(row, disk_row):
+    """Monotonically merge observable verification counters and suspension stamps."""
+    cur = row.get('verification') if isinstance(row.get('verification'), dict) else {}
+    disk = disk_row.get('verification') if isinstance(disk_row.get('verification'), dict) else {}
+    if not cur and not disk:
+        return
+    merged = dict(cur)
+    for key in ('exposed_count', 'explicit_rebutted_count', 'explicit_suspended_count',
+                'positive_outcomes', 'negative_outcomes'):
+        c_val = cur.get(key) if type(cur.get(key)) is int and cur.get(key) >= 0 else 0
+        d_val = disk.get(key) if type(disk.get(key)) is int and disk.get(key) >= 0 else 0
+        merged[key] = max(c_val, d_val)
+    for key in ('last_exposed_at', 'last_verified_at', 'suspension_until'):
+        c_ts, d_ts = str(cur.get(key) or ''), str(disk.get(key) or '')
+        if _stamp_after(d_ts, c_ts):
+            merged[key] = d_ts
+        elif c_ts:
+            merged[key] = c_ts
+        else:
+            merged[key] = d_ts
+    if disk.get('review_flag') is True or cur.get('review_flag') is True:
+        merged['review_flag'] = True
+    c_neg = cur.get('consecutive_negatives') if type(cur.get('consecutive_negatives')) is int else 0
+    d_neg = disk.get('consecutive_negatives') if type(disk.get('consecutive_negatives')) is int else 0
+    if _stamp_after(disk.get('last_verified_at'), cur.get('last_verified_at')):
+        merged['consecutive_negatives'] = d_neg
+    else:
+        merged['consecutive_negatives'] = max(c_neg, d_neg)
+    row['verification'] = merged
+
+
 def _merge_governance_state(state, disk):
     """Merge an older in-memory snapshot with the state currently on disk.
 
@@ -539,7 +581,13 @@ def _merge_governance_state(state, disk):
         if disk_row is not None and disk_row is not row:
             _resolve_governance_winner(row, disk_row)
             _merge_candidate_embedding(row, disk_row)
+            _merge_verification(row, disk_row)
     state['experience_candidates'] = rows
+    merged_fb = {}
+    for source in (disk.get('processed_feedback_ids'), state.get('processed_feedback_ids')):
+        if isinstance(source, dict):
+            merged_fb.update(source)
+    state['processed_feedback_ids'] = merged_fb
     ledger = []
     for source in (disk.get('vetoed_experiences'), state.get('vetoed_experiences')):
         for value in source if isinstance(source, list) else ():
@@ -640,6 +688,7 @@ class CognitiveConsolidator:
         self._settings = None
         self._settings_sig = None
         self._scheduler = None
+        self.feedback_ledger = ExperienceFeedbackLedger(store, cfg.id, now_fn=self._now) if store is not None else None
         self.recover_interrupted()
 
     # ------------------------------------------------------------------ paths & settings
@@ -776,6 +825,7 @@ class CognitiveConsolidator:
         for key, cap in (
             ('processed_batches', MAX_PROCESSED_BATCHES),
             ('importance_proposed', MAX_IMPORTANCE_LEDGER),
+            ('processed_feedback_ids', MAX_PROCESSED_FEEDBACK),
         ):
             mapping = state.get(key)
             if isinstance(mapping, dict) and len(mapping) > cap:
@@ -1290,17 +1340,45 @@ class CognitiveConsolidator:
             {
                 'id': e.get('id'),
                 'kind': e.get('kind'),
+                'experience_type': e.get('experience_type', 'unknown_legacy'),
+                'domain': e.get('domain', ''),
                 'trigger_condition': e.get('trigger_condition'),
                 'guidance': e.get('guidance'),
+                'exceptions': list(e.get('exceptions') or []),
                 'status': e.get('status'),
+                'verification': dict(e.get('verification') or {}) if isinstance(e.get('verification'), dict) else {},
             }
             for e in (state.get('experience_candidates') or [])
             if isinstance(e, dict) and e.get('status') in ('confirmed', 'uncertain')
         ][:20]
 
+        # P7-S3: gather unsettled feedback events (after reconciling orphaned pending deliveries),
+        # objective tool summaries, and ongoing commitments for closed-loop evolution.
+        feedback_items = []
+        actionable_feedback = 0
+        if self.feedback_ledger is not None:
+            try:
+                self.feedback_ledger.reconcile_pending_deliveries()
+                processed_fb = state.get('processed_feedback_ids') or {}
+                for fb in self.feedback_ledger.read_all():
+                    fid = str(fb.get('event_id') or '')
+                    if not fid or fid in processed_fb:
+                        continue
+                    ev_type = str(fb.get('event_type') or '')
+                    if ev_type in ('pending_delivery', 'delivery_cancelled', 'trial_cancelled'):
+                        continue
+                    feedback_items.append(fb)
+                    if (ev_type in ('reflection', 'trial_outcome', 'commitment_outcome', 'user_decision')
+                            or (ev_type in ('tool_outcome', 'autonomy_outcome') and fb.get('outcome') in ('positive', 'negative'))):
+                        actionable_feedback += 1
+            except Exception:
+                feedback_items = []
+        feedback_items = feedback_items[-40:]
+
         batch_key = _sha([
             [(m['id'], m['fingerprint']) for m in chosen_new],
             [(a['started_at'], a['fingerprint']) for a in chosen_auto],
+            [str(fb.get('event_id') or '') for fb in feedback_items],
             _sha([existing['facts'], existing['growth'], [r['text'] for r in existing['relationship_items']]])[:12],
         ])[:24]
 
@@ -1318,18 +1396,30 @@ class CognitiveConsolidator:
         for auto in chosen_auto:
             auto_by_id[auto['id']] = auto
             batch_refs.add(auto['id'])
+        for ongoing in existing.get('ongoing_items') or ():
+            oid = str(ongoing.get('id') or '').strip()
+            if oid:
+                batch_refs.add('ongoing:' + oid)
+        for fb in feedback_items:
+            ref = str(fb.get('evidence_ref') or '').strip()
+            if ref and VALID_EVIDENCE_REF_RE.fullmatch(ref):
+                batch_refs.add(ref)
+            for extra_ref in fb.get('evidence_refs') or ():
+                if isinstance(extra_ref, str) and VALID_EVIDENCE_REF_RE.fullmatch(extra_ref):
+                    batch_refs.add(extra_ref)
 
         return {
             'batch_key': batch_key,
             'new_memories': chosen_new,
             'anchor_memories': chosen_anchors,
             'autonomy_items': chosen_auto,
+            'feedback_items': feedback_items,
             'existing_cognition': existing,
             'existing_experiences': active_exps,
             'batch_refs': batch_refs,
             'mem_by_id': mem_by_id,
             'auto_by_id': auto_by_id,
-            'new_count': len(chosen_new) + len(chosen_auto),
+            'new_count': len(chosen_new) + len(chosen_auto) + actionable_feedback,
             'autonomy_audit_stats': auto_audit_stats,
             'active_memory_ids': [m['id'] for m in memories],
             'active_autonomy_ids': [a['started_at'] for a in auto_rows],
@@ -1399,6 +1489,25 @@ class CognitiveConsolidator:
                 }
                 for a in auto_slice
             ],
+            'experience_feedback': [
+                {
+                    'event_type': fb.get('event_type'),
+                    'exp_id': fb.get('exp_id'),
+                    'outcome': fb.get('outcome', ''),
+                    'stance': fb.get('stance', ''),
+                    'basis': _clip(fb.get('basis', ''), 160),
+                    'suggested_exception': _clip(fb.get('suggested_exception', ''), 120),
+                    'suggested_guidance': _clip(fb.get('suggested_guidance', ''), 200),
+                    'evidence_tier': fb.get('evidence_tier', ''),
+                    'evidence_ref': fb.get('evidence_ref', ''),
+                    'evidence_refs': list(fb.get('evidence_refs') or [])[:4],
+                    'trial_id': fb.get('trial_id', ''),
+                    'tool': fb.get('tool', ''),
+                    'state': fb.get('state', ''),
+                }
+                for fb in (batch.get('feedback_items') or [])[:16]
+                if fb.get('event_type') != 'delivery_sent'
+            ],
         }
 
     @staticmethod
@@ -1407,6 +1516,7 @@ class CognitiveConsolidator:
         sent_new = list(batch['new_memories'][:cur_new])
         sent_anc = list(batch['anchor_memories'][:cur_anc])
         sent_auto = list(batch['autonomy_items'][:cur_auto])
+        sent_fb = list(batch.get('feedback_items') or [])
         existing = batch['existing_cognition']
         batch_refs = set()
         mem_by_id = {}
@@ -1421,9 +1531,21 @@ class CognitiveConsolidator:
         for auto in sent_auto:
             auto_by_id[auto['id']] = auto
             batch_refs.add(auto['id'])
+        for ongoing in existing.get('ongoing_items') or ():
+            oid = str(ongoing.get('id') or '').strip()
+            if oid:
+                batch_refs.add('ongoing:' + oid)
+        for fb in sent_fb:
+            ref = str(fb.get('evidence_ref') or '').strip()
+            if ref and VALID_EVIDENCE_REF_RE.fullmatch(ref):
+                batch_refs.add(ref)
+            for extra_ref in fb.get('evidence_refs') or ():
+                if isinstance(extra_ref, str) and VALID_EVIDENCE_REF_RE.fullmatch(extra_ref):
+                    batch_refs.add(extra_ref)
         batch_key = _sha([
             [(m['id'], m['fingerprint']) for m in sent_new],
             [(a['started_at'], a['fingerprint']) for a in sent_auto],
+            [str(fb.get('event_id') or '') for fb in sent_fb],
             _sha([existing['facts'], existing['growth'], [r['text'] for r in existing['relationship_items']]])[:12],
         ])[:24]
         return {
@@ -1432,6 +1554,7 @@ class CognitiveConsolidator:
             'new_memories': sent_new,
             'anchor_memories': sent_anc,
             'autonomy_items': sent_auto,
+            'feedback_items': sent_fb,
             'batch_refs': batch_refs,
             'mem_by_id': mem_by_id,
             'auto_by_id': auto_by_id,
@@ -1925,10 +2048,466 @@ class CognitiveConsolidator:
                 verdicts[key] = {'verdict': 'pending_review', 'reason': reason or 'semantic_unverified'}
         return verdicts
 
-    def _apply_outputs(self, parsed, batch, state, values, run_id, *, semantic_verdicts=None):
+    # ------------------------------------------------------------------ P7-S3 L1-L4 evidence & promotion
+    def _p7_settings(self):
+        from veil.brain.experience_provider import load_persisted as load_p7_persisted, settings_from as p7_settings_from
+        if self.store is None:
+            return p7_settings_from({})
+        return p7_settings_from(load_p7_persisted(self.store, self.cfg.id))
+
+    @staticmethod
+    def _experience_key(exp):
+        return _sha([
+            str(exp.get('kind') or ''),
+            _norm_text(exp.get('trigger_condition', '')),
+            _norm_text(exp.get('guidance', '')),
+        ])[:16]
+
+    def _classify_experience_evidence(self, refs, mem_by_id, auto_by_id, feedback_items=()):
+        """Programmatically verify evidence refs into L1/L2/L3/L4 tiers; never trust model self-labels."""
+        from veil.brain.experience_provider import EvidenceValidator
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        l1_refs = []
+        l2_tool_runs = {}
+        l2_tool_failures = 0
+        l2_commitment_refs = []
+        l3_refs = []
+        evidence_items = []
+        seen_ev = set()
+
+        def add_ev(ref_id, text):
+            cleaned = _clip(_strip_injection_lines(text), 400)
+            if cleaned and ref_id not in seen_ev:
+                seen_ev.add(ref_id)
+                evidence_items.append({'id': ref_id, 'text': cleaned})
+
+        fb_by_ref = {}
+        for fb in feedback_items or ():
+            if not isinstance(fb, dict):
+                continue
+            ref = str(fb.get('evidence_ref') or '').strip()
+            if ref:
+                fb_by_ref.setdefault(ref, []).append(fb)
+            for extra in fb.get('evidence_refs') or ():
+                if isinstance(extra, str) and extra:
+                    fb_by_ref.setdefault(extra, []).append(fb)
+
+        for ref in refs or ():
+            if not isinstance(ref, str) or ':' not in ref:
+                continue
+            info = validator.inspect_ref_tier(ref)
+            kind, ref_id = ref.split(':', 1)
+            if info['state'] == 'valid':
+                tier = info['tier']
+                add_ev(ref, info.get('text', ''))
+                if tier == 'L1_user_feedback':
+                    l1_refs.append(ref)
+                elif tier == 'L2_objective_action':
+                    obj_kind = info.get('objective_kind', '')
+                    if obj_kind == 'commitment':
+                        l2_commitment_refs.append(ref)
+                    else:
+                        run_key = str(info.get('run_key') or ref)
+                        if info.get('tool_state') and info['tool_state'] != '成功':
+                            l2_tool_failures += 1
+                        elif info.get('failed_tools'):
+                            l2_tool_failures += len(info['failed_tools'])
+                        else:
+                            l2_tool_runs.setdefault(run_key, info.get('text') or ref)
+                elif tier == 'L3_autonomy_reflection':
+                    l3_refs.append(ref)
+                continue
+
+            # Batch fallback only when the item came from the verified consolidation batch itself
+            # (e.g., in-memory DB/autonomy or freshly recorded objective feedback).
+            if kind == 'memory' and ref_id in mem_by_id:
+                mem = mem_by_id[ref_id]
+                add_ev(ref, f"{mem.get('title', '')} {mem.get('event_story') or mem.get('body', '')}")
+                if mem.get('chat_refs'):
+                    l1_refs.append(ref)
+            elif kind == 'event':
+                mem = next((m for m in mem_by_id.values() if m.get('event_id') == ref_id), None)
+                if mem:
+                    add_ev(ref, f"{mem.get('title', '')} {mem.get('event_story') or mem.get('body', '')}")
+                    if mem.get('chat_refs'):
+                        l1_refs.append(ref)
+            elif kind == 'autonomy' and ref in auto_by_id:
+                auto = auto_by_id[ref]
+                add_ev(ref, f"autonomy={ref_id} result={auto.get('result', '')} {auto.get('decision', '')} ok_tools={auto.get('ok_tools', [])}")
+                if auto.get('ok_tools'):
+                    l2_tool_runs.setdefault(ref, str(auto.get('decision') or ref))
+                else:
+                    l3_refs.append(ref)
+            elif ref in fb_by_ref:
+                for fb in fb_by_ref[ref]:
+                    fb_tier = str(fb.get('evidence_tier') or '')
+                    if fb_tier == 'L1_user_feedback' and fb.get('outcome') == 'positive':
+                        l1_refs.append(ref)
+                        add_ev(ref, f"user_feedback {fb.get('note') or fb.get('detail') or ref}")
+                    elif fb_tier == 'L2_objective_action':
+                        if fb.get('event_type') == 'commitment_outcome':
+                            l2_commitment_refs.append(ref)
+                            add_ev(ref, f"commitment {fb.get('status', '')} {fb.get('text', '')}")
+                        elif fb.get('outcome') == 'negative':
+                            l2_tool_failures += 1
+                            add_ev(ref, f"tool_failed {fb.get('tool', '')} {fb.get('state', '')}")
+                        elif fb.get('outcome') == 'positive':
+                            rk = str(fb.get('run_key') or fb.get('autonomy_run_id') or fb.get('session_key') or fb.get('request_id') or ref)
+                            l2_tool_runs.setdefault(rk, f"tool={fb.get('tool', '')} state={fb.get('state', '')}")
+                            add_ev(ref, f"tool={fb.get('tool', '')} state={fb.get('state', '')} {fb.get('detail', '')}")
+
+        if l1_refs:
+            top_tier = 'L1_user_feedback'
+        elif l2_tool_runs or l2_commitment_refs or l2_tool_failures > 0:
+            top_tier = 'L2_objective_action'
+        elif l3_refs:
+            top_tier = 'L3_autonomy_reflection'
+        else:
+            top_tier = 'L4_self_eval'
+
+        return {
+            'tier': top_tier,
+            'l1_refs': l1_refs,
+            'l2_tool_runs': l2_tool_runs,
+            'l2_tool_failures': l2_tool_failures,
+            'l2_commitment_refs': l2_commitment_refs,
+            'l3_refs': l3_refs,
+            'evidence_items': evidence_items[:8],
+        }
+
+    def _build_experience_verify_payload(self, exp, evidence_items, profile_data, vetoed_ledger):
+        counterevidence = []
+        for idx, text in enumerate((vetoed_ledger or [])[-16:]):
+            if isinstance(text, str) and text.strip():
+                counterevidence.append({'id': f'exp_veto:{idx}', 'text': _clip(text, 240)})
+        if isinstance(profile_data, dict):
+            rel = profile_data.get('relationship') or {}
+            for idx, v in enumerate((rel.get('vetoed') or [])[-12:]):
+                vtxt = str(v.get('text') if isinstance(v, dict) else v or '').strip()
+                if vtxt:
+                    counterevidence.append({'id': f'rel_veto:{idx}', 'text': _clip(vtxt, 240)})
+            for item in (rel.get('items') or [])[:12]:
+                if isinstance(item, dict) and item.get('locked') and item.get('text'):
+                    counterevidence.append({'id': f"lock:{item.get('id', '')}", 'text': _clip(item['text'], 240)})
+        claim = (f"When: {exp.get('trigger_condition', '')} | "
+                 f"Guidance: {exp.get('guidance', '')} | "
+                 f"Domain: {exp.get('domain', '')} | Type: {exp.get('experience_type', '')}")
+        return {
+            'candidate': {'section': 'experience', 'kind': exp.get('kind', ''), 'text': _clip(claim, 600)},
+            'evidence': list(evidence_items or ())[:8],
+            'counterevidence': counterevidence[:24],
+        }
+
+    def _promotion_eligible_before_s3(self, exp, ev_info, p7_settings):
+        """Return target promoter ('s3_user_evidence' | 'objective_corroboration' | '') before S3 check."""
+        if not p7_settings.get('enabled'):
+            return ''
+        exp_type = str(exp.get('experience_type') or 'unknown_legacy')
+        if exp_type == 'unverified_improvement':
+            return ''
+        tier = ev_info.get('tier', 'L4_self_eval')
+        if tier in ('L3_autonomy_reflection', 'L4_self_eval'):
+            return ''
+        domain = str(exp.get('domain') or _KIND_DOMAINS.get(str(exp.get('kind') or ''), ''))
+        if domain == 'relationship_consensus':
+            # Strictly L1 only — L2 objective action can NEVER auto-promote relationship consensus.
+            return 's3_user_evidence' if tier == 'L1_user_feedback' else ''
+        if domain == 'commitment_accountability':
+            if tier == 'L1_user_feedback':
+                return 's3_user_evidence'
+            if p7_settings.get('auto_promote_commitment') is True and ev_info.get('l2_commitment_refs'):
+                return 'objective_corroboration'
+            return ''
+        if domain in ('work_method', 'autonomous_practice'):
+            if tier == 'L1_user_feedback':
+                return 's3_user_evidence'
+            if (p7_settings.get('auto_promote_objective') is True
+                    and len(ev_info.get('l2_tool_runs') or {}) >= 2
+                    and int(ev_info.get('l2_tool_failures') or 0) == 0):
+                return 'objective_corroboration'
+            return ''
+        return ''
+
+    def _preverify_experience_candidates(self, parsed, batch, cached_verdicts, *, stopped=lambda: False):
+        """Run S3 semantic verification OUTSIDE self.mutex for promotion-eligible experience candidates."""
+        verdicts = dict(cached_verdicts or {})
         batch_refs = batch['batch_refs']
         mem_by_id = batch['mem_by_id']
         auto_by_id = batch.get('auto_by_id') or {}
+        feedback_items = batch.get('feedback_items') or ()
+        profile_data = self._read_profile_raw()
+        p7_settings = self._p7_settings()
+        with self.mutex:
+            state = self._load_state()
+            vetoed_ledger = list(state.get('vetoed_experiences') or [])
+            exp_list = list(state.get('experience_candidates') or [])
+
+        verifier = self.semantic_verifier
+        for exp in parsed.get('experience_candidates') or []:
+            valid_refs = [r for r in exp.get('evidence_refs') or [] if r in batch_refs]
+            if not valid_refs:
+                continue
+            key = self._experience_key(exp)
+            if key in verdicts:
+                continue
+            if self._is_vetoed_experience(exp.get('guidance', ''), exp_list, profile_data, vetoed_ledger):
+                verdicts[key] = {'verdict': 'contradicted', 'reason': 'vetoed'}
+                continue
+            ev_info = self._classify_experience_evidence(valid_refs, mem_by_id, auto_by_id, feedback_items)
+            # If this duplicates an existing candidate, combine refs so corroboration across runs can qualify.
+            dup = next((e for e in exp_list if isinstance(e, dict)
+                        and e.get('status') in ('confirmed', 'uncertain')
+                        and e.get('content_key') == key), None)
+            if dup is not None:
+                merged_refs = list(dict.fromkeys([*(dup.get('evidence_refs') or ()), *valid_refs]))
+                ev_info = self._classify_experience_evidence(merged_refs, mem_by_id, auto_by_id, feedback_items)
+            promoter = self._promotion_eligible_before_s3(exp, ev_info, p7_settings)
+            if not promoter:
+                continue
+            if verifier is None or not callable(getattr(verifier, 'verify_claim', None)):
+                verdicts[key] = {'verdict': 'unavailable', 'reason': 'semantic_verifier_unavailable'}
+                continue
+            if not ev_info['evidence_items']:
+                verdicts[key] = {'verdict': 'insufficient', 'reason': 'missing_evidence_text'}
+                continue
+            payload = self._build_experience_verify_payload(exp, ev_info['evidence_items'], profile_data, vetoed_ledger)
+            try:
+                res = verifier.verify_claim(payload, stopped=stopped)
+            except Exception as exc:
+                res = {'ok': False, 'verdict': 'failed', 'reason': type(exc).__name__}
+            verdicts[key] = {
+                'verdict': str((res or {}).get('verdict') or 'failed'),
+                'reason': str((res or {}).get('reason') or ''),
+            }
+        return verdicts
+
+    def _evaluate_experience_promotion(self, record, ev_info, s3_res, p7_settings):
+        """Return (new_status, promoted_by) enforcing L1-L4 tiers, domain switches, and S3 support."""
+        promoter = self._promotion_eligible_before_s3(record, ev_info, p7_settings)
+        if not promoter:
+            return 'uncertain', ''
+        verdict = str((s3_res or {}).get('verdict') or '')
+        if verdict != 'supported':
+            return 'uncertain', ''
+        return 'confirmed', promoter
+
+    def _settle_feedback_into_state(self, state, *, p7_settings=None, verifier=None,
+                                    profile_data=None, stopped=lambda: False):
+        """Settle unprocessed experience-feedback.jsonl events into candidate verification & trial graduation."""
+        if self.feedback_ledger is None:
+            return {'settled': 0, 'demoted': [], 'graduated': []}
+        rows = self.feedback_ledger.read_all()
+        if not rows:
+            return {'settled': 0, 'demoted': [], 'graduated': []}
+        processed = state.setdefault('processed_feedback_ids', {})
+        exp_list = state.setdefault('experience_candidates', [])
+        by_id = {e.get('id'): e for e in exp_list if isinstance(e, dict) and e.get('id')}
+        settled = 0
+        demoted = []
+        graduated = []
+        now_stamp = self._now()
+
+        # First pass: apply every unprocessed event exactly once to observable verification counters.
+        for fb in rows:
+            fid = str(fb.get('event_id') or '')
+            if not fid or fid in processed:
+                continue
+            ev_type = str(fb.get('event_type') or '')
+            if ev_type in ('pending_delivery', 'delivery_cancelled', 'trial_started', 'trial_delivered', 'trial_cancelled'):
+                continue
+            exp_id = str(fb.get('exp_id') or '')
+            target = by_id.get(exp_id)
+            processed[fid] = now_stamp
+            settled += 1
+            if target is None:
+                continue
+            ver = target.get('verification')
+            if not isinstance(ver, dict):
+                ver = _normalise_experience(target)['verification']
+                target['verification'] = ver
+            at = str(fb.get('at') or now_stamp)
+            if ev_type == 'delivery_sent':
+                ver['exposed_count'] = int(ver.get('exposed_count') or 0) + 1
+                if _stamp_after(at, ver.get('last_exposed_at')):
+                    ver['last_exposed_at'] = at
+            elif ev_type == 'reflection':
+                stance = str(fb.get('stance') or '')
+                if stance == 'rebut':
+                    ver['explicit_rebutted_count'] = int(ver.get('explicit_rebutted_count') or 0) + 1
+                elif stance == 'suspend':
+                    ver['explicit_suspended_count'] = int(ver.get('explicit_suspended_count') or 0) + 1
+                    base_dt = _parse_dt(at) or _parse_dt(now_stamp)
+                    if base_dt is not None:
+                        until = (base_dt + timedelta(hours=24)).isoformat(timespec='seconds')
+                        if _stamp_after(until, ver.get('suspension_until')):
+                            ver['suspension_until'] = until
+            elif ev_type in ('tool_outcome', 'commitment_outcome', 'autonomy_outcome', 'trial_outcome', 'user_decision'):
+                outcome = str(fb.get('outcome') or '')
+                if outcome == 'positive':
+                    ver['positive_outcomes'] = int(ver.get('positive_outcomes') or 0) + 1
+                    ver['consecutive_negatives'] = 0
+                    if _stamp_after(at, ver.get('last_verified_at')):
+                        ver['last_verified_at'] = at
+                elif outcome == 'negative':
+                    ver['negative_outcomes'] = int(ver.get('negative_outcomes') or 0) + 1
+                    ver['consecutive_negatives'] = int(ver.get('consecutive_negatives') or 0) + 1
+                    if ver['consecutive_negatives'] >= 2:
+                        ver['review_flag'] = True
+                        if (target.get('status') == 'confirmed'
+                                and target.get('promoted_by') == 'objective_corroboration'
+                                and target.get('locked') is not True):
+                            target['status'] = 'uncertain'
+                            target['updated_at'] = now_stamp
+                            demoted.append(exp_id)
+
+        # Second pass: graduate unverified_improvement trials once 1 L1 positive or 2 independent L2 positives exist
+        # and no negative trial counterevidence exists.
+        trial_stats = {}
+        for fb in rows:
+            if fb.get('event_type') != 'trial_outcome':
+                continue
+            eid = str(fb.get('exp_id') or '')
+            if not eid:
+                continue
+            bucket = trial_stats.setdefault(eid, {'l1_pos': 0, 'l2_runs': set(), 'neg': 0, 'refs': []})
+            outcome = str(fb.get('outcome') or '')
+            tier = str(fb.get('evidence_tier') or '')
+            if outcome == 'negative':
+                bucket['neg'] += 1
+            elif outcome == 'positive':
+                if tier == 'L1_user_feedback':
+                    bucket['l1_pos'] += 1
+                elif tier == 'L2_objective_action':
+                    rk = str(fb.get('run_key') or fb.get('request_id') or fb.get('event_id') or '')
+                    if rk:
+                        bucket['l2_runs'].add(rk)
+            for ref in fb.get('evidence_refs') or ():
+                if isinstance(ref, str) and ref and ref not in bucket['refs']:
+                    bucket['refs'].append(ref)
+
+        p7_cfg = p7_settings if isinstance(p7_settings, dict) else self._p7_settings()
+        vetoed_ledger = state.get('vetoed_experiences') or []
+        for eid, stats in trial_stats.items():
+            old = by_id.get(eid)
+            if (old is None or old.get('experience_type') != 'unverified_improvement'
+                    or old.get('status') != 'uncertain' or old.get('superseded_by')):
+                continue
+            if stats['neg'] > 0:
+                ver = old.setdefault('verification', {})
+                ver['review_flag'] = True
+                continue
+            if not (stats['l1_pos'] >= 1 or len(stats['l2_runs']) >= 2):
+                continue
+            if self._is_vetoed_experience(old.get('guidance', ''), exp_list, profile_data, vetoed_ledger):
+                continue
+            merged_refs = list(dict.fromkeys([*(old.get('evidence_refs') or ()), *stats['refs']]))
+            new_id = 'exp-' + uuid.uuid4().hex[:10]
+            new_tier = 'L1_user_feedback' if stats['l1_pos'] >= 1 else 'L2_objective_action'
+            new_rec = {
+                'id': new_id,
+                'schema_version': EXPERIENCE_SCHEMA_VERSION,
+                'content_key': _sha([old.get('kind', ''), _norm_text(old.get('trigger_condition', '')),
+                                     _norm_text(old.get('guidance', '')), 'success'])[:16],
+                'kind': old.get('kind', 'tool_lesson'),
+                'trigger_condition': old.get('trigger_condition', ''),
+                'guidance': old.get('guidance', ''),
+                'reason': old.get('reason', ''),
+                'evidence_refs': merged_refs,
+                'status': 'uncertain',
+                'origin': 'trial_graduation',
+                'run_id': '',
+                'batch_key': '',
+                'created_at': now_stamp,
+                'updated_at': now_stamp,
+                'supersedes': eid,
+                'superseded_by': '',
+                'effective_in': 'p7_reserved',
+                'experience_type': 'success',
+                'domain': old.get('domain') or _KIND_DOMAINS.get(str(old.get('kind') or ''), ''),
+                'exceptions': list(old.get('exceptions') or []),
+                'origin_evidence_tier': new_tier,
+                'promoted_by': '',
+                'locked': False,
+                'evidence_state': 'unavailable',
+                'trigger_embedding': None,
+                'verification': {
+                    'exposed_count': 0, 'explicit_rebutted_count': 0, 'explicit_suspended_count': 0,
+                    'positive_outcomes': stats['l1_pos'] + len(stats['l2_runs']),
+                    'negative_outcomes': 0, 'consecutive_negatives': 0,
+                    'last_exposed_at': '', 'last_verified_at': now_stamp,
+                    'suspension_until': '', 'review_flag': False,
+                },
+            }
+            try:
+                from veil.brain.experience_provider import EvidenceValidator, core_evidence_refs
+                ev_val = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+                new_rec['evidence_fingerprints'] = ev_val.current_fingerprints(merged_refs, milliseconds=2000)
+                new_rec['core_evidence_refs'] = core_evidence_refs(new_rec)
+            except Exception:
+                new_rec['evidence_fingerprints'] = {}
+                new_rec['core_evidence_refs'] = []
+            # Trial graduation produces a new `success` candidate; promote only if domain switch + S3 approve.
+            ev_info = self._classify_experience_evidence(merged_refs, {}, {}, rows)
+            if stats['l1_pos'] >= 1:
+                ev_info['tier'] = 'L1_user_feedback'
+            elif len(stats['l2_runs']) >= 2:
+                ev_info['tier'] = 'L2_objective_action'
+                for rk in stats['l2_runs']:
+                    ev_info['l2_tool_runs'].setdefault(rk, f'trial:{eid}:{rk}')
+            promoter = self._promotion_eligible_before_s3(new_rec, ev_info, p7_cfg)
+            if promoter and verifier is not None and callable(getattr(verifier, 'verify_claim', None)):
+                ev_items = ev_info['evidence_items'] or [{'id': f'trial:{eid}', 'text': new_rec['guidance']}]
+                payload = self._build_experience_verify_payload(new_rec, ev_items, profile_data, vetoed_ledger)
+                try:
+                    s3_res = verifier.verify_claim(payload, stopped=stopped)
+                except Exception:
+                    s3_res = {'verdict': 'failed'}
+                st, by = self._evaluate_experience_promotion(new_rec, ev_info, s3_res, p7_cfg)
+                new_rec['status'] = st
+                new_rec['promoted_by'] = by
+            old['status'] = 'outdated'
+            old['superseded_by'] = new_id
+            old['updated_at'] = now_stamp
+            exp_list.append(new_rec)
+            by_id[new_id] = new_rec
+            graduated.append({'from_id': eid, 'to_id': new_id, 'status': new_rec['status']})
+        return {'settled': settled, 'demoted': demoted, 'graduated': graduated}
+
+    def sync_feedback_stats(self, *, reconcile=True, active_request_ids=(), force_stale=False):
+        """Reconcile pending deliveries and apply unsettled feedback events atomically to state."""
+        if self.feedback_ledger is None:
+            return {'settled': 0, 'demoted': [], 'graduated': []}
+        if reconcile:
+            self.feedback_ledger.reconcile_pending_deliveries(
+                active_request_ids=active_request_ids, force_stale=force_stale,
+            )
+        p7_cfg = self._p7_settings()
+        # Read profile BEFORE acquiring write_lock: LearnedContext.read() acquires the same per-role lock.
+        profile_data = self._read_profile_raw()
+        newly_confirmed = []
+        with self.mutex, write_lock(self.store, self.cfg.id):
+            state = self._load_state()
+            result = self._settle_feedback_into_state(
+                state, p7_settings=p7_cfg, verifier=self.semantic_verifier, profile_data=profile_data,
+            )
+            if result['settled'] or result['graduated'] or result['demoted']:
+                self._save_state(state, lock=False)
+            newly_confirmed = [g['to_id'] for g in result['graduated'] if g.get('status') == 'confirmed']
+        if newly_confirmed:
+            callback = getattr(self, 'experience_confirmed_callback', None)
+            if callable(callback):
+                try:
+                    callback(newly_confirmed)
+                except Exception:
+                    pass
+        return result
+
+    def _apply_outputs(self, parsed, batch, state, values, run_id, *, semantic_verdicts=None,
+                       experience_verdicts=None):
+        batch_refs = batch['batch_refs']
+        mem_by_id = batch['mem_by_id']
+        auto_by_id = batch.get('auto_by_id') or {}
+        feedback_items = batch.get('feedback_items') or ()
         existing = self._existing_cognition_snapshot()
 
         existing_corpus = []
@@ -2245,10 +2824,17 @@ class CognitiveConsolidator:
                     item_rec['outcome'] = 'skipped:' + str(res.get('reason') or 'declined')
             summary['importance_proposals'].append(item_rec)
 
-        # 3. P7 unified experience candidates (structured, versioned, veto-aware, never in HEAD).
+        # 3. P7 unified experience candidates (structured, versioned, L1-L4 verified, veto-aware, never in HEAD).
+        p7_settings = self._p7_settings()
+        profile_data = self._read_profile_raw()
+        fb_settled = self._settle_feedback_into_state(
+            state, p7_settings=p7_settings, verifier=self.semantic_verifier, profile_data=profile_data,
+        )
+        summary['feedback_settled'] = fb_settled
+        newly_confirmed_ids = [g['to_id'] for g in fb_settled.get('graduated') or () if g.get('status') == 'confirmed']
+
         exp_list = state.setdefault('experience_candidates', [])
         vetoed_ledger = state.setdefault('vetoed_experiences', [])
-        profile_data = self._read_profile_raw()
         for exp in parsed['experience_candidates']:
             valid_refs = [r for r in exp['evidence_refs'] if r in batch_refs]
             if not valid_refs:
@@ -2269,9 +2855,9 @@ class CognitiveConsolidator:
                 state['totals']['cognition_blocked'] += 1
                 continue
 
-            # Dedup against active P7 candidates (including crash-replay identical candidates).
+            # Dedup against active P7 candidates: merge corroborating evidence_refs instead of discarding.
             supersedes_id = exp['supersedes_id']
-            content_key = _sha([exp['kind'], _norm_text(exp['trigger_condition']), _norm_text(exp['guidance'])])[:16]
+            content_key = self._experience_key(exp)
             dup = next(
                 (
                     e for e in exp_list
@@ -2289,6 +2875,27 @@ class CognitiveConsolidator:
                 None,
             )
             if dup is not None:
+                merged_refs = list(dict.fromkeys([*(dup.get('evidence_refs') or ()), *valid_refs]))
+                if merged_refs != list(dup.get('evidence_refs') or ()):
+                    now_stamp = self._now()
+                    dup['evidence_refs'] = merged_refs
+                    dup['updated_at'] = now_stamp
+                    ev_info = self._classify_experience_evidence(merged_refs, mem_by_id, auto_by_id, feedback_items)
+                    dup['origin_evidence_tier'] = ev_info['tier']
+                    try:
+                        from veil.brain.experience_provider import EvidenceValidator, core_evidence_refs
+                        ev_val = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+                        dup['evidence_fingerprints'] = ev_val.current_fingerprints(merged_refs, milliseconds=2000)
+                        dup['core_evidence_refs'] = core_evidence_refs(dup)
+                    except Exception:
+                        pass
+                    if dup.get('status') == 'uncertain':
+                        s3_res = (experience_verdicts or {}).get(content_key)
+                        new_status, promoted_by = self._evaluate_experience_promotion(dup, ev_info, s3_res, p7_settings)
+                        if new_status == 'confirmed':
+                            dup['status'] = 'confirmed'
+                            dup['promoted_by'] = promoted_by
+                            newly_confirmed_ids.append(dup['id'])
                 summary['skipped_duplicates'] += 1
                 continue
 
@@ -2307,6 +2914,7 @@ class CognitiveConsolidator:
                 if cand_target is not None and self._is_related_experience(cand_target, exp):
                     superseded_target = cand_target
 
+            ev_info = self._classify_experience_evidence(valid_refs, mem_by_id, auto_by_id, feedback_items)
             record = {
                 'id': new_id,
                 'schema_version': EXPERIENCE_SCHEMA_VERSION,
@@ -2326,9 +2934,10 @@ class CognitiveConsolidator:
                 'superseded_by': '',
                 'effective_in': 'p7_reserved',
                 'experience_type': exp.get('experience_type', 'unknown_legacy'),
-                'domain': exp.get('domain', ''),
+                'domain': exp.get('domain') or _KIND_DOMAINS.get(exp['kind'], ''),
                 'exceptions': list(exp.get('exceptions') or []),
-                'origin_evidence_tier': exp.get('origin_evidence_tier', 'L4_self_eval'),
+                # Programmatically verified L1-L4 tier; model self-report is ignored.
+                'origin_evidence_tier': ev_info['tier'],
                 'promoted_by': '',
                 'locked': False,
                 'evidence_state': 'unavailable',
@@ -2347,33 +2956,69 @@ class CognitiveConsolidator:
             except Exception:
                 record['evidence_fingerprints'] = {}
                 record['core_evidence_refs'] = []
+
+            s3_res = (experience_verdicts or {}).get(content_key)
+            promo_status, promo_by = self._evaluate_experience_promotion(record, ev_info, s3_res, p7_settings)
+
             if superseded_target is not None:
+                old_lan_protected = bool(
+                    superseded_target.get('locked') is True
+                    or superseded_target.get('decided_by') == 'lan'
+                    or superseded_target.get('promoted_by') == 'lan'
+                    or (superseded_target.get('status') == 'confirmed' and not superseded_target.get('promoted_by'))
+                )
                 if superseded_target.get('status') == 'confirmed':
-                    # Never retire a Lan-confirmed experience until Lan approves the revision!
-                    state['totals']['experience_revised'] += 1
-                    outcome = 'pending_revision'
+                    if old_lan_protected or promo_status != 'confirmed':
+                        # Never retire a Lan-confirmed or locked experience until Lan approves the revision!
+                        state['totals']['experience_revised'] += 1
+                        outcome = 'pending_revision'
+                    else:
+                        # Program-promoted old experience superseded by a verified stronger revision.
+                        record['status'] = 'confirmed'
+                        record['promoted_by'] = promo_by
+                        superseded_target['status'] = 'outdated'
+                        superseded_target['superseded_by'] = new_id
+                        superseded_target['updated_at'] = now_stamp
+                        state['totals']['experience_revised'] += 1
+                        newly_confirmed_ids.append(new_id)
+                        outcome = 'revised_confirmed'
                 else:
+                    if promo_status == 'confirmed':
+                        record['status'] = 'confirmed'
+                        record['promoted_by'] = promo_by
+                        newly_confirmed_ids.append(new_id)
                     superseded_target['status'] = 'outdated'
                     superseded_target['superseded_by'] = new_id
                     superseded_target['updated_at'] = now_stamp
                     state['totals']['experience_revised'] += 1
-                    outcome = 'revised'
+                    outcome = 'revised_confirmed' if promo_status == 'confirmed' else 'revised'
             else:
+                if promo_status == 'confirmed':
+                    record['status'] = 'confirmed'
+                    record['promoted_by'] = promo_by
+                    newly_confirmed_ids.append(new_id)
+                    outcome = 'created_confirmed'
+                else:
+                    outcome = 'created'
                 state['totals']['experience_created'] += 1
-                outcome = 'created'
             exp_list.append(record)
             summary['experience_candidates'].append({
                 'id': new_id,
                 'kind': exp['kind'],
+                'experience_type': record['experience_type'],
+                'domain': record['domain'],
+                'origin_evidence_tier': record['origin_evidence_tier'],
+                'promoted_by': record['promoted_by'],
                 'trigger_condition': exp['trigger_condition'],
                 'guidance': exp['guidance'],
                 'reason': exp['reason'],
                 'evidence_refs': valid_refs,
-                'status': 'uncertain',
+                'status': record['status'],
                 'supersedes_id': record['supersedes'],
                 'outcome': outcome,
             })
 
+        summary['newly_confirmed_ids'] = newly_confirmed_ids
         return summary, retryable_refs
 
     def _find_relationship_state(self, text):
@@ -2467,6 +3112,7 @@ class CognitiveConsolidator:
             'new_memories': list(batch['new_memories']),
             'anchor_memories': list(batch['anchor_memories']),
             'autonomy_items': list(batch['autonomy_items']),
+            'feedback_items': list(batch.get('feedback_items') or []),
             'batch_refs': sorted(batch['batch_refs']),
             'inputs_summary': CognitiveConsolidator._inputs_summary_for(batch),
             'active_memory_ids': list(batch.get('active_memory_ids') or []),
@@ -2478,6 +3124,7 @@ class CognitiveConsolidator:
         new_mems = list(raw.get('new_memories') or [])
         anc_mems = list(raw.get('anchor_memories') or [])
         autos = list(raw.get('autonomy_items') or [])
+        feedback_items = list(raw.get('feedback_items') or [])
         mem_by_id = {m['id']: m for m in (*new_mems, *anc_mems) if isinstance(m, dict) and m.get('id')}
         auto_by_id = {a['id']: a for a in autos if isinstance(a, dict) and a.get('id')}
         return {
@@ -2485,6 +3132,7 @@ class CognitiveConsolidator:
             'new_memories': new_mems,
             'anchor_memories': anc_mems,
             'autonomy_items': autos,
+            'feedback_items': feedback_items,
             'batch_refs': set(raw.get('batch_refs') or []),
             'mem_by_id': mem_by_id,
             'auto_by_id': auto_by_id,
@@ -2535,6 +3183,7 @@ class CognitiveConsolidator:
             parsed = pending.get('parsed') or {'cognition_updates': [], 'importance_proposals': [], 'experience_candidates': []}
             sent_batch = self._deserialize_sent_batch(pending.get('sent_batch') or {})
             cached_verdicts = dict(pending.get('semantic_verdicts') or {})
+            cached_exp_verdicts = dict(pending.get('experience_verdicts') or {})
             run_id = str(pending.get('run_id') or 'cons-resume')
             started_at = str(pending.get('started_at') or self._now())
             trigger = str(pending.get('trigger') or 'manual')
@@ -2545,21 +3194,26 @@ class CognitiveConsolidator:
             cached_tok = pending.get('cached_tokens')
             cache_status = pending.get('cache_status')
 
-        # Run S3 semantic verification for facts/growth OUTSIDE self.mutex and persist verdicts
-        # into pending_commit so even an interruption after verification never re-bills S3.
+        # Run S3 semantic verification for facts/growth and promotion-eligible experience candidates
+        # OUTSIDE self.mutex and persist verdicts into pending_commit so crash recovery never re-bills S3.
         verdicts = self._preverify_facts_and_growth(parsed, sent_batch, cached_verdicts, stopped=stopped)
+        exp_verdicts = self._preverify_experience_candidates(parsed, sent_batch, cached_exp_verdicts, stopped=stopped)
+        newly_confirmed_ids = []
         with self.mutex:
             state = self._load_state()
             if isinstance(state.get('pending_commit'), dict):
                 state['pending_commit']['semantic_verdicts'] = verdicts
+                state['pending_commit']['experience_verdicts'] = exp_verdicts
                 self._save_state(state)
 
             finished_at = self._now()
             duration_ms = int((time.monotonic() - start_mono) * 1000)
             try:
                 applied, retryable_refs = self._apply_outputs(
-                    parsed, sent_batch, state, values, run_id, semantic_verdicts=verdicts,
+                    parsed, sent_batch, state, values, run_id,
+                    semantic_verdicts=verdicts, experience_verdicts=exp_verdicts,
                 )
+                newly_confirmed_ids = list(applied.pop('newly_confirmed_ids', []) or [])
             except Exception as exc:
                 # Preserve pending_commit so the next run resumes committing at ¥0!
                 if isinstance(state.get('pending_commit'), dict):
@@ -2644,6 +3298,13 @@ class CognitiveConsolidator:
                 active_autonomy_ids=sent_batch.get('active_autonomy_ids'),
             )
             self._append_run(run_record)
+        if newly_confirmed_ids:
+            callback = getattr(self, 'experience_confirmed_callback', None)
+            if callable(callback):
+                try:
+                    callback(newly_confirmed_ids)
+                except Exception:
+                    pass
         return {'ok': True, **run_record}
 
     def run_once(self, *, trigger='manual', force=False, stopped=lambda: False):
@@ -2869,6 +3530,8 @@ class CognitiveConsolidator:
                 row = by_id.get(candidate_id)
                 if row is None or row.get('status') != 'confirmed':
                     continue
+                if row.get('experience_type') == 'unverified_improvement':
+                    continue
                 if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data, vetoed_ledger):
                     continue
                 allowed.append(candidate_id)
@@ -2900,6 +3563,8 @@ class CognitiveConsolidator:
             if not isinstance(row, dict):
                 continue
             if row.get('status') not in allowed_statuses:
+                continue
+            if allowed_statuses == {'confirmed'} and row.get('experience_type') == 'unverified_improvement':
                 continue
             if allowed_kinds is not None and row.get('kind') not in allowed_kinds:
                 continue
@@ -3076,6 +3741,12 @@ class CognitiveConsolidator:
                     'error': '已否决的经验候选不能直接确认，请使用显式恢复操作。',
                     'status_code': 409,
                 }
+            if action in ('confirm', 'restore') and target.get('experience_type') == 'unverified_improvement':
+                return {
+                    'ok': False,
+                    'error': '待验证改进方案在获得客观实证并生成新版本前，不能直接确认注入。',
+                    'status_code': 409,
+                }
             mapping = {'confirm': 'confirmed', 'veto': 'vetoed', 'outdated': 'outdated', 'restore': 'confirmed'}
             now_stamp = self._now()
             target['status'] = mapping[action]
@@ -3083,6 +3754,8 @@ class CognitiveConsolidator:
             target['decided_by'] = 'lan'
             target['decided_at'] = now_stamp
             target['updated_at'] = now_stamp
+            if action in ('confirm', 'restore'):
+                target['promoted_by'] = 'lan'
             if note:
                 target['note'] = _clip(note, 200)
             vetoed_ledger = state.setdefault('vetoed_experiences', [])
@@ -3110,6 +3783,13 @@ class CognitiveConsolidator:
                     old_row['updated_at'] = now_stamp
             self._save_state(state, lock=False)
             result = {'ok': True, 'candidate': dict(target)}
+        if self.feedback_ledger is not None:
+            try:
+                self.feedback_ledger.record_user_decision(
+                    exp_id=cid, action=action, decided_at=now_stamp, note=note,
+                )
+            except Exception:
+                pass
         if action in ('confirm', 'restore'):
             callback = getattr(self, 'experience_confirmed_callback', None)
             if callable(callback):
@@ -3118,6 +3798,132 @@ class CognitiveConsolidator:
                 except Exception:
                     pass
         return result
+
+    def record_experience_reflection(self, *, experience_id, stance, basis,
+                                     suggested_exception='', suggested_guidance='',
+                                     evidence_refs=(), request_id='', session_key='',
+                                     operation_id=''):
+        """Record Peter's autonomous judgment without ever mutating confirmed text or bypassing Lan sovereignty."""
+        cid = str(experience_id or '').strip()
+        stance = str(stance or '').strip()
+        clean_basis = _sanitize_text(basis, 400)
+        if not cid or stance not in VALID_STANCES or not clean_basis:
+            return {'ok': False, 'error': 'experience_id, valid stance, and non-empty basis are required.'}
+        clean_exc = _sanitize_text(suggested_exception, 120)
+        clean_guid = _sanitize_text(suggested_guidance, 400)
+        clean_refs = _sanitize_refs(evidence_refs, limit=8)
+        if stance == 'propose_revision' and not clean_guid and not clean_exc:
+            return {'ok': False, 'error': 'propose_revision requires suggested_guidance or suggested_exception.'}
+
+        now_stamp = self._now()
+        if operation_id and self.feedback_ledger is not None:
+            from veil.brain.experience_feedback import make_idem_key
+            expected_key = make_idem_key(request_id, cid, 'reflection', f'reflect:{operation_id}')
+            existing_fb = next(
+                (r for r in self.feedback_ledger.read_all() if r.get('idem_key') == expected_key),
+                None,
+            )
+            if existing_fb is not None:
+                return {
+                    'ok': True,
+                    'experience_id': cid,
+                    'stance': str(existing_fb.get('stance') or stance),
+                    'revision_draft_id': str(existing_fb.get('revision_draft_id') or ''),
+                    'status_preserved': True,
+                    'idempotent_replay': True,
+                }
+        # Read profile BEFORE acquiring write_lock to avoid nested lock deadlock on Windows.
+        profile_data = self._read_profile_raw()
+        draft_id = ''
+        with self.mutex, write_lock(self.store, self.cfg.id):
+            state = self._load_state()
+            rows = state.setdefault('experience_candidates', [])
+            vetoed_ledger = state.setdefault('vetoed_experiences', [])
+            target = next((r for r in rows if isinstance(r, dict) and r.get('id') == cid), None)
+            if target is None:
+                return {'ok': False, 'error': f'Experience {cid} not found for this role.'}
+            if target.get('status') == 'vetoed':
+                return {'ok': False, 'error': 'Vetoed experience cannot be modified or revived by reflection.'}
+
+            if stance == 'propose_revision' and clean_guid:
+                if self._is_vetoed_experience(clean_guid, rows, profile_data, vetoed_ledger):
+                    return {'ok': False, 'error': 'Proposed revision matches a Lan-vetoed experience.'}
+
+            # Mirror judgment updates observable verification state only; confirmed text & status stay untouched.
+            ver = target.get('verification')
+            if not isinstance(ver, dict):
+                ver = _normalise_experience(target)['verification']
+                target['verification'] = ver
+            if stance == 'rebut':
+                ver['explicit_rebutted_count'] = int(ver.get('explicit_rebutted_count') or 0) + 1
+            elif stance == 'suspend':
+                ver['explicit_suspended_count'] = int(ver.get('explicit_suspended_count') or 0) + 1
+                base_dt = _parse_dt(now_stamp)
+                if base_dt is not None:
+                    ver['suspension_until'] = (base_dt + timedelta(hours=24)).isoformat(timespec='seconds')
+            elif stance == 'propose_revision':
+                draft_id = 'exp-' + uuid.uuid4().hex[:10]
+                exceptions = list(target.get('exceptions') or [])
+                if clean_exc and clean_exc not in exceptions and len(exceptions) < 4:
+                    exceptions.append(clean_exc)
+                new_guidance = clean_guid or str(target.get('guidance') or '')
+                merged_refs = list(dict.fromkeys([*(target.get('evidence_refs') or ()), *clean_refs]))
+                draft = {
+                    'id': draft_id,
+                    'schema_version': EXPERIENCE_SCHEMA_VERSION,
+                    'content_key': _sha([target.get('kind', ''), _norm_text(target.get('trigger_condition', '')),
+                                         _norm_text(new_guidance), 'rev'])[:16],
+                    'kind': target.get('kind', 'behavioral_pattern'),
+                    'trigger_condition': target.get('trigger_condition', ''),
+                    'guidance': new_guidance,
+                    'reason': clean_basis[:360],
+                    'evidence_refs': merged_refs,
+                    'status': 'uncertain',
+                    'origin': 'experience_reflect',
+                    'run_id': str(request_id or ''),
+                    'batch_key': '',
+                    'created_at': now_stamp,
+                    'updated_at': now_stamp,
+                    'supersedes': cid,
+                    'superseded_by': '',
+                    'effective_in': 'p7_reserved',
+                    'experience_type': target.get('experience_type', 'unknown_legacy'),
+                    'domain': target.get('domain') or _KIND_DOMAINS.get(str(target.get('kind') or ''), ''),
+                    'exceptions': exceptions,
+                    'origin_evidence_tier': 'L4_self_eval',
+                    'promoted_by': '',
+                    'locked': False,
+                    'evidence_state': 'unavailable',
+                    'trigger_embedding': None,
+                    'verification': {},
+                }
+                rows.append(draft)
+            if stance in ('rebut', 'suspend', 'propose_revision'):
+                self._save_state(state, lock=False)
+
+        if self.feedback_ledger is not None:
+            written = self.feedback_ledger.record_reflection(
+                request_id=request_id, exp_id=cid, stance=stance, basis=clean_basis,
+                result_id=operation_id, suggested_exception=clean_exc,
+                suggested_guidance=clean_guid, evidence_refs=clean_refs,
+                session_key=session_key, revision_draft_id=draft_id,
+            )
+            # Mark this reflection event already applied in state so sync_feedback_stats won't double-count.
+            if written and stance in ('rebut', 'suspend'):
+                with self.mutex, write_lock(self.store, self.cfg.id):
+                    st = self._load_state()
+                    pf = st.setdefault('processed_feedback_ids', {})
+                    for item in written:
+                        if item.get('event_id'):
+                            pf[item['event_id']] = now_stamp
+                    self._save_state(st, lock=False)
+        return {
+            'ok': True,
+            'experience_id': cid,
+            'stance': stance,
+            'revision_draft_id': draft_id,
+            'status_preserved': True,
+        }
 
     def list_pending_cognition(self, *, status='pending', limit=60):
         with self.mutex:
