@@ -97,6 +97,28 @@ daily_budget_cny = "2"
         self.assertIn('Next step:', protocol)
         self.assertNotIn('Next step:', rules)
 
+    def test_autonomy_production_entry_passes_work_and_leisure_states_to_p7(self):
+        captured = []
+        provider = Mock()
+        provider.settings.return_value = {'enabled': True, 'max_items': 4, 'max_tokens': 600}
+        provider.confirm.side_effect = lambda ids: ids
+        provider.side_effect = lambda envelope: captured.append(envelope) or []
+        self.chat.experience_hint_provider = provider
+        states = [
+            {'has_active_long_task': True, 'has_pending_action': True},
+            {'has_active_long_task': False, 'has_pending_action': False,
+             'has_work_checkpoint': False, 'has_investigation_checkpoint': False},
+        ]
+        self.controller._wake_situation = Mock(side_effect=states)
+
+        self.controller.run()
+        self.controller.run()
+
+        autonomy = [item for item in captured if item.entry_mode == 'autonomy']
+        self.assertEqual(len(autonomy), 2)
+        self.assertTrue(autonomy[0].wake_context['has_active_long_task'])
+        self.assertFalse(autonomy[1].wake_context['has_active_long_task'])
+
     @staticmethod
     def message_call(call_id, text):
         return SimpleNamespace(id=call_id, function=SimpleNamespace(
