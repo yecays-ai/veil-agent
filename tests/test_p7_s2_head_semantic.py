@@ -108,6 +108,23 @@ output_cny_per_million = "8"
         self.assertTrue(any('Guidance: Pause before replying.' in str(row.get('content')) for row in sent))
         self.assertEqual(self.embed.call_count, warmed)
 
+    def test_background_maintenance_follows_natural_head_changes_without_turn_embedding(self):
+        claims = {'text': '先停一下再回复。'}
+        self.profile.build_prompt = lambda: {
+            'stable': 'Notes:\n- ' + claims['text'], 'notes': '- ' + claims['text'], 'ongoing': ''}
+        self.provider.update_settings({'enabled': True}, expected_revision=1)
+        warmed = self.embed.call_count
+        claims['text'] = 'Pause and verify the new checkpoint.'
+        self.assertFalse(self.provider._head_semantically_covers(
+            'Pause before replying.', (claims['text'],)))
+        self.assertEqual(self.embed.call_count, warmed, 'ordinary reads never repair vectors')
+        self.assertGreater(self.provider.maintain_vectors(), 0)
+        self.assertGreater(self.embed.call_count, warmed)
+        after = self.embed.call_count
+        self.provider(SituationEnvelope(text='unrelated turn', query_vector=(0., 1.),
+                                        head_covered=frozenset({claims['text']})))
+        self.assertEqual(self.embed.call_count, after, 'chat turns remain zero-embedding')
+
 
 if __name__ == '__main__':
     unittest.main()

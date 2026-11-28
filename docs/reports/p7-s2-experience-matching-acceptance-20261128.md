@@ -61,6 +61,14 @@ P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实�
 - 候选查询预提否决项，消除对所有 confirmed 行的重复扫描；206 个候选无否决时扫描数由 42436 降为 0，保留旧目标和否决正确性。没有按时间截断候选。
 - 最终定向命令：`python -m unittest tests.test_p7_s2_head_semantic tests.test_p7_s2_candidate_scaling tests.test_p7_s2_head_backup tests.test_p7_s2_experience_matching tests.test_p7_s2_cache_governance tests.test_p7_s2_chat_review tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup tests.test_prompt_registry -q`：**238/238，39.915 秒，exit 0**。不在本地运行全仓测试，推送后交 GitHub CI。
 
+## 最后交付核查（2026-11-28）
+
+- **HEAD 自动衔接**：`ExperienceHintProvider` 随 Chat 后台生命周期每 15 分钟维护一次；HEAD、关系行、候选指导、Embedding 模型或端点变化会在后台补建/淘汰缓存。普通聊天只读缓存，新增回归确认自然 HEAD 更新后自动恢复语义去重且聊天轮次 0 次 Embed。
+- **独立语义场景**：零词项中文改写、中→英、英→中、隐含工作、隐含关系、隐含承诺分别有独立断言，不再由一个混合用例代替。
+- **长期候选池**：生产查询支持 `semantic_offset + limit`；Provider 每批 256、单轮最多 2048，耗尽后从头、未耗尽则下一轮续扫。不是按新旧先截断；700 条中第 621 条目标在同轮命中，查询调用证明确实分批。
+- **真实入口**：Chat 工具循环分别覆盖错误、扩组与重复结果 no-progress；AutonomyController 两次真实 `run()` 将工作态与闲暇态 `wake_context` 送入 Chat/P7。
+- **集中回归**：主命令运行 297 项，其中 292 项直接通过；4 项受测试模块路径、1 项受 worktree safe-directory 环境影响。只对这 5 项补齐测试进程环境后定向重跑，5/5 通过；合计 297/297。`git -c core.whitespace=cr-at-eol diff --check` 通过。未调用真实模型/Embedding，正式数据 0 改动。
+
 ## 明确未施工
 
 - 未施工 S3 的四级晋升、反馈账本、`experience_reflect` 与行为结果闭环。

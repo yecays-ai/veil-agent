@@ -544,6 +544,8 @@ class ExperienceHintProvider:
         self._gate_day = ''
         self._gate_spent = 0.0
         self._head_vectors = self._read_head_vectors()
+        self._candidate_cursor = 0
+        self._maintenance_scheduler = None
         self.consolidator.experience_confirmed_callback = self.warm_embeddings
 
     def settings_path(self):
@@ -709,6 +711,24 @@ class ExperienceHintProvider:
             if self._head_claims():
                 self.warm_head_embeddings()
             return built
+
+    def start(self):
+        from veil.brain.short_term_notes import PeriodicBackgroundTick
+        if self._maintenance_scheduler is None:
+            self._maintenance_scheduler = PeriodicBackgroundTick(
+                f'{self.cfg.id}-p7-vector-maintenance', 900, self.maintain_vectors)
+        self._maintenance_scheduler.start()
+
+    def stop(self):
+        if self._maintenance_scheduler is not None:
+            self._maintenance_scheduler.stop()
+
+    def maintain_vectors(self, stopped=lambda: False):
+        """Refresh changed HEAD/candidate vectors off the chat path while P7 is enabled."""
+        if stopped() or not self.settings()['enabled']:
+            return 0
+        with self._warm_lock:
+            return self._warm_embeddings() + self.warm_head_embeddings()
 
     def _warm_embeddings(self, candidate_ids=None):
         """Build missing candidate vectors only at explicit enable/confirm boundaries."""
@@ -998,9 +1018,25 @@ class ExperienceHintProvider:
             return []
         tokens = _lexical_tokens(envelope.text)
         evidence_deadline = _Deadline(EVIDENCE_BUDGET_MS)
-        pool = self.consolidator.query_experience_candidates(
-            situation='', statuses=('confirmed',), semantic_pool=True,
-        )
+        pool, offset, exhausted = [], self._candidate_cursor, False
+        while len(pool) < 2048:
+            batch = self.consolidator.query_experience_candidates(
+                situation='', statuses=('confirmed',), semantic_pool=True,
+                limit=256, semantic_offset=offset,
+            )
+            if not batch:
+                exhausted = True
+                break
+            if len(batch) > 256:  # Compatible with test/legacy consolidators that ignore paging.
+                pool = list(batch[:2048])
+                exhausted = len(batch) <= 2048
+                break
+            pool.extend(batch)
+            offset += len(batch)
+            if len(batch) < 256:
+                exhausted = True
+                break
+        self._candidate_cursor = 0 if exhausted else offset
         scored, gray, dropped = [], [], []
         for row in pool:
             if not self._allowed_domain(row, envelope):

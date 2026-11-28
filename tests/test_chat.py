@@ -223,6 +223,51 @@ output_cny_per_million = "8"
         self.assertTrue(any('Inspect the error before retrying.' in str(row.get('content'))
                             for row in seen[1]))
 
+    def test_p7_real_tool_loop_reports_expansion_and_no_progress(self):
+        def response(content=None, calls=()):
+            return SimpleNamespace(content=content, tool_calls=list(calls),
+                model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': content,
+                    'tool_calls': [{'id': call.id, 'type': 'function', 'function': {
+                        'name': call.function.name, 'arguments': call.function.arguments}}
+                                   for call in calls]})
+        expand = SimpleNamespace(id='expand', function=SimpleNamespace(
+            name='expand_capability', arguments='{"groups":["web"]}'))
+        repeated1 = SimpleNamespace(id='repeat-1', function=SimpleNamespace(
+            name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
+        repeated2 = SimpleNamespace(id='repeat-2', function=SimpleNamespace(
+            name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
+        files = SimpleNamespace(tools=[SimpleNamespace(name='browser', description='Inspect fixture.', inputSchema={}),
+                                      SimpleNamespace(name='lab_file_digest', description='Digest fixture.', inputSchema={})],
+            description='Fixture tools.', startup_notice=None, enabled=True, client=object(),
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock())
+        tools = SimpleNamespace(tools=files.tools, files=files, description=files.description,
+            capability_event=None, capability_event_model=None, capability_record=None,
+            consume_capability_event=Mock(),
+            invoke=Mock(return_value=('same fixture result', '成功', 'fixture')))
+        replies = iter([
+            (response(calls=[expand]), 10, 5, 0),
+            (response(calls=[repeated1]), 10, 5, 0),
+            (response(calls=[repeated2]), 10, 5, 0),
+            (response(content='Done.'), 10, 5, 0),
+        ])
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 5}),
+                    self.store, self.budget, Mock(side_effect=lambda *_a, **_k: next(replies)),
+                    tools=tools, output=lambda _: None)
+        chat.tool_groups = ('web',)
+        envelopes = []
+        provider = Mock()
+        provider.settings.return_value = {'enabled': True, 'max_items': 4, 'max_tokens': 600}
+        provider.confirm.side_effect = lambda ids: ids
+        provider.side_effect = lambda envelope: envelopes.append(envelope) or []
+        chat.experience_hint_provider = provider
+
+        chat.send('Inspect the fictional page twice.')
+
+        tool_entries = [item.tool_context for item in envelopes if item.entry_mode == 'tool_step']
+        self.assertTrue(any('web' in item['expanded_groups'] for item in tool_entries))
+        self.assertTrue(any(item['no_progress'] for item in tool_entries))
+
     def test_later_tool_requests_omit_only_empty_memory_notices(self):
         from veil import prompts
         tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(

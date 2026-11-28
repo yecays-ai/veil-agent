@@ -68,6 +68,24 @@ class P7S2CandidateScalingTests(unittest.TestCase):
         result = provider(SituationEnvelope(text='别再只口头答应', query_vector=(1, 0)))
         self.assertEqual([row['id'] for row in result], ['old-target'])
 
+    def test_provider_reads_large_pool_in_bounded_pages_without_newest_first_cutoff(self):
+        rows = [candidate(f'decoy-{i}', f'unrelated topic {i}') for i in range(700)]
+        rows[620] = candidate('older-target', 'Record evidence before changing the repair')
+        self.seed(rows)
+        embedder = FakeEmbedder(lambda text: (1, 0) if text.startswith('Record') else (0, 1))
+        provider = ExperienceHintProvider(
+            self.cfg, self.store, consolidator=self.cons, memory=FakeMemory(embedder))
+        provider.validator.validate = lambda _row, **_kwargs: 'valid'
+        self.assertTrue(provider.update_settings({'enabled': True}, expected_revision=1)['ok'])
+        with patch.object(self.cons, 'query_experience_candidates',
+                          wraps=self.cons.query_experience_candidates) as query:
+            result = provider(SituationEnvelope(text='先留证据再动修复', query_vector=(1, 0),
+                                                context_signal={'is_work_task': True}))
+        self.assertEqual([row['id'] for row in result], ['older-target'])
+        page_calls = [call.kwargs for call in query.call_args_list if call.kwargs.get('semantic_offset') is not None]
+        self.assertGreaterEqual(len(page_calls), 3)
+        self.assertTrue(all(call['limit'] == 256 for call in page_calls))
+
 
 if __name__ == '__main__':
     unittest.main()

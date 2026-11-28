@@ -2875,7 +2875,8 @@ class CognitiveConsolidator:
             return allowed
 
     def query_experience_candidates(self, *, situation='', kinds=None, statuses=('confirmed',), limit=5,
-                                    semantic_pool=False, evidence_validator=None, evidence_deadline=None):
+                                    semantic_pool=False, semantic_offset=None,
+                                    evidence_validator=None, evidence_deadline=None):
         """Unified P7 read contract: return verified, non-vetoed experience hints matching a situation."""
         allowed_statuses = set(statuses or ('confirmed',))
         allowed_kinds = set(kinds) if kinds else None
@@ -2906,6 +2907,10 @@ class CognitiveConsolidator:
                 continue
             projected = _normalise_experience(row)
             eligible.append((row, projected))
+        if semantic_pool and semantic_offset is not None and eligible:
+            cap = max(1, min(512, int(limit or 512)))
+            start = max(0, int(semantic_offset or 0))
+            eligible = eligible[start:start + cap]
         if evidence_validator is not None:
             states = evidence_validator.validate_many(
                 [projected for _row, projected in eligible], deadline=evidence_deadline)
@@ -2933,8 +2938,8 @@ class CognitiveConsolidator:
                 score += float(overlap)
             scored.append((score, str(row.get('updated_at') or ''), projected))
         if semantic_pool:
-            # Provider performs the final ranking after scoring the complete pool.
-            # Neither truncate nor sort by recency before semantic matching.
+            # The provider rotates this bounded window across the stable candidate order.
+            # This is iterative reading, not a newest-first pre-score truncation.
             return [item[2] for item in scored]
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [item[2] for item in scored[:max(1, min(20, int(limit or 5)))]]

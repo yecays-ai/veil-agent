@@ -131,6 +131,51 @@ class P7S2ExperienceMatchingTests(unittest.TestCase):
         self.assertEqual([row['id'] for row in result], ['old-target'])
         self.assertGreater(len(cons.rows), 200)
 
+    def test_zero_term_chinese_rewrite_has_its_own_semantic_regression(self):
+        provider, _cons, _embedder = self.provider(
+            [candidate('rewrite', '遇到失败先保存诊断现场再改动')], lambda _text: (1., 0.))
+        self.enable(provider)
+        result = provider(SituationEnvelope(text='别急着修，先把证据留住', query_vector=(1., 0.),
+                                            context_signal={'is_work_task': True}))
+        self.assertEqual([row['id'] for row in result], ['rewrite'])
+
+    def test_cross_language_works_in_both_directions(self):
+        rows = [candidate('en', 'Record a checkpoint before promising follow-up'),
+                candidate('zh', '答应稍后回来前先记录检查点')]
+        provider, _cons, _embedder = self.provider(rows, lambda text: (
+            (1., 0.) if text.startswith('Record') else (0., 1.)))
+        self.enable(provider)
+        zh_to_en = provider(SituationEnvelope(text='别只口头答应稍后回来', query_vector=(1., 0.),
+                                               context_signal={'has_commitment_signal': True}))
+        en_to_zh = provider(SituationEnvelope(text='Do not promise to return without a record',
+                                               query_vector=(0., 1.),
+                                               context_signal={'has_commitment_signal': True}))
+        self.assertEqual([row['id'] for row in zh_to_en], ['en'])
+        self.assertEqual([row['id'] for row in en_to_zh], ['zh'])
+
+    def test_implicit_work_relationship_and_commitment_scenes_are_independent(self):
+        rows = [
+            candidate('work-scene', 'deployment silently lost state', domain='work_method'),
+            candidate('relationship-scene', 'tension rises between us',
+                      domain='relationship_consensus'),
+            candidate('commitment-scene', 'follow-up promise remains open',
+                      domain='commitment_accountability'),
+        ]
+        vectors = {'deployment': (1., 0., 0.), 'tension': (0., 1., 0.), 'follow-up': (0., 0., 1.)}
+        provider, _cons, _embedder = self.provider(
+            rows, lambda text: next((value for key, value in vectors.items() if key in text), (0., 0., 1.)))
+        self.enable(provider)
+        cases = [
+            ('the release forgot everything', (1., 0., 0.), {'is_work_task': True}, 'work-scene'),
+            ('we are circling the same hurt again', (0., 1., 0.), {'has_emotion_signal': True}, 'relationship-scene'),
+            ('you said you would come back to this', (0., 0., 1.), {'has_commitment_signal': True}, 'commitment-scene'),
+        ]
+        for text, vector, signal, expected in cases:
+            with self.subTest(expected=expected):
+                result = provider(SituationEnvelope(text=text, query_vector=vector,
+                                                    context_signal=signal))
+                self.assertEqual([row['id'] for row in result], [expected])
+
     def test_short_ack_and_unrelated_scene_are_zero_injection(self):
         rows = [candidate('work', 'deployment failure')]
         provider, cons, _embedder = self.provider(rows, lambda _text: (0.0, 1.0))

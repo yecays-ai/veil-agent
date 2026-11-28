@@ -2477,6 +2477,8 @@ class Chat:
             self.experience.start()
         if self.consolidation:
             self.consolidation.start()
+        if self.experience_hint_provider:
+            self.experience_hint_provider.start()
 
     def stop_short_term_notes_scheduler(self):
         if self.relationship_semantic_scheduler:
@@ -2487,6 +2489,8 @@ class Chat:
             self.experience.stop()
         if self.consolidation:
             self.consolidation.stop()
+        if self.experience_hint_provider:
+            self.experience_hint_provider.stop()
 
     def refresh_tool_inventory(self):
         """Ticket 357: keep a finished copy of the tool list for the desktop page. Called on the chat's own
