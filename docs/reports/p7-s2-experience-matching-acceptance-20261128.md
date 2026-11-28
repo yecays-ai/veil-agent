@@ -4,7 +4,7 @@
 
 ## 结论
 
-P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实现，仅将缓存新旧判断改为跨实例写锁内分配的候选级单调 `generation`；固定相同时间条件下 model-A → model-B → model-A 旧快照保存的回归先红后绿，Provider 保留 model-B 语义命中且不新增 Embedding。S2/S1 缓存相关专项 29/29、原定向集加该回归 182/182 通过，可提交 PR 等待复审。
+P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实现，缓存新旧由写锁内分配的候选级单调 `generation` 判断；固定相同时间条件下 model-A → model-B → model-A 旧快照保存的回归先红后绿，Provider 保留 model-B 语义命中且不新增 Embedding。工单 471 · PR #472 首轮审核修复及 CI 提示词注册修复后，本地集中定向 229/229 通过；新提交的 GitHub CI 与复审仍待验证。
 
 本单未启停正式 Peter，未读取或写入正式 `data/peter`，未部署，未调用真实模型或 Embedding，费用 ¥0。开发侧回归通过不代替 CI、PR 复审或 Lan 体验验收。
 
@@ -43,14 +43,15 @@ P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实�
 - 最终定向回归仅运行一次：`python -m unittest tests.test_p7_s2_experience_matching tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup -q`：182/182 通过（35.372s，exit 0；原 181 项 + 新增同秒回归）。
 - 含 `tests.test_autonomy` 的 230 项组合：226 项通过，4 项在进入本单代码前因测试内顶层 `from test_tools import ToolLoopTests` 找不到模块而报错；补 `PYTHONPATH` 重跑仍为同一 4 项。按“同一问题两次未解决即停止”纪律未做第三次修改或重跑；本单未修改该导入或测试工具模块。
 - `python -m py_compile`：修改的 Python 文件与新测试通过。
-- 完整仓库级回归交由 GitHub CI；未运行真实模型、正式数据、正式桌面部署或付费实验。
+- PR #472 审核修复后集中运行 `python -m unittest tests.test_p7_s2_experience_matching tests.test_p7_s2_cache_governance tests.test_p7_s2_chat_review tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup tests.test_prompt_registry -q`：229/229 通过（39.795s，exit 0）。首轮 CI 仅在 `test_prompt_registry.InlineProseTests.test_no_unreviewed_inline_prose` 失败，原因为灰区复核 system prompt 内联；已转到提示词注册文件，注册专项 32/32 通过。新提交全仓 CI 待验证。
 
 ## 已解决阻断
 
 - **根因**：旧快照合并依赖秒级 `cached_at`，相同时间无法区分两次模型向量提交。此前测试未固定相同时间条件。
 - **修复**：复用 `mutex + brain-write.lock`，`cache_experience_embedding()` 在锁内重读当前候选并分配 `generation + 1`。`_merge_candidate_embedding()` 按 generation 合并，同代保留磁盘已提交值；旧记录缺失或无效 generation 按 0 处理。`cached_at` 保留作诊断，不参与并发正确性判断。
-- **影响路径**：显式启用/确认预热 → 缓存写入 → 后台旧快照 `_save_state()` → Provider 模型/维度校验；仅增加候选缓存字段，不修改匹配、治理或预算接口。两个独立 Consolidator 固定同秒交错保存，断言 model-B/dim-2/generation-2 保留，零词项中文情境仍语义命中且无额外 Embed。
-- **关闭证据**：新增回归修复前稳定读回 model-A 而失败，修复后通过；缓存相关 29/29、最终定向 182/182 通过。未展开新架构、S3～S5 或无关测试导入修复。
+- **影响路径**：显式启用/确认预热 → 缓存写入 → 后台旧快照 `_save_state()` → Provider 模型/维度/向量空间校验；审核修复还收紧工具语义阈值、无向量词法门控、并发冷却和重复预热，修复非有限缓存与标点短应和。真实 206 候选旧目标保留，500 候选惰性冲突裁决避免每轮 O(n²) 比较。
+- **审核意见归类**：预算跨进程超额在正式 CLI/Web 入口受 Store 数据目录排他锁保护，属当前不支持双进程共享 Budget 的条件性风险；工具提示共享额度已由 `p7_debug` 传入 `_tool_chat`，原评论读取对象有误；同 Chat 模型配置持有整轮模型锁。模型/端点变更仅在显式重启 P7 设置时预热，不在普通聊天/启动时产生额外付费调用；不改变程序权限。
+- **关闭证据**：新增回归修复前稳定读回 model-A 而失败，修复后通过；原 182 项上补充审查回归与提示词注册测试后定向 229/229 通过。未施工 S3～S5。
 
 ## 明确未施工
 

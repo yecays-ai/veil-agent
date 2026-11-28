@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -491,7 +492,9 @@ def _embedding_generation(cache):
 
 def _merge_candidate_embedding(row, disk_row):
     """Preserve the latest locked cache write, independently of wall-clock time."""
-    text = f"{row.get('trigger_condition', '')} | {row.get('domain', '')} | {row.get('experience_type', '')}"
+    normalized = _normalise_experience(row)
+    text = (f"{normalized.get('trigger_condition', '')} | {normalized.get('domain', '')}"
+            f" | {normalized.get('experience_type', '')}")
     fingerprint = hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
     current = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
     disk = disk_row.get('trigger_embedding') if isinstance(disk_row.get('trigger_embedding'), dict) else {}
@@ -2933,11 +2936,14 @@ class CognitiveConsolidator:
             return [item[2] for item in scored]
         return [item[2] for item in scored[:max(1, min(20, int(limit or 5)))]]
 
-    def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector):
+    def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector, vector_space=''):
         """Persist a lazy P7 trigger vector without weakening governance state."""
         candidate_id = str(candidate_id or '')
-        values = [float(item) for item in (vector or ())]
-        if not candidate_id or not fingerprint or not model or not values:
+        try:
+            values = [float(item) for item in (vector or ())]
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not candidate_id or not fingerprint or not model or not values or not all(map(math.isfinite, values)):
             return False
         with self.mutex, write_lock(self.store, self.cfg.id):
             state = self._load_state()
@@ -2949,7 +2955,7 @@ class CognitiveConsolidator:
             row['trigger_embedding'] = {
                 'fingerprint': str(fingerprint), 'model': str(model),
                 'dimension': len(values), 'vector': values, 'cached_at': self._now(),
-                'generation': generation,
+                'generation': generation, 'vector_space': str(vector_space or ''),
             }
             self._save_state(state, lock=False)
         return True
@@ -2970,9 +2976,7 @@ class CognitiveConsolidator:
             } for row in candidates[:3]],
         }
         messages = [
-            {'role': 'system', 'content': (
-                'Return strict JSON {"applicable_ids": [...]} using only candidate IDs. '
-                'Select a candidate only when it clearly applies now and no exception applies.')},
+            {'role': 'system', 'content': prompts.text('memory.experience.match_review')},
             {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
         ]
         provider = dict(self.cfg.provider)

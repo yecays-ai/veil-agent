@@ -9,7 +9,8 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, field
+import weakref
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -513,6 +514,8 @@ class EvidenceValidator:
 class ExperienceHintProvider:
     """Role-isolated P7 provider with deterministic local hybrid matching."""
 
+    _WARM_LOCKS = weakref.WeakValueDictionary()
+    _WARM_LOCKS_MUTEX = threading.Lock()
     _SHORT_ACKS = frozenset({'嗯', '嗯嗯', '好', '好的', '好呀', '行', '可以', 'ok', 'okay', '收到', '知道了'})
     _KIND_DOMAINS = {
         'tool_lesson': 'work_method', 'communication_pattern': 'relationship_consensus',
@@ -532,6 +535,9 @@ class ExperienceHintProvider:
         self.budget = budget
         self.validator = EvidenceValidator(cfg, store, memory=memory, profile=profile)
         self.mutex = threading.RLock()
+        warm_key = (os.path.normcase(os.path.abspath(str(store.root))), str(cfg.id))
+        with self._WARM_LOCKS_MUTEX:
+            self._warm_lock = self._WARM_LOCKS.setdefault(warm_key, threading.RLock())
         self._cooldown = {}
         self._turns = {}
         self._local = threading.local()
@@ -568,7 +574,7 @@ class ExperienceHintProvider:
             if expected_revision is not None and expected_revision != current:
                 return {'ok': False, 'status_code': 409, 'settings_revision': current,
                         'error': '配置已在其他窗口被更新，请刷新后再保存。'}
-            became_enabled = updates.get('enabled') is True and settings_from(raw)['enabled'] is False
+            became_enabled = updates.get('enabled') is True
             revision = current + 1 if updates else current
             self.store.replace(self.settings_path(), {**settings_from(raw), **updates, '_revision': revision})
         if became_enabled:
@@ -592,13 +598,29 @@ class ExperienceHintProvider:
             return []
 
     @staticmethod
-    def _cosine(left, right):
+    def _valid_vector(vector):
+        if not isinstance(vector, (list, tuple)) or not vector:
+            return None
+        try:
+            values = tuple(float(item) for item in vector)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not all(math.isfinite(item) for item in values) or not any(values):
+            return None
+        return values
+
+    @classmethod
+    def _cosine(cls, left, right):
+        left, right = cls._valid_vector(left), cls._valid_vector(right)
         if not left or not right or len(left) != len(right):
             return None
-        dot = sum(float(a) * float(b) for a, b in zip(left, right))
-        lnorm = math.sqrt(sum(float(item) ** 2 for item in left))
-        rnorm = math.sqrt(sum(float(item) ** 2 for item in right))
-        return dot / (lnorm * rnorm) if lnorm and rnorm else None
+        # Scale before accumulating to avoid overflowing finite large components.
+        left_scale, right_scale = max(map(abs, left)), max(map(abs, right))
+        left = tuple(item / left_scale for item in left)
+        right = tuple(item / right_scale for item in right)
+        dot = math.fsum(a * b for a, b in zip(left, right))
+        norm = math.sqrt(math.fsum(item * item for item in left) * math.fsum(item * item for item in right))
+        return max(-1.0, min(1.0, dot / norm)) if norm else None
 
     def _domain(self, row):
         return str(row.get('domain') or self._KIND_DOMAINS.get(str(row.get('kind') or ''), ''))
@@ -640,19 +662,29 @@ class ExperienceHintProvider:
     def _trigger_text(row):
         return f"{row.get('trigger_condition', '')} | {row.get('domain', '')} | {row.get('experience_type', '')}"
 
-    def _cached_candidate_vector(self, row, query_vector):
-        if not query_vector:
-            return None
+    def vector_space(self):
+        memory = getattr(self.cfg, 'memory', None) or {}
+        return _sha(json.dumps([str(memory.get('base_url') or '').strip().rstrip('/'),
+                               str(memory.get('model') or 'unknown')], separators=(',', ':')))
+
+    def _cached_candidate_vector(self, row, query_vector=None):
         fingerprint = _sha(self._trigger_text(row))
         model = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown')
         cached = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
-        vector = cached.get('vector')
-        if (cached.get('fingerprint') == fingerprint and cached.get('model') == model
-                and cached.get('dimension') == len(query_vector) and isinstance(vector, list)):
-            return tuple(float(item) for item in vector)
+        vector = self._valid_vector(cached.get('vector'))
+        if (vector and cached.get('fingerprint') == fingerprint and cached.get('model') == model
+                and cached.get('vector_space') == self.vector_space()
+                and type(cached.get('dimension')) is int and cached['dimension'] == len(vector)
+                and (query_vector is None or len(vector) == len(query_vector))):
+            return vector
         return None
 
     def warm_embeddings(self, candidate_ids=None):
+        # Separate from the settings mutex: never hold the Brain write lock during I/O.
+        with self._warm_lock:
+            return self._warm_embeddings(candidate_ids)
+
+    def _warm_embeddings(self, candidate_ids=None):
         """Build missing candidate vectors only at explicit enable/confirm boundaries."""
         if not self.settings()['enabled']:
             return 0
@@ -670,13 +702,13 @@ class ExperienceHintProvider:
             return 0
         model = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown')
         built = 0
+        vector_space = self.vector_space()
         for row in rows:
             if wanted and str(row.get('id') or '') not in wanted:
                 continue
             text = self._trigger_text(row)
             fingerprint = _sha(text)
-            cached = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
-            if cached.get('fingerprint') == fingerprint and cached.get('model') == model:
+            if self._cached_candidate_vector(row) is not None:
                 continue
             reservation = None
             try:
@@ -697,8 +729,12 @@ class ExperienceHintProvider:
                         reservation, accounting='p7-candidate-embedding',
                         settled_amount=amount,
                         usage_tokens=reported if type(reported) is int and reported > 0 else None)
+                vector = self._valid_vector(vector)
+                if vector is None:
+                    continue
                 if self.consolidator.cache_experience_embedding(
-                        row.get('id'), fingerprint=fingerprint, model=model, vector=vector):
+                        row.get('id'), fingerprint=fingerprint, model=model, vector=vector,
+                        vector_space=vector_space):
                     built += 1
             except Exception:
                 if reservation is not None:
@@ -770,13 +806,12 @@ class ExperienceHintProvider:
             if any(self._conflicts(item[1], other[1]) for other in kept):
                 continue
             kept.append(item)
-        return kept
+            yield item
 
     def _cooldown_allows(self, row, envelope, settings):
         if not envelope.session_key or settings['session_cooldown_turns'] <= 0:
             return True
         turn = envelope.turn_index or self._turns.get(envelope.session_key, 0) + 1
-        self._turns[envelope.session_key] = max(turn, self._turns.get(envelope.session_key, 0))
         previous = self._cooldown.get((envelope.session_key, str(row.get('id') or '')))
         changed = str((envelope.tool_context or {}).get('error_code') or '')
         return previous is None or turn - previous[0] > settings['session_cooldown_turns'] or (changed and changed != previous[1])
@@ -784,7 +819,7 @@ class ExperienceHintProvider:
     def _record_cooldown(self, rows, envelope):
         if not envelope.session_key:
             return
-        turn = envelope.turn_index or self._turns.get(envelope.session_key, 1)
+        turn = envelope.turn_index or self._turns.get(envelope.session_key, 0) + 1
         error = str((envelope.tool_context or {}).get('error_code') or '')
         for row in rows:
             self._cooldown[(envelope.session_key, str(row.get('id') or ''))] = (turn, error)
@@ -815,6 +850,11 @@ class ExperienceHintProvider:
     def __call__(self, situation):
         envelope = SituationEnvelope.from_value(situation)
         values = self.settings()
+        if envelope.session_key:
+            with self.mutex:
+                turn = envelope.turn_index or self._turns.get(envelope.session_key, 0) + 1
+                self._turns[envelope.session_key] = max(turn, self._turns.get(envelope.session_key, 0))
+                envelope = replace(envelope, turn_index=turn)
         self._set_debug('empty', selected=0, dropped=[])
         if not values['enabled']:
             self._set_debug('disabled', selected=0, dropped=[])
@@ -828,7 +868,7 @@ class ExperienceHintProvider:
         if envelope.entry_mode == 'tool_step' and not values['allow_tool_step_recheck']:
             self._set_debug('skipped_entry_mode', selected=0, dropped=[])
             return []
-        normalized = ' '.join(str(envelope.text or '').casefold().split())
+        normalized = re.sub(r'[^\w\s]', '', ' '.join(str(envelope.text or '').casefold().split())).strip()
         if envelope.entry_mode in ('chat', 'mobile', 'voice') and (
                 not normalized or normalized in self._SHORT_ACKS or not _lexical_tokens(normalized)):
             self._set_debug('no_match', selected=0, dropped=['short_ack'])
@@ -861,17 +901,19 @@ class ExperienceHintProvider:
             semantic = self._cosine(envelope.query_vector, vector)
             recall_penalty = self._recall_penalty(row, envelope.recalled_texts)
             if semantic is None:
-                if overlap < 2:
+                trigger_tokens = _lexical_tokens(str(row.get('trigger_condition') or ''))
+                trigger_overlap = len(tokens & trigger_tokens)
+                if (trigger_overlap < 2 or trigger_overlap / max(1, len(trigger_tokens)) < 0.6
+                        or recall_penalty):
                     dropped.append((row.get('id'), 'threshold'))
                     continue
                 total = 0.25 * signal + 0.20 * lexical - recall_penalty
             else:
                 total = 0.55 * semantic + 0.25 * signal + 0.20 * lexical - recall_penalty
-                strong_tool = envelope.entry_mode == 'tool_step' and overlap >= 2
                 if values['semantic_gate_enabled'] and 0.34 <= total < 0.48:
                     gray.append((total, row))
                     continue
-                if not strong_tool and (semantic < 0.36 or total < 0.42):
+                if semantic < 0.36 or total < 0.42:
                     dropped.append((row.get('id'), 'threshold'))
                     continue
             row = dict(row)
@@ -880,7 +922,6 @@ class ExperienceHintProvider:
             scored.append((total, row))
         scored.extend(self._gray_gate(gray, envelope, values))
         resolved = self._resolve_conflicts(scored)
-        resolved.sort(key=self._priority, reverse=True)
         remaining = (envelope.tool_context or {}).get('remaining_items')
         item_limit = min(values['max_items'], remaining) if type(remaining) is int and remaining >= 0 else values['max_items']
         selected = []
@@ -897,8 +938,10 @@ class ExperienceHintProvider:
             self._set_debug('no_match', selected=0, dropped=dropped)
             return []
         allowed = set(self.confirm([row.get('id') for row in selected]))
-        selected = [row for row in selected if row.get('id') in allowed]
-        self._record_cooldown(selected, envelope)
+        with self.mutex:
+            selected = [row for row in selected if row.get('id') in allowed
+                        and self._cooldown_allows(row, envelope, values)]
+            self._record_cooldown(selected, envelope)
         self._set_debug('matched' if selected else 'no_match', selected=len(selected), dropped=dropped,
                         ids=[row.get('id') for row in selected])
         return selected

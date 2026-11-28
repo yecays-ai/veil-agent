@@ -2779,6 +2779,13 @@ class Chat:
         rows.append('- VEIL enforces permissions; this list grants none.')
         return 'CURRENT CAPABILITIES (live runtime):\n' + '\n'.join(rows)
 
+    def _next_p7_turn_index(self, session_key):
+        if getattr(self, '_p7_turn_session', None) != session_key:
+            self._p7_turn_session = session_key
+            self._p7_turn_count = 0
+        self._p7_turn_count += 1
+        return self._p7_turn_count
+
     def p7_experience_hints_context(self, situation, *, debug=None):
         """Render P7-owned confirmed hints into its reserved AUXILIARY slot.
 
@@ -4591,7 +4598,7 @@ class Chat:
             head_covered=frozenset(item for item in head_claims if item),
             recalled_texts=tuple(recalled_texts),
             session_key=self._conversation_key(),
-            turn_index=sum(item.get('role') == 'user' for item in self.history) + 1,
+            turn_index=self._next_p7_turn_index(self._conversation_key()),
         )
         p7_debug = {}
         p7_experience_hints = self.p7_experience_hints_context(p7_situation, debug=p7_debug)
@@ -5696,7 +5703,10 @@ class Chat:
             self._trace(display_call(name, execution.summary, result_state, reason), 'tool')
         delivery = {'result_state': result_state} if result_state != execution.state else {}
         summaries.append({'tool': name, 'path': execution.summary,
-                          'state': execution.state, **delivery})
+                          'state': execution.state, **delivery,
+                          **({'failure_digest': hashlib.sha256(
+                              str(execution.failure_detail or execution.result).encode('utf-8', 'replace')
+                          ).hexdigest()[:12]} if result_state != '成功' else {})})
         verified = {'checkpoint_verified': True} if execution.checkpoint_verified else {}
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
@@ -6822,7 +6832,8 @@ class Chat:
                         for item in batch_rows)
                     tool_signal = {
                         'error': bool(failures), 'error_code': '|'.join(
-                            str(item.get('state') or '') for item in failures),
+                            f"{item.get('state') or ''}:{item.get('failure_digest') or ''}"
+                            for item in failures),
                         'expanded_groups': expanded_now, 'no_progress': not batch_new_info,
                         'remaining_items': remaining_items,
                     }
@@ -6835,7 +6846,7 @@ class Chat:
                         context_signal={'is_work_task': True},
                         tool_context=tool_signal,
                         session_key=self._conversation_key(),
-                        turn_index=sum(item.get('role') == 'user' for item in self.history) + step + 2,
+                        turn_index=self._next_p7_turn_index(self._conversation_key()),
                     ), debug=tool_debug)
                     if tool_hint and int(tool_debug.get('used_tokens') or 0) <= remaining_tokens:
                         loop_messages.append(tool_hint)

@@ -1,5 +1,8 @@
 import hashlib
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,11 +59,11 @@ class FakeConsolidator:
         current = {row['id'] for row in self.rows if row.get('status') == 'confirmed'}
         return [item for item in ids if item in current]
 
-    def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector):
+    def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector, vector_space=''):
         row = next(item for item in self.rows if item['id'] == candidate_id)
         row['trigger_embedding'] = {
             'fingerprint': fingerprint, 'model': model,
-            'dimension': len(vector), 'vector': list(vector),
+            'dimension': len(vector), 'vector': list(vector), 'vector_space': vector_space,
         }
         self.cache_writes += 1
         return True
@@ -240,8 +243,10 @@ class P7S2ExperienceMatchingTests(unittest.TestCase):
         self.assertTrue(cons_a.cache_experience_embedding(
             'switch', fingerprint=fingerprint, model='model-A', vector=[1.0]))
         stale_a = cons_a._load_state()
+        self.cfg.memory['model'] = 'model-B'
+        vector_space = ExperienceHintProvider(self.cfg, self.store, consolidator=cons_b).vector_space()
         self.assertTrue(cons_b.cache_experience_embedding(
-            'switch', fingerprint=fingerprint, model='model-B', vector=[1.0, 0.0]))
+            'switch', fingerprint=fingerprint, model='model-B', vector=[1.0, 0.0], vector_space=vector_space))
         saved_b = cons_b._load_state()['experience_candidates'][0]['trigger_embedding']
         self.assertEqual(stale_a['experience_candidates'][0]['trigger_embedding']['cached_at'],
                          saved_b['cached_at'])
@@ -259,6 +264,122 @@ class P7S2ExperienceMatchingTests(unittest.TestCase):
         result = provider(SituationEnvelope(text='别再只口头答应', query_vector=(1.0, 0.0)))
         self.assertEqual([item['id'] for item in result], ['switch'])
         self.assertEqual(embedder.calls, [])
+
+    def test_invalid_vectors_fail_closed_and_corrupt_cache_rewarms(self):
+        for bad in ([float('nan'), 0.0], [float('inf'), 0.0], ['broken', 0], [0, 0]):
+            with self.subTest(bad=bad):
+                self.assertIsNone(ExperienceHintProvider._cosine((1, 0), bad))
+        rows = [candidate('bad', 'deployment checkpoint')]
+        provider, cons, embedder = self.provider(rows, lambda _: (1, 0))
+        self.enable(provider)
+        rows[0]['trigger_embedding']['vector'] = ['broken', 0]
+        self.assertEqual(provider(SituationEnvelope(text='unrelated context', query_vector=(1, 0))), [])
+        self.assertEqual(provider.warm_embeddings(), 1)
+        self.assertEqual(len(embedder.calls), 2)
+
+    def test_tool_lexical_overlap_cannot_override_opposite_semantics(self):
+        provider, _, _ = self.provider([candidate('wrong', 'deployment checkpoint')], lambda _: (-1, 0))
+        self.enable(provider)
+        self.assertEqual(provider(SituationEnvelope(
+            text='deployment checkpoint', entry_mode='tool_step', query_vector=(1, 0),
+            tool_context={'error': True})), [])
+
+    def test_lexical_fallback_requires_strong_trigger_coverage(self):
+        provider, _, _ = self.provider([candidate('weak',
+            'deployment checkpoint safety verification approval rollback')], lambda _: (1, 0))
+        self.enable(provider)
+        self.assertEqual(provider(SituationEnvelope(text='deployment checkpoint weather picnic')), [])
+        self.assertEqual([row['id'] for row in provider(SituationEnvelope(
+            text='deployment checkpoint safety verification approval rollback'))], ['weak'])
+
+    def test_punctuated_short_acks_skip_candidate_query(self):
+        provider, cons, _ = self.provider([candidate('work', 'deployment')], lambda _: (1, 0))
+        self.enable(provider)
+        queries = cons.queries
+        for mode in ('chat', 'mobile', 'voice'):
+            for text in ('嗯。', '好的！', 'OK...', '收到～'):
+                self.assertEqual(provider(SituationEnvelope(text=text, entry_mode=mode, query_vector=(1, 0))), [])
+        self.assertEqual(cons.queries, queries)
+
+    def test_concurrent_calls_commit_cooldown_once(self):
+        provider, _, _ = self.provider([candidate('work', 'deployment')], lambda _: (1, 0))
+        self.enable(provider)
+        barrier = threading.Barrier(2)
+        provider.confirm = lambda ids: (barrier.wait(timeout=3), ids)[1]
+        envelope = SituationEnvelope(text='new situation', query_vector=(1, 0), session_key='same', turn_index=1)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(provider, [envelope, envelope]))
+        self.assertEqual(sum(len(result) for result in results), 1)
+
+    def test_implicit_turn_cooldown_expires_after_skipped_calls(self):
+        provider, _, _ = self.provider([candidate('work', 'deployment')], lambda _: (1, 0))
+        self.enable(provider, session_cooldown_turns=2)
+        envelope = SituationEnvelope(text='new situation', query_vector=(1, 0), session_key='implicit')
+        self.assertEqual([len(provider(envelope)) for _ in range(4)], [1, 0, 0, 1])
+
+    def test_parallel_warmups_charge_once(self):
+        provider, cons, embedder = self.provider([candidate('work', 'deployment')], lambda _: (1, 0))
+        self.enable(provider)
+        cons.rows[0].pop('trigger_embedding')
+        entered, release, duplicate = threading.Event(), threading.Event(), threading.Event()
+        original = embedder.embed
+        def blocked(text):
+            if entered.is_set():
+                duplicate.set()
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return original(text)
+        embedder.embed = blocked
+        # A second provider for the same role must share the warming lock.
+        second_provider = ExperienceHintProvider(
+            self.cfg, self.store, consolidator=cons, memory=FakeMemory(embedder))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(provider.warm_embeddings)
+            self.assertTrue(entered.wait(3))
+            second = pool.submit(second_provider.warm_embeddings)
+            dispatched_twice = duplicate.wait(0.15)
+            release.set()
+            self.assertFalse(dispatched_twice)
+            self.assertEqual(first.result() + second.result(), 1)
+        self.assertEqual(len(embedder.calls), 2)
+
+    def test_real_candidate_pool_retains_old_target_after_200(self):
+        cons = CognitiveConsolidator(self.cfg, self.store, SimpleNamespace(), SimpleNamespace())
+        state = cons._load_state()
+        state['experience_candidates'] = [candidate(f'decoy-{i}', f'unrelated {i}') for i in range(205)]
+        target = candidate('old-target', 'Record a checkpoint before promising follow-up',
+                           updated_at='2020-01-01T00:00:00+00:00')
+        state['experience_candidates'].append(target)
+        cons._save_state(state)
+        embedder = FakeEmbedder(lambda text: (1, 0) if text.startswith('Record') else (0, 1))
+        provider = ExperienceHintProvider(self.cfg, self.store, consolidator=cons, memory=FakeMemory(embedder))
+        provider.validator.validate = lambda _row, **_kwargs: 'valid'
+        self.enable(provider)
+        self.assertEqual(len(cons.query_experience_candidates(semantic_pool=True)), 206)
+        self.assertEqual([row['id'] for row in provider(SituationEnvelope(
+            text='别再只口头答应', query_vector=(1, 0)))], ['old-target'])
+
+    def test_explicit_enable_refreshes_changed_vector_space(self):
+        provider, cons, embedder = self.provider([candidate('work', 'deployment')], lambda _: (1, 0))
+        self.cfg.memory['base_url'] = 'https://old.example/v1'
+        self.enable(provider)
+        self.cfg.memory['base_url'] = 'https://new.example/v1'
+        self.assertIsNone(provider._cached_candidate_vector(cons.rows[0], (1, 0)))
+        provider.update_settings({'enabled': True}, expected_revision=provider.settings_revision())
+        self.assertEqual(len(embedder.calls), 2)
+        self.assertIsNotNone(provider._cached_candidate_vector(cons.rows[0], (1, 0)))
+        self.cfg.memory['model'] = 'new-model'
+        provider.update_settings({'enabled': True}, expected_revision=provider.settings_revision())
+        self.assertEqual(len(embedder.calls), 3)
+        self.assertEqual(cons.rows[0]['trigger_embedding']['model'], 'new-model')
+
+    def test_large_matching_pool_does_not_resolve_unused_pairs(self):
+        provider, _, _ = self.provider([candidate(str(i), 'deployment') for i in range(500)], lambda _: (1, 0))
+        self.enable(provider)
+        with patch.object(provider, '_conflicts', wraps=provider._conflicts) as conflicts:
+            result = provider(SituationEnvelope(text='other situation', query_vector=(1, 0)))
+        self.assertEqual(len(result), 4)
+        self.assertLessEqual(conflicts.call_count, 10)
 
     def test_gray_gate_covers_full_configured_range_before_direct_threshold(self):
         rows = [candidate(name, name) for name in ('score41', 'score42', 'score47', 'score48')]
