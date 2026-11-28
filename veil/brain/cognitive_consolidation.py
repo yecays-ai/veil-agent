@@ -407,6 +407,18 @@ def _normalise_experience(row):
     out['locked'] = out.get('locked') is True
     evidence_state = str(out.get('evidence_state') or '')
     out['evidence_state'] = evidence_state if evidence_state in _VALID_EVIDENCE_STATES else 'unavailable'
+    fingerprints = out.get('evidence_fingerprints')
+    out['evidence_fingerprints'] = {
+        str(key): str(value) for key, value in fingerprints.items()
+        if isinstance(key, str) and isinstance(value, str) and value
+    } if isinstance(fingerprints, dict) else {}
+    refs = [str(item) for item in (out.get('evidence_refs') or ()) if isinstance(item, str)]
+    stored_core = out.get('core_evidence_refs')
+    out['core_evidence_refs'] = [str(item) for item in stored_core
+                                 if isinstance(item, str) and item in refs] \
+        if isinstance(stored_core, list) else []
+    decision = str(out.get('decision') or '')
+    out['decision'] = decision if decision in ('confirm', 'veto', 'outdated', 'restore') else ''
     out['trigger_embedding'] = out.get('trigger_embedding') if isinstance(out.get('trigger_embedding'), dict) else None
     verification = out.get('verification') if isinstance(out.get('verification'), dict) else {}
     def count(key):
@@ -426,6 +438,86 @@ def _normalise_experience(row):
         'review_flag': verification.get('review_flag') is True,
     }
     return out
+
+
+def _stamp_after(left, right):
+    left_dt, right_dt = _parse_dt(left), _parse_dt(right)
+    if left_dt is None:
+        return False
+    if right_dt is None:
+        return True
+    return left_dt > right_dt
+
+
+_GOVERNANCE_FIELDS = ('status', 'decision', 'decided_by', 'decided_at', 'updated_at', 'note')
+
+
+def _adopt_governance(row, source):
+    for key in _GOVERNANCE_FIELDS:
+        if key in source:
+            row[key] = source[key]
+        else:
+            row.pop(key, None)
+
+
+def _resolve_governance_winner(row, disk_row):
+    """Keep the newer veto/restore decision when two snapshots disagree."""
+    row_status = str(row.get('status') or '')
+    disk_status = str(disk_row.get('status') or '')
+    if row_status == disk_status:
+        return
+    row_stamp = row.get('decided_at') or row.get('updated_at')
+    disk_stamp = disk_row.get('decided_at') or disk_row.get('updated_at')
+    if disk_status == 'vetoed' and row_status != 'vetoed':
+        if row.get('decision') == 'restore' and _stamp_after(row_stamp, disk_stamp):
+            return
+        if not row_stamp or _stamp_after(disk_stamp, row_stamp):
+            _adopt_governance(row, disk_row)
+        return
+    if row_status == 'vetoed' and disk_status != 'vetoed':
+        if disk_row.get('decision') in ('restore', 'confirm') and _stamp_after(disk_stamp, row_stamp):
+            _adopt_governance(row, disk_row)
+        return
+    if _stamp_after(disk_stamp, row_stamp):
+        _adopt_governance(row, disk_row)
+
+
+def _merge_governance_state(state, disk):
+    """Merge an older in-memory snapshot with the state currently on disk.
+
+    `_save_state()` may run after a long consolidation pass started from an old snapshot.
+    Re-reading the on-disk governance fields under the write lock keeps permanent vetoes
+    and later explicit restores monotonic even across processes/instances.
+    """
+    if not isinstance(disk, dict) or not isinstance(state, dict):
+        return state
+    disk_rows = {row.get('id'): row for row in (disk.get('experience_candidates') or [])
+                 if isinstance(row, dict) and row.get('id')}
+    rows = [row for row in (state.get('experience_candidates') or []) if isinstance(row, dict)]
+    seen = {row.get('id') for row in rows}
+    for row_id, disk_row in disk_rows.items():
+        if row_id not in seen:
+            rows.append(dict(disk_row))
+    for row in rows:
+        disk_row = disk_rows.get(row.get('id'))
+        if disk_row is not None and disk_row is not row:
+            _resolve_governance_winner(row, disk_row)
+    state['experience_candidates'] = rows
+    ledger = []
+    for source in (disk.get('vetoed_experiences'), state.get('vetoed_experiences')):
+        for value in source if isinstance(source, list) else ():
+            if (isinstance(value, str) and value.strip()
+                    and not any(_matches_governed_claim(value, old) for old in ledger)):
+                ledger.append(value)
+    for row in rows:
+        if row.get('decision') != 'restore':
+            continue
+        guidance = str(row.get('guidance') or '')
+        if guidance:
+            ledger = [value for value in ledger
+                      if not _matches_governed_claim(guidance, value)]
+    state['vetoed_experiences'] = ledger
+    return state
 
 
 def _redact_run_for_log(record):
@@ -642,7 +734,7 @@ class CognitiveConsolidator:
                 state[key] = raw[key]
         return state
 
-    def _save_state(self, state, *, active_memory_ids=None, active_autonomy_ids=None):
+    def _save_state(self, state, *, active_memory_ids=None, active_autonomy_ids=None, lock=True):
         # Bound auxiliary maps without evicting live active memory/autonomy fingerprints.
         for key, cap in (
             ('processed_batches', MAX_PROCESSED_BATCHES),
@@ -684,8 +776,17 @@ class CognitiveConsolidator:
             room = max(0, MAX_PENDING_COGNITION - len(open_items))
             state['pending_cognition_updates'] = open_items + (closed_items[-room:] if room > 0 else [])
 
-        with write_lock(self.store, self.cfg.id):
-            self.store.replace(self.state_path(), state)
+        if lock:
+            with write_lock(self.store, self.cfg.id):
+                self._write_state_locked(state)
+        else:
+            self._write_state_locked(state)
+
+    def _write_state_locked(self, state):
+        """Write state while preserving every newer veto/restore decision on disk."""
+        disk = _load_json_dict(self._state_file())
+        state = _merge_governance_state(state, disk)
+        self.store.replace(self.state_path(), state)
 
     def _append_run(self, record):
         self.store.append(self.runs_path(), _redact_run_for_log(record))
@@ -2197,6 +2298,18 @@ class CognitiveConsolidator:
                 'trigger_embedding': None,
                 'verification': {},
             }
+            # P7-EVIDENCE: bind the experience to the exact content it was formed from, so a
+            # later in-place edit with the same ID invalidates the old guidance.
+            try:
+                from veil.brain.experience_provider import EvidenceValidator, core_evidence_refs
+                evidence_validator = EvidenceValidator(
+                    self.cfg, self.store, memory=self.memory, profile=self.profile)
+                record['evidence_fingerprints'] = evidence_validator.current_fingerprints(
+                    valid_refs, milliseconds=2000)
+                record['core_evidence_refs'] = core_evidence_refs(record)
+            except Exception:
+                record['evidence_fingerprints'] = {}
+                record['core_evidence_refs'] = []
             if superseded_target is not None:
                 if superseded_target.get('status') == 'confirmed':
                     # Never retire a Lan-confirmed experience until Lan approves the revision!
@@ -2239,13 +2352,17 @@ class CognitiveConsolidator:
                 return item
         return {}
 
-    def _read_profile_raw(self):
+    def _read_profile_raw_checked(self):
+        """Return (data, readable). Unreadable profile data must fail closed for injection."""
         if self.profile is None or not hasattr(self.profile, 'read'):
-            return None
+            return None, True
         try:
-            return self.profile.read()
+            return self.profile.read(), True
         except Exception:
-            return None
+            return None, False
+
+    def _read_profile_raw(self):
+        return self._read_profile_raw_checked()[0]
 
     def _is_vetoed_experience(self, guidance, exp_list, profile_data, vetoed_ledger=None):
         for item in exp_list:
@@ -2260,7 +2377,8 @@ class CognitiveConsolidator:
                 if self.profile._is_rebutted_by_lan(guidance, profile_data):
                     return True
             except Exception:
-                pass
+                # A profile veto ledger we cannot check must block injection, never allow it.
+                return True
         return False
 
     # ------------------------------------------------------------------ execution engine
@@ -2683,15 +2801,56 @@ class CognitiveConsolidator:
                 break
         return out
 
+    def _read_state_shared(self, timeout=0.2):
+        """Read state under the same lock boundary that veto commits use.
+
+        A timed-out lock means "unavailable this turn", never "no vetoes".
+        """
+        try:
+            with write_lock(self.store, self.cfg.id, timeout=timeout):
+                return self._load_state()
+        except TimeoutError:
+            return None
+
+    def confirm_experience_candidates(self, candidate_ids):
+        """Return the IDs still confirmed and not vetoed, read under the commit boundary."""
+        wanted = [str(item) for item in (candidate_ids or ()) if item]
+        if not wanted:
+            return []
+        with self.mutex:
+            state = self._read_state_shared(timeout=0.2)
+            if state is None:
+                return []
+            rows = [row for row in (state.get('experience_candidates') or []) if isinstance(row, dict)]
+            vetoed_ledger = list(state.get('vetoed_experiences') or [])
+            profile_data, profile_ok = self._read_profile_raw_checked()
+            if self.profile is not None and not profile_ok:
+                return []
+            by_id = {row.get('id'): row for row in rows}
+            allowed = []
+            for candidate_id in wanted:
+                row = by_id.get(candidate_id)
+                if row is None or row.get('status') != 'confirmed':
+                    continue
+                if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data, vetoed_ledger):
+                    continue
+                allowed.append(candidate_id)
+            return allowed
+
     def query_experience_candidates(self, *, situation='', kinds=None, statuses=('confirmed',), limit=5,
                                     semantic_pool=False, evidence_validator=None, evidence_deadline=None):
         """Unified P7 read contract: return verified, non-vetoed experience hints matching a situation."""
         allowed_statuses = set(statuses or ('confirmed',))
         allowed_kinds = set(kinds) if kinds else None
         sit_tokens = _lexical_tokens(situation) if situation else set()
-        profile_data = self._read_profile_raw()
+        profile_data, profile_readable = self._read_profile_raw_checked()
+        if self.profile is not None and not profile_readable:
+            # Never inject while the persistent profile veto ledger cannot be checked.
+            return []
         with self.mutex:
-            state = self._load_state()
+            state = self._read_state_shared()
+            if state is None:
+                return []
             rows = list(state.get('experience_candidates') or [])
             vetoed_ledger = list(state.get('vetoed_experiences') or [])
         valid_mems = None if evidence_validator is not None else self._existing_memory_ids()
@@ -2768,7 +2927,7 @@ class CognitiveConsolidator:
         cid = str(candidate_id or '').strip()
         if not cid:
             return {'ok': False, 'error': 'missing_id', 'status_code': 400}
-        with self.mutex:
+        with self.mutex, write_lock(self.store, self.cfg.id):
             state = self._load_state()
             rows = state.get('experience_candidates') or []
             target = next((r for r in rows if isinstance(r, dict) and r.get('id') == cid), None)
@@ -2783,6 +2942,7 @@ class CognitiveConsolidator:
             mapping = {'confirm': 'confirmed', 'veto': 'vetoed', 'outdated': 'outdated', 'restore': 'confirmed'}
             now_stamp = self._now()
             target['status'] = mapping[action]
+            target['decision'] = action
             target['decided_by'] = 'lan'
             target['decided_at'] = now_stamp
             target['updated_at'] = now_stamp
@@ -2811,7 +2971,7 @@ class CognitiveConsolidator:
                     old_row['status'] = 'outdated'
                     old_row['superseded_by'] = cid
                     old_row['updated_at'] = now_stamp
-            self._save_state(state)
+            self._save_state(state, lock=False)
             return {'ok': True, 'candidate': dict(target)}
 
     def list_pending_cognition(self, *, status='pending', limit=60):

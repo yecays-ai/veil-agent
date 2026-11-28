@@ -247,6 +247,51 @@ output_cny_per_million = "8"
         self.assertEqual(debug['selected'], 4)
         self.assertEqual(debug['status'], 'injected')
         self.assertIn('p7.experience_hints', [row['label'] for row in context['context_modules']])
+        content = sent[index]['content']
+        self.assertIn('UNTRUSTED DATA', content)
+        start = content.index('<<<EXPERIENCE_DATA>>>')
+        end = content.index('<<<END_EXPERIENCE_DATA>>>')
+        guidance_at = content.index('read the local error before retrying')
+        self.assertLess(start, guidance_at)
+        self.assertLess(guidance_at, end)
+
+    def test_p7_final_veto_recheck_drops_hints_before_send(self):
+        class Provider:
+            def __call__(self, _situation):
+                return [{'id': 'exp-1', 'status': 'confirmed',
+                         'trigger_condition': 'fictional export failure',
+                         'guidance': 'read the local error before retrying'},
+                        {'id': 'exp-2', 'status': 'confirmed',
+                         'trigger_condition': 'fictional export failure',
+                         'guidance': 'second fictional guidance'}]
+
+            def confirm(self, _ids):
+                return ['exp-2']
+
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.experience_hint_provider = Provider()
+        chat.send('A fictional export failed.')
+        sent = self.model.call_args.args[0]
+        block = next((str(row.get('content')) for row in sent
+                      if str(row.get('content')).startswith('PROGRAM-SELECTED EXPERIENCE HINTS')), '')
+        self.assertIn('second fictional guidance', block)
+        self.assertNotIn('read the local error before retrying', block)
+
+    def test_p7_empty_final_veto_recheck_injects_nothing(self):
+        class Provider:
+            def __call__(self, _situation):
+                return [{'id': 'exp-1', 'status': 'confirmed',
+                         'trigger_condition': 'fictional export failure',
+                         'guidance': 'read the local error before retrying'}]
+
+            def confirm(self, _ids):
+                return []
+
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.experience_hint_provider = Provider()
+        chat.send('A fictional export failed.')
+        sent = self.model.call_args.args[0]
+        self.assertFalse(any('PROGRAM-SELECTED EXPERIENCE HINTS' in str(row.get('content')) for row in sent))
 
     def test_p7_slot_sits_between_short_notes_and_recall_candidates(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -323,16 +368,22 @@ output_cny_per_million = "8"
         })
         chat = Chat(self.cfg, self.store, self.budget, self.model)
         state = chat.consolidation._load_state()
-        state['experience_candidates'] = [{
+        candidate = {
             'id': 'exp-real-chain', 'schema_version': 'p7.experience.v1',
             'content_key': 'real-chain', 'kind': 'tool_lesson',
             'trigger_condition': 'fictional export failure',
             'guidance': 'read the local error before retrying',
             'reason': 'fictional verified evidence',
             'evidence_refs': ['chat:p7-evidence-1'], 'status': 'confirmed',
+            'origin_evidence_tier': 'L1_user_feedback',
+            'core_evidence_refs': ['chat:p7-evidence-1'],
             'created_at': '2026-11-28T10:00:00+08:00',
             'updated_at': '2026-11-28T10:00:00+08:00',
-        }]
+        }
+        candidate['evidence_fingerprints'] = (
+            chat.experience_hint_provider.validator.current_fingerprints(
+                candidate['evidence_refs'], milliseconds=2000))
+        state['experience_candidates'] = [candidate]
         chat.consolidation._save_state(state)
         chat.experience_hint_provider.update_settings({'enabled': True}, expected_revision=1)
 

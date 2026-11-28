@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from veil.brain.cognitive_consolidation import CognitiveConsolidator, _normalise_experience
-from veil.brain.experience_provider import EvidenceValidator, ExperienceHintProvider, SituationEnvelope
+from veil.brain.experience_provider import (
+    MAX_CACHE_ENTRIES, EvidenceValidator, ExperienceHintProvider, SituationEnvelope,
+)
 from veil.brain.learned_context import LearnedContext
 from veil.brain.storage import brain_backup, brain_events, brain_writer, veil_brain
 from veil.core.config_registry import experience_injection_config_overview
@@ -68,7 +70,9 @@ class P7S1ExperienceProviderTests(unittest.TestCase):
             memory=self.memory, profile=self.profile,
         )
         state = self.cons._load_state()
-        state['experience_candidates'] = [_candidate()]
+        state['experience_candidates'] = [
+            self._fingerprinted(_candidate(), EvidenceValidator(
+                self.cfg, self.store, memory=self.memory, profile=self.profile))]
         self.cons._save_state(state)
         self.provider = ExperienceHintProvider(
             self.cfg, self.store, consolidator=self.cons,
@@ -77,6 +81,13 @@ class P7S1ExperienceProviderTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    @staticmethod
+    def _fingerprinted(candidate, validator):
+        candidate = dict(candidate)
+        refs = list(candidate.get('evidence_refs') or [])
+        candidate['evidence_fingerprints'] = validator.current_fingerprints(refs, milliseconds=2000)
+        return candidate
 
     def test_default_off_persists_with_revision_and_zero_candidates(self):
         situation = SituationEnvelope(
@@ -144,7 +155,8 @@ class P7S1ExperienceProviderTests(unittest.TestCase):
         refs = ('memory:mem-1', 'event:event-1', 'chat:chat-1', 'autonomy:auto-1',
                 'tool:tool-1', 'long_task:task-1')
         for index, ref in enumerate(refs):
-            self.assertEqual(validator.validate(_candidate(f'exp-{index}', ref)), 'valid', ref)
+            candidate = self._fingerprinted(_candidate(f'exp-{index}', ref), validator)
+            self.assertEqual(validator.validate(candidate), 'valid', ref)
 
         conn = sqlite3.connect(self.db)
         brain_writer.hard_delete(conn, 'mem-1', reason='test')
@@ -160,7 +172,8 @@ class P7S1ExperienceProviderTests(unittest.TestCase):
         (self.role / 'tools.jsonl').write_text('', encoding='utf-8')
         (self.role / 'long-task.json').write_text(json.dumps({'task_id': 'task-2'}), encoding='utf-8')
         for index, ref in enumerate(refs):
-            self.assertNotIn(validator.validate(_candidate(f'exp-x-{index}', ref)), ('valid', 'partial_stale'), ref)
+            candidate = self._fingerprinted(_candidate(f'exp-x-{index}', ref), validator)
+            self.assertNotIn(validator.validate(candidate), ('valid', 'partial_stale'), ref)
 
     def test_legacy_contract_is_additive_and_conservative(self):
         projected = _normalise_experience(_candidate())
@@ -225,6 +238,199 @@ class P7S1ExperienceProviderTests(unittest.TestCase):
         self.assertTrue(backup_done.is_set())
         saved = json.loads((backup_dir / 'experience-injection.json').read_text(encoding='utf-8'))
         self.assertTrue(saved['enabled'])
+
+
+    # ------------------------------------------------------------------ review regression (PR #470)
+
+    def _enable(self):
+        self.provider.update_settings({'enabled': True}, expected_revision=1)
+
+    def test_veto_committed_after_query_is_rejected_before_render(self):
+        self._enable()
+        rows = self.provider('fictional export failure')
+        self.assertEqual([row['id'] for row in rows], ['exp-1'])
+        self.cons.decide_experience_candidate('exp-1', 'veto', note='concurrent veto')
+        self.assertEqual(self.provider.confirm(['exp-1']), [])
+        self.assertEqual(self.provider('fictional export failure'), [])
+
+    def test_stale_state_save_cannot_resurrect_permanent_veto(self):
+        stale = self.cons._load_state()
+        self.cons.decide_experience_candidate('exp-1', 'veto', note='veto before slow save')
+        stale['runs_today'] = 7
+        self.cons._save_state(stale)
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        self.assertEqual(row['status'], 'vetoed')
+        self.assertIn('read the local error before retrying', state['vetoed_experiences'])
+        self.assertEqual(self.provider('fictional export failure'), [])
+
+    def test_in_place_evidence_edit_invalidates_recorded_basis(self):
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        candidate = self._fingerprinted(_candidate(), validator)
+        self.assertEqual(validator.validate(candidate), 'valid')
+        conn = sqlite3.connect(self.db)
+        conn.execute("UPDATE memories SET body='different fiction' WHERE id='mem-1'")
+        conn.commit()
+        brain_writer.refresh_digest(conn)
+        conn.close()
+        self.assertEqual(validator.validate(candidate), 'invalid')
+
+    def test_pending_delete_request_invalidates_cached_validation(self):
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        candidate = self._fingerprinted(_candidate(), validator)
+        self.assertEqual(validator.validate(candidate), 'valid')
+        conn = sqlite3.connect(self.db)
+        conn.execute(
+            "INSERT INTO delete_requests(request_id,memory_id,reason,status,created_at,raw_json) "
+            "VALUES('dr-1','mem-1','test','pending','2026-11-28T10:00:00+08:00','{}')")
+        conn.commit()
+        conn.close()  # no digest refresh: the cache must still notice the pending delete
+        self.assertEqual(validator.validate(candidate), 'invalid')
+
+    def test_event_without_live_memory_or_sources_is_invalid(self):
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        candidate = self._fingerprinted(_candidate(ref='event:event-1'), validator)
+        self.assertEqual(validator.validate(candidate), 'valid')
+        conn = sqlite3.connect(self.db)
+        brain_writer.hard_delete(conn, 'mem-1', reason='test')
+        conn.commit()
+        brain_writer.refresh_digest(conn)
+        conn.close()
+        self.assertEqual(validator.validate(candidate), 'invalid')
+
+    def test_withdrawn_autonomy_evidence_is_invalid(self):
+        self.store.append('peter/autonomy.jsonl', {
+            'started_at': 'auto-9', 'summary': 'fictional practice',
+            'output_audit': {'clean': True, 'issues': []},
+        })
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        candidate = self._fingerprinted(_candidate(ref='autonomy:auto-9'), validator)
+        self.assertEqual(validator.validate(candidate), 'valid')
+        (self.role / 'autonomy.jsonl').write_text(json.dumps({
+            'started_at': 'auto-9', 'summary': 'fictional practice', 'withdrawn': True,
+            'output_audit': {'clean': True, 'issues': []},
+        }) + '\n', encoding='utf-8')
+        self.assertEqual(validator.validate(candidate), 'invalid')
+
+    def test_partial_stale_requires_remaining_core_evidence(self):
+        self.store.append('peter/chat.jsonl', {
+            'role': 'user', 'content': 'fictional confirmation', 'message_id': 'chat-9',
+        })
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        l1 = self._fingerprinted({
+            **_candidate('exp-l1'),
+            'evidence_refs': ['chat:chat-9', 'memory:mem-1'],
+            'origin_evidence_tier': 'L1_user_feedback',
+        }, validator)
+        self.assertEqual(validator.validate(l1), 'valid')
+        conn = sqlite3.connect(self.db)
+        brain_writer.hard_delete(conn, 'mem-1', reason='test')
+        conn.commit()
+        brain_writer.refresh_digest(conn)
+        conn.close()
+        self.profile.invalidate_evidence_cache()
+        # chat evidence is still a valid core reference -> partial stale is injectable with a warning
+        self.assertEqual(validator.validate(l1), 'partial_stale')
+
+        conn = sqlite3.connect(self.db)
+        brain_writer.apply_create_memory(conn, {
+            'id': 'mem-2', 'body': 'second fictional lesson', 'title': 'Second lesson',
+            'type': 'story', 'importance': 5, 'domain': [], 'tags': [],
+        })
+        conn.commit()
+        brain_writer.refresh_digest(conn)
+        conn.close()
+        (self.role / 'tools.jsonl').write_text('', encoding='utf-8')
+        self.store.append('peter/tools.jsonl', {
+            'request_id': 'req-9', 'call_id': 'tool-9', 'tool': 'fictional', 'state': 'ok',
+        })
+        l2 = self._fingerprinted({
+            **_candidate('exp-l2'),
+            'evidence_refs': ['tool:tool-9', 'memory:mem-2'],
+            'origin_evidence_tier': 'L2_objective_action',
+        }, validator)
+        self.assertEqual(validator.validate(l2), 'valid')
+        (self.role / 'tools.jsonl').write_text('', encoding='utf-8')
+        # the only core (L2) reference is gone; a still-valid memory ref cannot stand in for it
+        self.assertEqual(validator.validate(l2), 'invalid')
+
+    def test_unreadable_profile_veto_ledger_fails_closed(self):
+        self._enable()
+        self.profile.read = Mock(side_effect=RuntimeError('fictional io failure'))
+        self.assertEqual(self.provider('fictional export failure'), [])
+
+    def test_long_task_read_is_bounded_by_budget(self):
+        (self.role / 'long-task.json').write_text(
+            json.dumps({'task_id': 'task-9', 'blob': 'x' * (1024 * 1024)}), encoding='utf-8')
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        candidate = self._fingerprinted(_candidate(ref='long_task:task-9'), validator)
+        started = time.monotonic()
+        self.assertEqual(validator.validate(candidate), 'unavailable')
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_validation_cache_stays_bounded(self):
+        validator = EvidenceValidator(self.cfg, self.store, memory=self.memory, profile=self.profile)
+        for index in range(MAX_CACHE_ENTRIES + 150):
+            validator.validate(_candidate(f'exp-cache-{index}', f'memory:missing-{index}'))
+        self.assertLessEqual(len(validator._cache), MAX_CACHE_ENTRIES)
+
+    def test_transient_unavailable_does_not_demote_confirmed(self):
+        from unittest.mock import patch
+        unavailable = ('unavailable', {'raw': {'memory:mem-1': 'unavailable'}, 'effective': {}})
+        with patch.object(EvidenceValidator, 'validate_detailed', return_value=unavailable):
+            result = brain_backup.reconcile_companion_state(self.role)
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        self.assertEqual(row['status'], 'confirmed')
+        self.assertEqual(row['evidence_state'], 'unavailable')
+        self.assertEqual(result['p7_candidates_stale'], 1)
+
+        invalid = ('invalid', {'raw': {'memory:mem-1': 'invalid'}, 'effective': {}})
+        with patch.object(EvidenceValidator, 'validate_detailed', return_value=invalid):
+            brain_backup.reconcile_companion_state(self.role)
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        self.assertEqual(row['status'], 'uncertain')
+
+    def test_old_backup_does_not_undo_later_explicit_restore(self):
+        guidance = 'read the local error before retrying'
+        self.cons.decide_experience_candidate('exp-1', 'veto')
+        backup_dir = self.root / 'before-restore'
+        brain_backup.backup_bundle(self.role, backup_dir)
+        time.sleep(1.1)  # governance timestamps have second precision
+        self.cons.decide_experience_candidate('exp-1', 'restore')
+        brain_backup.restore_bundle(backup_dir, self.role)
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        self.assertEqual(row['status'], 'confirmed')
+        self.assertNotIn(guidance, state['vetoed_experiences'])
+
+
+    def test_restore_keeps_config_revision_monotonic(self):
+        self.provider.update_settings({'enabled': True}, expected_revision=1)
+        backup_dir = self.root / 'config-before-updates'
+        brain_backup.backup_bundle(self.role, backup_dir)
+        self.provider.update_settings({'max_items': 2}, expected_revision=2)
+        self.provider.update_settings({'max_items': 3}, expected_revision=3)
+        brain_backup.restore_bundle(backup_dir, self.role)
+        raw = json.loads((self.role / 'experience-injection.json').read_text(encoding='utf-8'))
+        self.assertGreaterEqual(raw['_revision'], 5)
+        stale = self.provider.update_settings({'max_items': 1}, expected_revision=4)
+        self.assertEqual(stale['status_code'], 409)
+
+    def test_reconcile_reverifies_legacy_without_content_baseline(self):
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        row.pop('evidence_fingerprints', None)
+        row['evidence_state'] = 'unavailable'
+        self.cons._save_state(state)
+        result = brain_backup.reconcile_companion_state(self.role)
+        state = self.cons._load_state()
+        row = next(item for item in state['experience_candidates'] if item['id'] == 'exp-1')
+        self.assertTrue(row.get('evidence_fingerprints'))
+        self.assertEqual(row['evidence_state'], 'valid')
+        self.assertIn('evidence_reverified_at', row)
+        self.assertEqual(result['p7_candidates_checked'], 1)
 
 
 if __name__ == '__main__':

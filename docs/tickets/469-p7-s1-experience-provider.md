@@ -21,3 +21,15 @@
 1. 在隔离数据中证明 P7 默认关闭时真实 Chat 请求为 0 Token、0 候选查询，provider 异常不阻断回复。
 2. 开启后用 Peter/Ghost 假数据证明只注入本角色 `confirmed` 经验；逐类删除或改写 `memory/event/chat/autonomy/tool/long_task` 证据后立即停止注入。
 3. 并发写配置与备份、恢复旧备份，证明 bundle generation 一致、永久否决不丢失、不复活、恢复后无悬空注入。
+
+## 审查修复（PR #470 · 2026-11-28）
+
+按 PR #470 的 18 条审查意见在 S1 范围内集中修复，不提前施工 S2 语义匹配：
+
+- **否决与并发**：状态读取/修改/保存统一在 `mutex + brain-write.lock` 边界；保存时与磁盘状态合并治理字段；Provider 返回前与 Chat 渲染前两次同步复核；Profile 否决账本不可读时 fail-closed。
+- **证据有效性**：形成期逐引用内容指纹、`delete_requests` 缓存失效、事件需有效关联记忆或来源、自主/工具日志撤回标记、`partial_stale` 有效核心规则、临时不可用不降级、长任务 512KB + 150ms 预算、缓存封顶。
+- **备份恢复**：旧备份不撤销更晚的显式恢复决定；恢复 P7 配置 revision 单调递增；恢复期临时不可用不降级。
+- **内容安全**：经验按不可信数据区块呈现，权限/审批/预算/参数校验仍由程序独立执行。
+- **审查收口**：HANDOFF 只链接 STATUS；200 条候选池硬截断登记为 P7-S2 `P7-MATCH-02`；两条 SQL 扫描告警核实为固定 SQL 片段 + `?` 参数绑定的误报，已改为纯字面量参数化查询，不引入 ORM、不重构数据库层。
+
+验收步骤与结果见 `docs/reports/p7-s1-experience-provider-acceptance-20261128.md`。

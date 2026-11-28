@@ -2784,9 +2784,15 @@ class Chat:
         ``experience_hint_provider`` later; without it the slot costs zero tokens.
         Diagnostics go into the caller's per-request ``debug`` dict, never into shared
         instance state, so overlapping requests cannot read each other's P7 counts.
+
+        Experience prose is untrusted data: it is bounded, framed between data markers and
+        never treated as instructions or as a source of tool permissions.
         """
         if debug is None:
             debug = {}
+        from veil.brain.experience_provider import (
+            EXPERIENCE_DATA_END, EXPERIENCE_DATA_START, clean_experience_text,
+        )
         provider = getattr(self, 'experience_hint_provider', None)
         provider_settings = getattr(provider, 'settings', None)
         try:
@@ -2804,20 +2810,30 @@ class Chat:
         except Exception:
             debug['status'] = 'provider_failed'
             return None
-        rows = rows if isinstance(rows, list) else []
+        rows = [row for row in rows if isinstance(row, dict) and row.get('status') == 'confirmed'] \
+            if isinstance(rows, list) else []
+        confirm = getattr(provider, 'confirm', None)
+        if rows and callable(confirm):
+            ids = [str(row.get('id') or '') for row in rows]
+            if any(ids):
+                try:
+                    allowed = set(confirm([item for item in ids if item]))
+                except Exception:
+                    allowed = set()
+                rows = [row for row in rows if str(row.get('id') or '') in allowed]
+                debug['veto_confirmed'] = len(rows)
         header = prompts.text('memory.experience.hints')
+        opening = header + '\n' + EXPERIENCE_DATA_START
         kept = []
         for row in rows:
-            if not isinstance(row, dict) or row.get('status') != 'confirmed':
-                debug['dropped'] += 1
-                continue
-            trigger = ' '.join(str(row.get('trigger_condition') or '').split())
-            guidance = ' '.join(str(row.get('guidance') or '').split())
+            trigger = clean_experience_text(row.get('trigger_condition'))
+            guidance = clean_experience_text(row.get('guidance'))
             if not trigger or not guidance or len(kept) >= max_items:
                 debug['dropped'] += 1
                 continue
             candidate = f'- When: {trigger}\n  Guidance: {guidance}'
-            message = {'role': 'system', 'content': header + '\n' + '\n'.join([*kept, candidate])}
+            message = {'role': 'system',
+                       'content': opening + '\n' + '\n'.join([*kept, candidate]) + '\n' + EXPERIENCE_DATA_END}
             used = estimate_message_tokens([message], 0.5)
             if used > budget_tokens:
                 debug['dropped'] += 1
@@ -2827,7 +2843,8 @@ class Chat:
         if not kept:
             return None
         debug.update(selected=len(kept), status='injected')
-        return {'role': 'system', 'content': header + '\n' + '\n'.join(kept)}
+        return {'role': 'system',
+                'content': opening + '\n' + '\n'.join(kept) + '\n' + EXPERIENCE_DATA_END}
 
     @property
     def capability_history_record(self):
