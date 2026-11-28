@@ -14,10 +14,11 @@ import shutil
 import sqlite3
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from veil.brain.learned_context import LearnedContext
+from veil.brain.learned_context import LearnedContext, _matches_governed_claim
 from veil.brain.storage.brain_lock import write_lock
 
 COUNTS = ('memories', 'versions', 'vectors', 'events', 'event_stages', 'event_ledger',
@@ -71,6 +72,9 @@ def _jsonl_identity(item):
     """Stable identity of one experience-memory row, or None when the row has none."""
     if not isinstance(item, dict):
         return None
+    if all(isinstance(item.get(key), str) and item.get(key)
+           for key in ('request_id', 'exp_id', 'event_type', 'result_id')):
+        return ('p7-feedback', item['request_id'], item['exp_id'], item['event_type'], item['result_id'])
     kind = item.get('kind')
     source_key = item.get('source_key')
     if not isinstance(kind, str) or not kind:
@@ -563,10 +567,121 @@ COMPANION_FILES = (
     'experience-memory.jsonl',
     'experience-memory-failures.jsonl',
     'recall-rotation.json',
+    'cognitive-consolidation-state.json',
+    'cognitive-consolidation.json',
+    'experience-injection.json',
+    'experience-feedback.jsonl',
 )
 
 # Files reconcile_companion_state() may rewrite; restore snapshots them before it runs.
-RECONCILE_FILES = ('learned-context.json', 'experience-memory.jsonl')
+RECONCILE_FILES = ('learned-context.json', 'experience-memory.jsonl',
+                   'cognitive-consolidation-state.json')
+
+
+def _parse_stamp(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    for candidate in (text, text[:19], text[:10]):
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+    return None
+
+
+def _stamp_after(left, right):
+    left_dt, right_dt = _parse_stamp(left), _parse_stamp(right)
+    if left_dt is None:
+        return False
+    if right_dt is None:
+        return True
+    return left_dt > right_dt
+
+
+def _later_restore_rows(current):
+    rows = []
+    for row in current.get('experience_candidates') or ():
+        if (isinstance(row, dict) and row.get('decision') == 'restore'
+                and isinstance(row.get('guidance'), str) and row.get('guidance')):
+            rows.append(row)
+    return rows
+
+
+def _merge_cognitive_state(existing_text: str, bundle_text: str, *, bundle_at: str = '') -> str:
+    """Restore old state while preserving every newer veto *or explicit restore*.
+
+    Governance order is decided by the decision timestamps: a veto recorded after the
+    bundle or a restore performed after the bundle must not be undone by an older copy.
+    """
+    try:
+        current = json.loads(existing_text)
+        restored = json.loads(bundle_text)
+    except (TypeError, ValueError):
+        return bundle_text
+    if not isinstance(current, dict) or not isinstance(restored, dict):
+        return bundle_text
+    restores = _later_restore_rows(current)
+
+    def newer_restore(guidance):
+        for row in restores:
+            if not _matches_governed_claim(guidance, row.get('guidance', '')):
+                continue
+            if not bundle_at or _stamp_after(row.get('decided_at'), bundle_at):
+                return row
+        return None
+
+    for candidate in restored.get('experience_candidates') or ():
+        if not isinstance(candidate, dict):
+            continue
+        guidance = str(candidate.get('guidance') or '')
+        restore_row = newer_restore(guidance) if guidance else None
+        if restore_row is not None:
+            candidate['status'] = 'confirmed'
+            candidate['decision'] = 'restore'
+            candidate['decided_by'] = restore_row.get('decided_by') or 'lan'
+            candidate['decided_at'] = restore_row.get('decided_at') or ''
+            candidate['updated_at'] = restore_row.get('decided_at') or candidate.get('updated_at')
+
+    vetoes = []
+    for source in (restored.get('vetoed_experiences'), current.get('vetoed_experiences')):
+        for value in source if isinstance(source, list) else ():
+            if not isinstance(value, str) or not value.strip():
+                continue
+            if newer_restore(value) is not None:
+                continue
+            if not any(_matches_governed_claim(value, old) for old in vetoes):
+                vetoes.append(value)
+    restored['vetoed_experiences'] = vetoes
+    for candidate in restored.get('experience_candidates') or ():
+        if not isinstance(candidate, dict):
+            continue
+        guidance = str(candidate.get('guidance') or '')
+        if not guidance or candidate.get('decision') == 'restore':
+            continue
+        if any(_matches_governed_claim(guidance, veto) for veto in vetoes):
+            candidate['status'] = 'vetoed'
+            candidate['decision'] = 'veto'
+    return json.dumps(restored, ensure_ascii=False, indent=2) + '\n'
+
+
+def _merge_settings_revision(existing_text: str, bundle_text: str) -> str:
+    """Restore P7 settings but keep `_revision` above both live and restored versions."""
+    try:
+        current = json.loads(existing_text)
+        restored = json.loads(bundle_text)
+    except (TypeError, ValueError):
+        return bundle_text
+    if not isinstance(current, dict) or not isinstance(restored, dict):
+        return bundle_text
+    current_rev = current.get('_revision')
+    current_rev = current_rev if type(current_rev) is int and current_rev >= 1 else 1
+    restored_rev = restored.get('_revision')
+    restored_rev = restored_rev if type(restored_rev) is int and restored_rev >= 1 else 1
+    restored['_revision'] = max(current_rev, restored_rev) + 1
+    return json.dumps(restored, ensure_ascii=False, indent=2) + '\n'
 
 
 def _sha256_file(path: Path) -> str:
@@ -722,10 +837,73 @@ def reconcile_companion_state(role_dir: str | Path) -> dict[str, Any]:
         if changed:
             exp_path.write_text('\n'.join(updated_lines) + '\n', encoding='utf-8')
 
+    p7_checked = 0
+    p7_stale = 0
+    p7_vetoed = 0
+    p7_path = role / 'cognitive-consolidation-state.json'
+    if p7_path.exists():
+        try:
+            p7_state = json.loads(p7_path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeError):
+            p7_state = None
+        if isinstance(p7_state, dict):
+            from veil.brain.experience_provider import EvidenceValidator
+            validator = EvidenceValidator(
+                SimpleNamespace(id=role.name), SimpleNamespace(root=role.parent),
+            )
+            changed = False
+            vetoes = [value for value in (p7_state.get('vetoed_experiences') or [])
+                      if isinstance(value, str) and value.strip()]
+            for candidate in p7_state.get('experience_candidates') or ():
+                if not isinstance(candidate, dict):
+                    continue
+                p7_checked += 1
+                guidance = str(candidate.get('guidance') or '')
+                if guidance and any(_matches_governed_claim(guidance, veto) for veto in vetoes):
+                    if candidate.get('status') != 'vetoed':
+                        candidate['status'] = 'vetoed'
+                        changed = True
+                    p7_vetoed += 1
+                    continue
+                evidence_state, detail = validator.validate_detailed(candidate)
+                refs = [ref for ref in (candidate.get('evidence_refs') or ())
+                        if isinstance(ref, str) and ':' in ref]
+                if not candidate.get('evidence_fingerprints') and refs:
+                    # Re-verification baseline for rows formed before content fingerprints were
+                    # recorded: only an all-valid current read may become the new baseline.
+                    raw = detail.get('raw') or {}
+                    if all(raw.get(ref) == 'valid' for ref in refs):
+                        fingerprints = validator.current_fingerprints(refs, milliseconds=2000)
+                        if len(fingerprints) == len(refs):
+                            candidate['evidence_fingerprints'] = fingerprints
+                            candidate['evidence_reverified_at'] = datetime.now().astimezone().isoformat(
+                                timespec='seconds')
+                            evidence_state = 'valid'
+                            changed = True
+                if candidate.get('evidence_state') != evidence_state:
+                    candidate['evidence_state'] = evidence_state
+                    changed = True
+                if evidence_state == 'invalid':
+                    # Only definitive invalidity demotes; a temporary lock/read failure pauses
+                    # injection without destroying the confirmed status.
+                    p7_stale += 1
+                    if candidate.get('status') == 'confirmed' and candidate.get('locked') is not True:
+                        candidate['status'] = 'uncertain'
+                        changed = True
+                elif evidence_state == 'unavailable':
+                    p7_stale += 1
+            if changed:
+                temporary = p7_path.with_name('.cognitive-consolidation-state.reconcile.tmp')
+                temporary.write_text(json.dumps(p7_state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                os.replace(temporary, p7_path)
+
     return {
         'stale_learned_context_refs': stale_refs,
         'experience_entries_checked': exp_checked,
         'experience_unlinked_stages': exp_missing_stages,
+        'p7_candidates_checked': p7_checked,
+        'p7_candidates_stale': p7_stale,
+        'p7_candidates_vetoed': p7_vetoed,
     }
 
 
@@ -740,6 +918,7 @@ def backup_bundle(role_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     db_path = role / 'brain.db'
+    generation = uuid.uuid4().hex
     with write_lock(SimpleNamespace(root=role.parent), role.name):
         _recover_learned_context(role)
         db_meta = backup(db_path, out / 'brain.db')
@@ -757,6 +936,8 @@ def backup_bundle(role_dir: str | Path, out_dir: str | Path) -> dict[str, Any]:
         watermark = _chat_watermark(role / 'chat.jsonl')
     manifest = {
         'version': 1,
+        'generation': generation,
+        'created_at': datetime.now().astimezone().isoformat(timespec='seconds'),
         'db': {
             'file': 'brain.db',
             'bytes': db_meta['bytes'],
@@ -803,6 +984,17 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
     if not manifest_path.exists():
         raise FileNotFoundError(f'bundle-manifest.json not found in {bundle}')
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    version = manifest.get('version', 1)
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('unsupported bundle manifest version')
+    generation = manifest.get('generation')
+    if generation is not None and (not isinstance(generation, str) or len(generation) != 32
+                                   or any(char not in '0123456789abcdef' for char in generation)):
+        raise ValueError('bundle manifest has no valid generation')
+    bundle_at = manifest.get('created_at')
+    if not isinstance(bundle_at, str) or not bundle_at:
+        bundle_at = datetime.fromtimestamp(manifest_path.stat().st_mtime).astimezone().isoformat(
+            timespec='seconds')
 
     db_info = manifest.get('db') or {}
     if not isinstance(db_info, dict):
@@ -868,6 +1060,25 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
                     os.replace(temporary, dst)
                     restored_companions.append(name)
                     continue
+                if dst.exists() and name == 'cognitive-consolidation-state.json':
+                    merged_text = _merge_cognitive_state(
+                        dst.read_text(encoding='utf-8'), src.read_text(encoding='utf-8'),
+                        bundle_at=bundle_at)
+                    temporary = role / f'.{name}.restore-{uuid.uuid4().hex}'
+                    temporary.write_text(merged_text, encoding='utf-8')
+                    os.replace(temporary, dst)
+                    restored_companions.append(name)
+                    continue
+                if dst.exists() and name == 'experience-injection.json':
+                    # Restored settings keep a revision above both snapshots so a stale UI
+                    # client cannot compare-and-swap over the restored configuration.
+                    merged_text = _merge_settings_revision(
+                        dst.read_text(encoding='utf-8'), src.read_text(encoding='utf-8'))
+                    temporary = role / f'.{name}.restore-{uuid.uuid4().hex}'
+                    temporary.write_text(merged_text, encoding='utf-8')
+                    os.replace(temporary, dst)
+                    restored_companions.append(name)
+                    continue
                 temporary = role / f'.{name}.restore-{uuid.uuid4().hex}'
                 shutil.copy2(src, temporary)
                 os.replace(temporary, dst)
@@ -899,6 +1110,7 @@ def restore_bundle(bundle_dir: str | Path, role_dir: str | Path) -> dict[str, An
             raise
     return {
         'db': db_result,
+        'generation': generation,
         'restored_companions': restored_companions,
         'preserved_newer': preserved_newer,
         'reconcile': reconcile,

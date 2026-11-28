@@ -399,3 +399,46 @@ def consolidation_config_overview(*, role_id: str, persisted: Mapping | None = N
             Observation(Source.RUNTIME, eff_vals[key]),
         )
     return consolidation_config_registry().overview(role_id=role_id, evidence=evidence)
+
+
+# P7-S1: role-local experience injection settings (UI controls land in P7-S4).
+_EXPERIENCE_INJECTION_DEFINITIONS = ConfigRegistry((
+    ConfigDefinition('memory.p7.enabled', '情境经验注入总开关（默认关闭）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.allow_in_autonomy', '允许自主活动使用情境经验',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.p7.allow_tool_step_recheck', '允许工具步骤补检工作经验',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.auto_promote_objective', '客观工具实证自动晋升（默认关闭）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.p7.auto_promote_commitment', '承诺客观实证自动晋升（默认关闭）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_TASK, sensitive=False),
+    ConfigDefinition('memory.p7.semantic_gate_enabled', '灰区语义复核（默认关闭）',
+                     Scope.ROLE, ValueType.BOOLEAN, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.semantic_gate_daily_budget_cny', '灰区语义复核每日上限（元）',
+                     Scope.ROLE, ValueType.NUMBER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.max_items', '单轮经验注入条数上限',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.max_tokens', '单轮经验注入 Token 上限',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+    ConfigDefinition('memory.p7.session_cooldown_turns', '同会话经验冷却轮数',
+                     Scope.ROLE, ValueType.INTEGER, ApplyMode.NEXT_REQUEST, sensitive=False),
+))
+
+
+def experience_injection_config_overview(*, role_id: str, persisted: Mapping | None = None,
+                                         runtime: Mapping | None = None) -> dict:
+    from veil.brain.experience_provider import DEFAULTS, settings_from
+
+    saved = persisted if isinstance(persisted, Mapping) else {}
+    configured = settings_from(saved)
+    effective = settings_from(runtime) if isinstance(runtime, Mapping) else configured
+    evidence = {}
+    for key in DEFAULTS:
+        source = Source.SAVED if key in saved else Source.SETTINGS_DEFAULT
+        evidence[f'memory.p7.{key}'] = ConfigEvidence(
+            role_id,
+            Observation(source, configured[key]),
+            Observation(Source.RUNTIME, effective[key]),
+        )
+    return _EXPERIENCE_INJECTION_DEFINITIONS.overview(role_id=role_id, evidence=evidence)
