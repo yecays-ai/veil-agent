@@ -53,6 +53,14 @@ P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实�
 - **审核意见归类**：预算跨进程超额在正式 CLI/Web 入口受 Store 数据目录排他锁保护，属当前不支持双进程共享 Budget 的条件性风险；工具提示共享额度已由 `p7_debug` 传入 `_tool_chat`，原评论读取对象有误；同 Chat 模型配置持有整轮模型锁。模型/端点变更仅在显式重启 P7 设置时预热，不在普通聊天/启动时产生额外付费调用；不改变程序权限。
 - **关闭证据**：新增回归修复前稳定读回 model-A 而失败，修复后通过；原 182 项上补充审查回归与提示词注册测试后定向 229/229 通过。未施工 S3～S5。
 
+## HEAD 语义去重补全（2026-11-28）
+
+- 已实现真实 HEAD/guidance 余弦 `>=0.85` 去重。显式启用与候选确认使用现有预算预留/结算，预热 `build_prompt().notes`、最终关系 `items[].line` 和候选指导向量；普通 Chat 使用同源 HEAD 文本，只读缓存，不新增 Embed。缓存仅存文本哈希、模型/端点身份和向量，不存 HEAD 正文；文本、模型、端点变化拒绝旧缓存，显式再次启用可刷新。
+- 角色缓存 `experience-head-vectors.json` 在角色写锁内原子保存，并纳入既有协同备份。读取损坏缓存保守拒绝，重建 Provider 可复用持久向量。
+- 真实 `Chat.send()` 对照：没有 HEAD 时同一输入能注入 guidance，有跨语言同义 HEAD 时不注入；两轮均零新增 Embed。禁用语义去重后该测试稳定失败，启用后通过。渲染层独立保留数字计数与 Provider 过滤原因，修复预算裁剪类型错误。
+- 候选查询预提否决项，消除对所有 confirmed 行的重复扫描；206 个候选无否决时扫描数由 42436 降为 0，保留旧目标和否决正确性。没有按时间截断候选。
+- 最终定向命令：`python -m unittest tests.test_p7_s2_head_semantic tests.test_p7_s2_candidate_scaling tests.test_p7_s2_head_backup tests.test_p7_s2_experience_matching tests.test_p7_s2_cache_governance tests.test_p7_s2_chat_review tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup tests.test_prompt_registry -q`：**238/238，39.915 秒，exit 0**。不在本地运行全仓测试，推送后交 GitHub CI。
+
 ## 明确未施工
 
 - 未施工 S3 的四级晋升、反馈账本、`experience_reflect` 与行为结果闭环。

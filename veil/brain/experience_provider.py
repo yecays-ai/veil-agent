@@ -543,10 +543,31 @@ class ExperienceHintProvider:
         self._local = threading.local()
         self._gate_day = ''
         self._gate_spent = 0.0
+        self._head_vectors = self._read_head_vectors()
         self.consolidator.experience_confirmed_callback = self.warm_embeddings
 
     def settings_path(self):
         return f'{self.cfg.id}/experience-injection.json'
+
+    def _head_cache_path(self):
+        return f'{self.cfg.id}/experience-head-vectors.json'
+
+    def _read_head_vectors(self):
+        try:
+            raw = json.loads((Path(self.store.root) / self._head_cache_path()).read_text(encoding='utf-8'))
+            return {key: value for key, value in raw.items()
+                    if isinstance(key, str) and isinstance(value, dict)} if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_head_vectors(self):
+        try:
+            with write_lock(self.store, self.cfg.id):
+                self.store.replace(self._head_cache_path(), self._head_vectors)
+            return True
+        except Exception:
+            return False
+
 
     def settings(self):
         return settings_from(load_persisted(self.store, self.cfg.id))
@@ -680,9 +701,14 @@ class ExperienceHintProvider:
         return None
 
     def warm_embeddings(self, candidate_ids=None):
+        if not self.settings()['enabled']:
+            return 0
         # Separate from the settings mutex: never hold the Brain write lock during I/O.
         with self._warm_lock:
-            return self._warm_embeddings(candidate_ids)
+            built = self._warm_embeddings(candidate_ids)
+            if self._head_claims():
+                self.warm_head_embeddings()
+            return built
 
     def _warm_embeddings(self, candidate_ids=None):
         """Build missing candidate vectors only at explicit enable/confirm boundaries."""
@@ -745,6 +771,99 @@ class ExperienceHintProvider:
                         pass
                 continue
         return built
+
+    def _head_claims(self):
+        if self.profile is None or not hasattr(self.profile, 'build_prompt'):
+            return ()
+        try:
+            projection = self.profile.build_prompt()
+            notes = str(projection.get('notes') or '').splitlines()
+            claims = tuple(str(item).strip('- ').strip() for item in notes if str(item).strip())
+            if not hasattr(self.profile, 'relationship_items'):
+                return claims
+            from veil.brain.relationship_base import build
+            relationship = build(self.profile, getattr(self.cfg, 'profile', None), projection=projection)
+            return claims + tuple(
+                str(item.get('line') or '').strip() for item in relationship.get('items', ())
+                if isinstance(item, dict) and item.get('line'))
+        except Exception:
+            return ()
+
+    def warm_head_embeddings(self, claims=None):
+        """Explicitly cache HEAD and guidance vectors; ordinary turns only read them."""
+        if not self.settings()['enabled']:
+            return 0
+        factory = getattr(self.memory, 'embedder', None)
+        if not callable(factory):
+            return 0
+        try:
+            embedder = factory()
+        except Exception:
+            return 0
+        model, space, built = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown'), self.vector_space(), 0
+        texts = [str(item or '').strip() for item in (claims if claims is not None else self._head_claims())
+                 if str(item or '').strip()]
+        if not texts:
+            return 0
+        try:
+            rows = self.consolidator.query_experience_candidates(
+                situation='', statuses=('confirmed',), semantic_pool=True)
+            texts.extend(str(row.get('guidance') or '').strip() for row in rows if row.get('guidance'))
+        except Exception:
+            pass
+        with self._warm_lock:
+            self._head_vectors = self._read_head_vectors()
+            keep = {_sha(text) for text in texts}
+            self._head_vectors = {key: value for key, value in self._head_vectors.items() if key in keep}
+            for text in texts:
+                key = _sha(text)
+                cached = self._head_vectors.get(key) or {}
+                if (cached.get('space') == space and cached.get('model') == model
+                        and self._valid_vector(cached.get('vector')) is not None):
+                    continue
+                try:
+                    reservation = None
+                    rate = Decimal(str((getattr(self.cfg, 'memory', None) or {}).get('input_cny_per_million', 0) or 0))
+                    if self.budget is not None:
+                        reservation = self.budget.estimate(self.cfg.id, model, max(512, len(text.encode('utf-8'))), rate)
+                    vector = self._valid_vector(getattr(embedder, 'embed', embedder)(text))
+                    if reservation is not None:
+                        reported = getattr(embedder, 'usage_tokens', None)
+                        amount = (Decimal(reported) * rate / Decimal(1_000_000)
+                                  if type(reported) is int and reported > 0 else reservation[1])
+                        self.budget.settle_estimate(
+                            reservation, accounting='p7-head-embedding',
+                            settled_amount=min(amount, reservation[1]),
+                            usage_tokens=reported if type(reported) is int and reported > 0 else None)
+                    if vector is not None:
+                        self._head_vectors[key] = {'model': model, 'space': space, 'vector': list(vector)}
+                        built += 1
+                except Exception:
+                    if reservation is not None:
+                        try:
+                            self.budget.settle_estimate(reservation, accounting='p7-head-embedding-unknown-usage')
+                        except Exception:
+                            pass
+                    continue
+            if not self._save_head_vectors():
+                self._head_vectors = self._read_head_vectors()
+                return 0
+        return built
+
+    def _head_semantically_covers(self, guidance, claims):
+        space = self.vector_space()
+        model = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown')
+        guidance_vec = self._head_vectors.get(_sha(str(guidance or '').strip())) or {}
+        if guidance_vec.get('space') != space or guidance_vec.get('model') != model:
+            return False
+        for claim in claims or ():
+            item = self._head_vectors.get(_sha(str(claim or '').strip())) or {}
+            if item.get('space') != space or item.get('model') != model:
+                continue
+            similarity = self._cosine(guidance_vec.get('vector'), item.get('vector'))
+            if similarity is not None and similarity >= 0.85:
+                return True
+        return False
 
     @staticmethod
     def _exception_matches(row, text_tokens, text):
@@ -890,7 +1009,8 @@ class ExperienceHintProvider:
             if self._exception_matches(row, tokens, envelope.text):
                 dropped.append((row.get('id'), 'matched_exception'))
                 continue
-            if self._covered_by_head(row, envelope.head_covered):
+            if (self._covered_by_head(row, envelope.head_covered)
+                    or self._head_semantically_covers(row.get('guidance'), envelope.head_covered)):
                 dropped.append((row.get('id'), 'covered_by_head'))
                 continue
             if self._already_recalled(row, envelope.recalled_texts):

@@ -2891,6 +2891,9 @@ class CognitiveConsolidator:
             rows = list(state.get('experience_candidates') or [])
             vetoed_ledger = list(state.get('vetoed_experiences') or [])
         valid_mems = None if evidence_validator is not None else self._existing_memory_ids()
+        # Confirmed rows are protected from eviction and can exceed the nominal cap.
+        # Extract veto rows once rather than rescanning all candidates for every row.
+        vetoed_rows = [row for row in rows if isinstance(row, dict) and row.get('status') == 'vetoed']
         eligible = []
         for row in rows:
             if not isinstance(row, dict):
@@ -2899,7 +2902,7 @@ class CognitiveConsolidator:
                 continue
             if allowed_kinds is not None and row.get('kind') not in allowed_kinds:
                 continue
-            if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data, vetoed_ledger):
+            if self._is_vetoed_experience(row.get('guidance', ''), vetoed_rows, profile_data, vetoed_ledger):
                 continue
             projected = _normalise_experience(row)
             eligible.append((row, projected))
@@ -2929,11 +2932,11 @@ class CognitiveConsolidator:
                     continue
                 score += float(overlap)
             scored.append((score, str(row.get('updated_at') or ''), projected))
-        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         if semantic_pool:
-            # P7-S2/P7-MATCH-02: semantic scoring happens in the provider. Returning
-            # only the newest 200 rows here can hide an older relevant experience.
+            # Provider performs the final ranking after scoring the complete pool.
+            # Neither truncate nor sort by recency before semantic matching.
             return [item[2] for item in scored]
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [item[2] for item in scored[:max(1, min(20, int(limit or 5)))]]
 
     def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector, vector_space=''):

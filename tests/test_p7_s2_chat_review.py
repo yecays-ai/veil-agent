@@ -12,6 +12,25 @@ class P7S2ChatReviewTests(unittest.TestCase):
                          [1, 2, 3, 4, 5, 6])
         self.assertEqual(chat._next_p7_turn_index('new-session'), 1)
 
+    def test_provider_filter_diagnostics_do_not_break_render_budget(self):
+        chat = object.__new__(Chat)
+        provider = Mock(return_value=[{
+            'id': 'large', 'status': 'confirmed', 'trigger_condition': 'synthetic trigger',
+            'guidance': 'Synthetic guidance ' * 500,
+        }])
+        provider.settings.return_value = {'max_items': 4, 'max_tokens': 120}
+        provider.confirm.return_value = ['large']
+        provider.diagnostics.return_value = {
+            'status': 'matched', 'selected': 1, 'dropped': [('other', 'threshold')],
+        }
+        chat.experience_hint_provider = provider
+        debug = {}
+        self.assertIsNone(chat.p7_experience_hints_context('synthetic', debug=debug))
+        self.assertIsInstance(debug['dropped'], int)
+        self.assertEqual(debug['dropped'], 1)
+        self.assertEqual(debug['selected'], 0)
+        self.assertEqual(debug['used_tokens'], 0)
+
     def test_distinct_tool_failures_have_distinct_opaque_cooldown_keys(self):
         chat = object.__new__(Chat)
         chat._resolve_tool_name = Mock(return_value='example')

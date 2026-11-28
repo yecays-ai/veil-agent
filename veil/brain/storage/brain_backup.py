@@ -571,6 +571,7 @@ COMPANION_FILES = (
     'cognitive-consolidation.json',
     'experience-injection.json',
     'experience-feedback.jsonl',
+    'experience-head-vectors.json',
 )
 
 # Files reconcile_companion_state() may rewrite; restore snapshots them before it runs.

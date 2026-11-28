@@ -2820,7 +2820,10 @@ class Chat:
             if callable(diagnostics):
                 provider_debug = diagnostics()
                 if isinstance(provider_debug, dict):
-                    debug.update(provider_debug)
+                    debug['filter_reasons'] = list(provider_debug.get('dropped') or ())
+                    debug['provider_selected'] = provider_debug.get('selected', 0)
+                    debug.update({key: value for key, value in provider_debug.items()
+                                  if key not in ('dropped', 'selected')})
         except Exception:
             debug['status'] = 'provider_failed'
             return None
@@ -4578,7 +4581,10 @@ class Chat:
         entry_mode = ('glance' if self.glance_mode else 'codex_watch' if self.codex_watch_mode
                       else 'autonomy' if autonomy else 'chat')
         head_claims = []
-        if isinstance(profile_context, str):
+        if isinstance(profile_projection, dict):
+            head_claims.extend(line.strip('- ').strip() for line in
+                               str(profile_projection.get('notes') or '').splitlines() if line.strip())
+        elif isinstance(profile_context, str):
             head_claims.extend(line.strip('- ').strip() for line in profile_context.splitlines()
                                if line.strip() and not line.lstrip().startswith('#'))
         head_claims.extend(str(item.get('line') or item.get('text') or '')
