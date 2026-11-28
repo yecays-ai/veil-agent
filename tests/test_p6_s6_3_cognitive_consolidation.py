@@ -221,6 +221,17 @@ class CognitiveConsolidationTests(unittest.TestCase):
             semantic_verifier=sv, now_fn=self.clock,
         )
 
+    def test_p7_contract_matches_the_s7_auxiliary_slot(self):
+        contract = self._make_consolidator(_ScriptedModel([])).experience_interface_contract()
+        self.assertEqual(contract['schema_version'], 'p7.experience.v1')
+        self.assertEqual(contract['slot_reserved'], 'p7.experience_hints')
+        self.assertEqual(contract['layer'], 'AUXILIARY')
+        self.assertEqual((contract['order_after'], contract['order_before']),
+                         ('memory.short_notes', 'recall_candidates'))
+        self.assertEqual((contract['budget_tokens'], contract['max_items']), (600, 4))
+        self.assertEqual(contract['injectable_statuses'], ['confirmed'])
+        self.assertFalse(contract['injected_in_head'])
+
     def test_defaults_disabled_and_settings_persist_across_restart(self):
         cons = self._make_consolidator(_ScriptedModel([]))
         st = cons.status()
