@@ -4626,12 +4626,6 @@ class Chat:
         observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
-        # Decide before the relationship base yields: a named inventory must never cost a
-        # relationship entry when the permission-group fallback would keep both.
-        if (capability_state is not None and not capability_compact
-                and estimate_request_tokens([*head, *runtime_required, user], tool_schema, calibration) > limit):
-            capability_state['content'] = self.current_capability_snapshot(tool_schema, include_names=False)
-            capability_compact = True
         relationship_preselected_ids = [
             item.get('id') for item in relationship.get('items', [])
             if isinstance(item, dict) and item.get('id')
@@ -4683,13 +4677,6 @@ class Chat:
                 elif isinstance(content, list):
                     history[index]['content'] = [{'type': 'text', 'text': separator}, *content]
         collapse_all_history_photos(history)
-
-        # The named inventory is the normal form. If it would push an otherwise usable request
-        # over the input limit, keep the permission groups/counts and drop only the name list;
-        # the attached tool definitions still carry every name and parameter.
-        if capability_state is not None and not capability_compact and bound() > limit:
-            capability_state['content'] = self.current_capability_snapshot(tool_schema, include_names=False)
-            capability_compact = True
 
         # Ticket 419: one whole-round memory budget. Required blocks and the conversation are
         # measured first; ``finish_recall`` splits the rest between history and memories, selects
@@ -4767,6 +4754,13 @@ class Chat:
             self.turn_memory_refs = list(recalled_memory_refs)
         self.turn_memory_refs = (recalled_memory_refs if len(recalled_memories) == len(budgeted_messages)
                                  else list(getattr(self.memory, 'last_context_refs', []) or []))
+        # Optional history, memories and relationship entries yield first. Only when the request
+        # is still over the provider limit do the tool names yield, keeping the permission groups
+        # and counts; the attached schemas still carry every name and parameter.
+        if (capability_state is not None and not capability_compact
+                and bound(history, recalled_memories, auxiliary_context) > limit):
+            capability_state['content'] = self.current_capability_snapshot(tool_schema, include_names=False)
+            capability_compact = True
         if bound(history, recalled_memories, auxiliary_context) > limit:
             if not autonomy and persist_user and mids:
                 self.fail_incoming(mids, reason='too_long')
