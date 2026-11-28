@@ -1938,6 +1938,8 @@ def _load_recall_indexes(data_root, role_id):
                 except (OSError, ValueError):
                     continue
                 if isinstance(rec, dict):
+                    if rec.get('sent') is False:
+                        continue
                     if not rec.get('request_id'):
                         rec['request_id'] = sp.name.split('.', 1)[0]
                     raw_snaps.append(rec)
@@ -1951,7 +1953,7 @@ def _load_recall_indexes(data_root, role_id):
     dedup_map = {}
     ordered_snaps = []
     for row in raw_snaps:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or row.get('sent') is False:
             continue
         rid = str(row.get('request_id') or row.get('id') or '')
         if rid:
