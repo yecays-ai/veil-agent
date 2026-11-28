@@ -133,7 +133,7 @@ flowchart TD
 
     subgraph Trigger["3. 情境触发、语义匹配与 Door 门控 (P7 Provider)"]
         Env["SituationEnvelope (统一多入口信封)<br/>复用 Memory._turn_query_vector + S5 context_signal<br/>+ wake_context + tool_context + HEAD去重集合"]
-        Prov["ExperienceHintProvider (角色隔离)<br/>调 query_experience_candidates()"]
+        Prov["ExperienceHintProvider (角色隔离)<br/>调 query_experience_candidates(semantic_pool=True)<br/>评分前不做词法过滤或截断"]
         Fresh["全类型证据新鲜度校验<br/>memory/event/chat/autonomy/tool"]
         Match["两阶段匹配与冲突裁决<br/>Stage1: 向量(0.55)+情境(0.25)+词法(0.20)-例外<br/>Stage2(可选默认关): 灰区轻量复核<br/>冲突优先级 + HEAD去重 + 会话冷却"]
     end
@@ -263,7 +263,7 @@ stateDiagram-v2
 ### 4.1 首要施工项：角色隔离生产 `experience_hint_provider`
 
 1. **挂载位置**：`Chat.__init__`（`veil/core/veil_agent.py:2450-2462`）在构建 `self.consolidation` 后，为该角色创建并挂载 `self.experience_hint_provider = ExperienceHintProvider(cfg, store, consolidator=self.consolidation, memory=self.memory, profile=self.profile)`。
-2. **强制查询路径**：`ExperienceHintProvider` 必须调用 `self.consolidation.query_experience_candidates(...)`，**严禁直接读取 `cognitive-consolidation-state.json` 绕过锁、角色隔离、永久否决账本与证据新鲜度检查**。
+2. **强制查询路径**：`ExperienceHintProvider` 必须调用扩展后的 `self.consolidation.query_experience_candidates(..., semantic_pool=True)`，**严禁直接读取 `cognitive-consolidation-state.json` 绕过锁、角色隔离、永久否决账本与证据新鲜度检查**。`semantic_pool=True` 只执行状态、主权、证据新鲜度、域与冷却过滤，返回全部合格候选（受现有 200 条软上限约束）；不得按词项重合过滤或在语义评分前截断。Provider 完成 embedding/结构化/词法混合评分后才排序并截取最终 4 条。旧调用保持原有词法查询行为，避免改变 S6-3 既有调用者。
 3. **多角色物理隔离**：每个 `Chat` 实例仅持有对应 `cfg.id`（如 `peter` 或 `ghost`）的 `store` 路径、`consolidation` 与 `experience-injection.json` 配置，跨角色读取在路径与对象层双重不可达。
 
 ### 4.2 统一情境信封 `SituationEnvelope` 与多入口契约
@@ -285,7 +285,7 @@ stateDiagram-v2
 对每个通过状态（`confirmed`）、主权（非 `vetoed`）、新鲜度、域兼容与冷却检查的候选经验 $e$：
 
 1. **语义匹配分 $S_{\text{sem}}$（权重 0.55）**：
-   - 在经验入库/确认时计算并缓存 `trigger_embedding`（输入为 `trigger_condition + " | " + domain + " | " + experience_type`，仅在新建或文本变更时调用一次当前 Embedder，绑定模型与维度）；
+   - 候选入库/确认时只保存待向量文本指纹；仅当用户显式开启 `memory.p7.enabled=True` 后，才为合格候选懒计算并缓存 `trigger_embedding`（输入为 `trigger_condition + " | " + domain + " | " + experience_type`，仅在首次需要或文本变化时调用一次当前 Embedder，绑定模型与维度）。P7 关闭时巩固仍可产出候选，但不得生成候选向量或产生 P7 embedding 费用；
    - 推理期复用本轮唯一一次查询向量计算余弦相似度；`followup=True` 或当前句过短时，在既有 embedding 调用前由 `SituationEnvelope` 将当前句与最近 2–4 轮相关上下文组成同一查询文本，Recall 与 P7 共用该向量，不额外调用 Embedder；
    - 无需任何额外网络请求；可覆盖中文改写、同义表达、跨语言（中问英经验 / 英问中经验）与隐含场景。
 2. **结构化情境信号分 $S_{\text{sig}}$（权重 0.25）**：
@@ -442,7 +442,7 @@ flowchart LR
 | 顺序 | 工单代号 | 施工范围与核心交付 | 前置条件与可并行性 | 影响范围（文件/模块） | 阶段完成与验收门槛 |
 | --- | --- | --- | --- | --- | --- |
 | **1** | **P7-S1** | **生产 Provider 接线、全类型证据新鲜度与协同备份（首要施工项）**<br>• 新增角色隔离 `ExperienceHintProvider`，严格经 `query_experience_candidates()` 查询并在渲染前重验否决状态；<br>• 补齐 `memory:/event:/chat:/autonomy:/tool:` 全类型证据新鲜度校验（稳定内容指纹、共享 150ms 预算与缓存）；<br>• 升级 `Chat._send()` 构建并传入 `SituationEnvelope`（向后兼容 `str`）；<br>• 向后兼容扩展 `p7.experience.v1` 字段，旧记录无结果证据时标 `unknown_legacy`；<br>• 持久化 `experience-injection.json`（默认关闭 + 乐观并发 revision）；<br>• 将巩固与 P7 状态文件纳入一致 generation 的协同备份，恢复时单调合并永久否决账本。 | 依赖 `main d7fe9ec`；**必须最先串行落地**。*可与独立小单 `P6-S5-01`（改 `recall_judge`/`natural_association`）并行。* | `veil/brain/experience_provider.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/brain/storage/brain_backup.py`、`veil/core/config_registry.py`、`tests/test_p7_s1_*.py` | ① 默认关闭 0 Token、0 候选向量费用；② 开启后仅 `confirmed` 注入且 Peter/Ghost 100% 隔离；③ 删/改任一类来源证据立停注入；④ provider 故障 fail-closed 不阻断聊天；⑤ 并发备份/恢复与旧备份恢复演练均 0 丢账本、0 否决复活、0 悬空注入。 |
-| **2** | **P7-S2** | **语义匹配、隐含场景识别、冲突裁决、协同去重与多入口契约**<br>• 实现候选 `trigger_embedding` 懒缓存（绑定模型与维度）+ 复用 `Memory._turn_query_vector` 的 Stage 1 混合打分（语义 0.55 + 情境 0.25 + 词法 0.20 - 例外惩罚）；<br>• 落地 `short_ack` 短路、保守阈值、0 命中 0 Token、同会话冷却；<br>• 实现注入期冲突优先级裁决与 `HEAD`（`relationship_base`/`growth`）去重；<br>• 接通 `_tool_chat` 报错/扩组补检、`autonomy.py` 工作/闲暇分域契约、`glance`/`codex_watch` 显式跳过；<br>• 实现可选灰区复核开关（默认关闭，独立 `¥0.02/日` 预算）。 | **串行依赖 P7-S1**（需 provider 与 `SituationEnvelope` 就绪）。 | `veil/brain/experience_provider.py`、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/autonomy/autonomy.py`、`tests/test_p7_s2_*.py` | ① 合成中文改写/跨语言/隐含场景命中达标，0 新增每轮 Embed 费；② 短应和与无关闲聊 0 误触；③ 冲突经验稳定按主权与实证胜出；④ `HEAD` 已覆盖项不重复注入；⑤ 多步工具与自主唤醒域隔离通过。 |
+| **2** | **P7-S2** | **语义匹配、隐含场景识别、冲突裁决、协同去重与多入口契约**<br>• 扩展 `query_experience_candidates(..., semantic_pool=True)`：先返回全部合格候选，禁止词法预过滤/预截断，混合评分后再取 Top-4；<br>• 实现仅在 P7 显式开启后生成的候选 `trigger_embedding` 懒缓存 + 复用本轮查询向量的 Stage 1 混合打分（语义 0.55 + 情境 0.25 + 词法 0.20 - 例外惩罚）；<br>• 落地 `short_ack` 短路、保守阈值、0 命中 0 Token、同会话冷却；<br>• 实现注入期冲突优先级裁决与 `HEAD` 去重；<br>• 接通工具步骤、自主活动及显式跳过入口；<br>• 实现可选灰区复核开关（默认关闭，独立 `¥0.02/日` 预算）。 | **串行依赖 P7-S1**（需 provider 与 `SituationEnvelope` 就绪）。 | `veil/brain/experience_provider.py`、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/autonomy/autonomy.py`、`tests/test_p7_s2_*.py` | ① 零词项重合的中文改写/跨语言/隐含场景仍进入语义池并命中，测试证明评分前未截断；② P7 关闭时创建/确认候选 0 次 Embed、¥0.00/日，开启后候选建向量一次性约 ¥0.0005/百条且每轮 0 新增 Embed；③ 短应和与无关闲聊 0 误触；④ 冲突经验稳定按主权与实证胜出；⑤ `HEAD` 已覆盖项不重复注入；⑥ 多步工具与自主唤醒域隔离通过。 |
 | **3** | **P7-S3** | **四级证据分级晋升、自主判断留痕与反馈演化闭环**<br>• 落地 L1–L4 证据核验与分域晋升（关系、承诺、自主/工具分别授权；`unverified_improvement` 即使人工确认也不得在实证前注入）；<br>• 为待验证方案提供独立的低风险单次实践队列，记录 `trial_id` 与客观结果，成功后另建 `success` 候选；<br>• 升级提示词，经验内容按不可信数据转义，工具调用仍走独立程序权限；<br>• 在 `memory_admin` 工具组新增 `experience_reflect`，并在需要反驳/悬置/提修订时通过现有机制按需扩组；<br>• 新增原子幂等反馈账本与可恢复 `pending_delivery`，自动采集真实送达、工具、承诺客观结果；<br>• 只统计可观测的暴露、显式姿态与客观结果，不虚构 `adopted/adjusted` 指标。 | **串行依赖 P7-S2**（依赖真实注入、匹配诊断与多入口送达链）。 | `veil/brain/experience_feedback.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/prompts/defaults/memory.experience.hints.md`、`veil/prompts/defaults/memory.consolidation.prompt.md`、`veil/tools/tool_groups.py`、`veil/core/veil_agent.py`、`tests/test_p7_s3_*.py` | ① 循环自证率 0%；② 待验证方案未实证前 0 注入，但低风险方案能获得一次可追踪实践机会；③ 三类晋升开关互不越权；④ 模型工具循环证明 `experience_reflect` 可发现可调用；⑤ 并发重试、同请求多结果与送达后崩溃均不重记、不漏记；⑥ 行动结果经巩固完成修订并留历史链。 |
 | **4** | **P7-S4** | **Brain 管理界面、自动体检、细粒度诊断与费用/配置入口**<br>• Brain「记忆监控」页新增 P7 开关组与实时生效状态；<br>• Brain「关系与成长」页升级经验卡片（分类、证据、例外、可靠验证统计、修订 diff 与锁定）；<br>• Brain「召回与注入」页展示命中/过滤/裁剪/反馈链路；<br>• H-8 主动检查：否决复活、失效证据仍注入、跨角色读取、账本重复/断链、pending 超时、连续负结果、费用越界、误触率异常、备份 generation 不一致；异常直接显示原因与处理入口；<br>• `web_agent.py` / `desktop/main.cjs` 路由白名单与费用/配置总览补齐。 | **API 契约在 P7-S1 后可先行准备，完整联调依赖 P7-S3**。 | `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`veil/brain/brain_health.py`、`veil/system/diagnostics.py`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js`、`desktop/main.cjs`、`desktop/tests/*.test.cjs` | ① 全部开关重启保留且并发编辑 409 保护生效；② 体检能用注入缺陷自动造数并逐项报出，不要求 Lan 观察发现；③ 候选页完整溯源；④ 桌面测试与白名单回归全绿。 |
 | **5** | **P7-S5** | **VEIL Lab 10 场景自动验收与上线门禁收口**<br>• 在隔离快照自动构造匹配、误触、跨措辞、重启、否决恢复、反馈闭环、权限注入、角色隔离等场景（¥0）；<br>• 自动生成 `P7=OFF vs P7=ON` 回复对照与可解释评分，失败直接阻断交付；<br>• 输出机器可复跑的验收报告与一次性结果摘要，不设置人工观察期。 | **依赖 P7-S1 ~ P7-S4 全部合并或合流**。 | `tests/test_p7_e2e_scenarios.py`、`docs/reports/p7-acceptance-*.md`、`docs/ACCEPTANCE.md`、`STATUS.md` | ① 10 场景自动全通；② 跨时间/措辞/会话/重启连续性、数据一致性与权限边界全通；③ `veil-lab run verify` 与 H-8 故障注入全通；④ Lan 无需承担多日观察。 |
