@@ -774,6 +774,10 @@ class ExperienceHintProvider:
             len(guidance & _lexical_tokens(text)) / max(1, len(guidance)) >= 0.8 for text in recalled) else 0.0
 
     @staticmethod
+    def _already_recalled(row, recalled):
+        return ExperienceHintProvider._recall_penalty(row, recalled) > 0
+
+    @staticmethod
     def _conflicts(left, right):
         left_id, right_id = str(left.get('id') or ''), str(right.get('id') or '')
         links = {str(left.get('supersedes_id') or ''), str(left.get('superseded_by') or '')}
@@ -888,6 +892,9 @@ class ExperienceHintProvider:
                 continue
             if self._covered_by_head(row, envelope.head_covered):
                 dropped.append((row.get('id'), 'covered_by_head'))
+                continue
+            if self._already_recalled(row, envelope.recalled_texts):
+                dropped.append((row.get('id'), 'already_recalled'))
                 continue
             if not self._cooldown_allows(row, envelope, values):
                 dropped.append((row.get('id'), 'cooldown'))

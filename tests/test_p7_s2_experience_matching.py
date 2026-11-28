@@ -381,6 +381,16 @@ class P7S2ExperienceMatchingTests(unittest.TestCase):
         self.assertEqual(len(result), 4)
         self.assertLessEqual(conflicts.call_count, 10)
 
+    def test_recalled_guidance_is_not_injected_again(self):
+        row = candidate('repeat', 'Record a checkpoint', guidance='Inspect the error before retrying.')
+        provider, _, _ = self.provider([row], lambda _: (1.0, 0.0))
+        self.enable(provider)
+        envelope = SituationEnvelope(
+            text='different words about a failure', query_vector=(1.0, 0.0),
+            context_signal={'is_work_task': True},
+            recalled_texts=('Inspect the error before retrying.',))
+        self.assertEqual(provider(envelope), [])
+
     def test_gray_gate_covers_full_configured_range_before_direct_threshold(self):
         rows = [candidate(name, name) for name in ('score41', 'score42', 'score47', 'score48')]
         cosines = {'score41': 0.7454545, 'score42': 0.7636364,

@@ -43,7 +43,7 @@ P7-S2 同秒候选向量缓存并发覆盖阻断已解决。沿用现有 S2 实�
 - 最终定向回归仅运行一次：`python -m unittest tests.test_p7_s2_experience_matching tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup -q`：182/182 通过（35.372s，exit 0；原 181 项 + 新增同秒回归）。
 - 含 `tests.test_autonomy` 的 230 项组合：226 项通过，4 项在进入本单代码前因测试内顶层 `from test_tools import ToolLoopTests` 找不到模块而报错；补 `PYTHONPATH` 重跑仍为同一 4 项。按“同一问题两次未解决即停止”纪律未做第三次修改或重跑；本单未修改该导入或测试工具模块。
 - `python -m py_compile`：修改的 Python 文件与新测试通过。
-- PR #472 审核修复后集中运行 `python -m unittest tests.test_p7_s2_experience_matching tests.test_p7_s2_cache_governance tests.test_p7_s2_chat_review tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup tests.test_prompt_registry -q`：229/229 通过（39.795s，exit 0）。首轮 CI 仅在 `test_prompt_registry.InlineProseTests.test_no_unreviewed_inline_prose` 失败，原因为灰区复核 system prompt 内联；已转到提示词注册文件，注册专项 32/32 通过。新提交全仓 CI 待验证。
+- PR #472 审核修复后集中运行 `python -m unittest tests.test_p7_s2_experience_matching tests.test_p7_s2_cache_governance tests.test_p7_s2_chat_review tests.test_p7_s1_experience_provider tests.test_chat tests.test_p6_s6_3_cognitive_consolidation tests.test_autonomy_cleanup tests.test_config_registry tests.test_brain_backup tests.test_prompt_registry -q`：230/230 通过（新增普通召回去重回归先红后绿；38.906s，exit 0）。首轮 CI 仅在 `test_prompt_registry.InlineProseTests.test_no_unreviewed_inline_prose` 失败，原因为灰区复核 system prompt 内联；已转到提示词注册文件，`c44e836` 的 Windows/Ubuntu Python 3.11/3.12 全绿。普通召回去重修复后的新 CI 待验证。
 
 ## 已解决阻断
 
