@@ -1978,10 +1978,16 @@ def _load_recall_indexes(data_root, role_id):
             costs_by_rid.setdefault(rid, []).append(cor)
 
     # Synthesize base turn rows for historical context-log / recall-diagnostics turns
-    # that do not have a request-snapshot file on disk.
+    # that do not have a request-snapshot file on disk. Skip turns where context-log
+    # explicitly records sent=False (never actually sent to the model).
+    unsent_rids = set()
     for rid, ctx_list in ctx_by_rid.items():
-        if rid not in dedup_map and ctx_list:
-            latest = ctx_list[-1]
+        sent_rows = [c for c in ctx_list if c.get('sent') is not False]
+        if not sent_rows:
+            unsent_rids.add(rid)
+            continue
+        if rid not in dedup_map:
+            latest = sent_rows[-1]
             dedup_map[rid] = {
                 'request_id': rid,
                 'time': latest.get('time') or '',
@@ -1990,7 +1996,7 @@ def _load_recall_indexes(data_root, role_id):
                 'step': latest.get('step'),
             }
     for rid, rr in recall_by_rid.items():
-        if rid not in dedup_map:
+        if rid not in dedup_map and rid not in unsent_rids:
             dedup_map[rid] = {
                 'request_id': rid,
                 'time': rr.get('time') or '',

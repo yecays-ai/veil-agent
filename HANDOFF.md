@@ -1,14 +1,16 @@
 # HANDOFF
 
-> 更新：2026-11-28 14:00 +08:00 · 基线 `main = d7fe9ec`（PR #467 已合并）· 当前分支 `ticket/468-p2-p6-acceptance-fixes` / worktree `worktrees/468-p2-p6-acceptance-fixes` / 工单 468（P2–P6 正式环境验收缺陷集中修复；Python 13/13 + 桌面 32/32 + 真实只读数据验证通过；待 PR 审阅，未自行合并、未动正式数据、未启动 P7）
+> 更新：2026-11-28 14:15 +08:00 · 基线 `main = d7fe9ec`（正式桌面已部署）· 当前分支 `ticket/468-p2-p6-acceptance-fixes` / PR #469（P2–P6 正式环境验收缺陷修复、三项授权数据维护与剩余工程验收收口；待 CI/Sourcery 通过后合并，合并后即可启动 P7）
 
 ## 当前停点
 
-- P2–P6 原始需求、PR #434–#466、CI、部署、Lan 验收与 P7 前置条件已完成只读核查。
-- 总报告：`docs/reports/p2-p6-delivery-summary-p7-readiness-20261128.md`。
-- 结论：P2–P6 主工程链已交付到 main，但部署、Lan 验收和长期效果未闭环，P3 另有两处静态残留，因此不能称完整交付。
-- P7 可有条件开工：证据链、状态机、经验候选治理和 4 条/600-token AUXILIARY 槽位可复用；生产 `experience_hint_provider` 未安装，是首要施工项。
-- 本单只改 Markdown；未启动/停止正式 Peter，未访问或写正式数据，未部署，未运行付费实验，未启动 P7。
+- **PR #469 已修复**：B-01（召回与注入页合并索引 + `sent=False` 过滤）、B-02/B-03（事件阶段正文 `text` / 来源证据 / 状态中文语义）、B-05/B-07（关系底座可注入统计对齐 `build_prompt` + 确认/否决/恢复/查看证据治理闭环）、B-06（认知版本历史解析与行级 diff 展开）、C-01（7 日增长统计同口径）、C-02/C-03（健康期间与四区卡片布局）、A-01（H-7 历史哈希口径区分）。
+- **三项授权正式数据维护已完成**（备份目录 `data/peter/backups/pre-469-maint-20261128-140438/`）：
+  - A-01：238 条历史向量已用 `BAAI/bge-m3` 重建并写入 `meta.embedding_model`，H-7 复验 `severity=good`（226 活跃记忆 / 242 向量 1024 维全一致）。
+  - A-02：57 处悬空引用（46 `relations` + 11 `sidecar_state.links_json`）先隔离验证再正式清理，H-3 复验 `dangling=0`（2 条无关联记忆保留）。
+  - A-05：16 条历史失败日志核查均为 `out_len=0` 无正文草稿，无需写入，零重复/覆盖风险。
+- **剩余工程验收已完成**：正式部署版本 `d7fe9ec`、真实检索/判官（最新轮 `judge.status=chosen`、检索降级 0 次）、缓存与费用记录、`health-settings.json` 持久化、`runtime-status.json` 均已核验正常。
+- **P7 阻塞核查**：不存在阻塞 P7 开工的实际故障；非阻塞遗留（P3-REM-01/02、P6-S5-01、P6-RERANK-01、P6-LONG-01）统一纳入 P8。
 
 ## 状态入口
 
