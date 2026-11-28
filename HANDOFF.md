@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 更新：2026-11-28 12:22 +08:00 · 基线 `main = a5db802`（工单 465 / PR #466 · P6-S7 已合并）· 当前分支 `ticket/466-p2-p6-delivery-audit` / worktree `worktrees/466-p2-p6-delivery-audit` / 工单 466 / PR #467（专项只读审计；`857e927` CI 全通过、7 条审查线程已解决，待 Lan 审阅，未部署）
+> 更新：2026-11-28 14:00 +08:00 · 基线 `main = d7fe9ec`（PR #467 已合并）· 当前分支 `ticket/468-p2-p6-acceptance-fixes` / worktree `worktrees/468-p2-p6-acceptance-fixes` / 工单 468（P2–P6 正式环境验收缺陷集中修复；Python 13/13 + 桌面 32/32 + 真实只读数据验证通过；待 PR 审阅，未自行合并、未动正式数据、未启动 P7）
 
 ## 当前停点
 
