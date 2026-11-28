@@ -1716,6 +1716,11 @@
           );
           if (Array.isArray(st.facts) && st.facts.length) {
             card.append(el('small', 'muted', `阶段要点：${st.facts.join('；')}`));
+          } else if (st.facts && typeof st.facts === 'object') {
+            const factParts = Object.entries(st.facts)
+              .filter(([, v]) => (Array.isArray(v) ? v.length > 0 : Boolean(v)))
+              .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+            if (factParts.length) card.append(el('small', 'muted', `阶段要点：${factParts.join('；')}`));
           }
           li.append(card);
           tl.append(li);
@@ -1723,7 +1728,12 @@
         readerPane.append(stHead, tl);
       }
 
-      const evSources = res.data.sources || ev.sources || [];
+      const topSources = res.data.sources || ev.sources || [];
+      const stageEvidences = [];
+      for (const st of stages) {
+        if (Array.isArray(st.evidence)) stageEvidences.push(...st.evidence);
+      }
+      const evSources = [...topSources, ...stageEvidences];
       const srcCard = el('div', 'veil-card');
       srcCard.style.marginTop = '12px';
       srcCard.append(el('h4', '', `原始来源与证据 (${evSources.length})`));
@@ -1832,16 +1842,24 @@
 
     // Relationship Base
     const relUpdatedAt = (learned.relationship && learned.relationship.updated_at) || '';
-    const confirmedInjectableRel = activeRel.filter(it => it.status === 'confirmed' && !it.evidence_degraded);
-    const degradedOrUncertainRel = activeRel.filter(it => it.status !== 'confirmed' || it.evidence_degraded);
+    const isRelInjectable = it => (
+      it.status === 'confirmed'
+      && !it.evidence_degraded
+      && !it.prompt_vetoed
+      && it.evidence_state !== 'rebutted'
+    );
+    const confirmedInjectableRel = activeRel.filter(isRelInjectable);
+    const degradedOrUncertainRel = activeRel.filter(it => !isRelInjectable(it));
     const relSummaryText = !activeRel.length
       ? '0 条有效'
       : (degradedOrUncertainRel.length
         ? `${activeRel.length} 条已存储 · ${confirmedInjectableRel.length} 条可注入 · ${degradedOrUncertainRel.length} 条未确认/已降级`
         : `${confirmedInjectableRel.length} 条已确认可注入`);
 
-    async function saveRelationshipItems(nextItems) {
-      await reqJson(req, '/api/peter-page', {
+    const relErrBox = el('small', 'muted', '');
+    async function saveRelationshipItems(nextItems, triggerBtn) {
+      relErrBox.textContent = '';
+      const res = await reqJson(req, '/api/peter-page', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1850,7 +1868,13 @@
           expected_updated_at: relUpdatedAt,
         }),
       });
+      if (!res.ok) {
+        if (triggerBtn) triggerBtn.disabled = false;
+        relErrBox.textContent = `保存失败：${res.data?.error || res.error || '请刷新后重试'}`;
+        return false;
+      }
       await renderCognitionWorkspace(host, req);
+      return true;
     }
 
     const relCard = el('article', 'veil-card');
@@ -1859,6 +1883,7 @@
       el('h3', '', '关系底座'),
       pill(relSummaryText, confirmedInjectableRel.length ? 'good' : (activeRel.length ? 'warn' : '')),
     );
+    relCard.append(relErrBox);
     if (!activeRel.length) {
       relCard.append(el('p', 'muted', '暂无有效关系底座记录。'));
     } else {
@@ -1869,8 +1894,10 @@
         if (it.updated_at || it.source || it.locked || it.stale_ref || it.evidence_degraded || it.status) {
           const srcLabel = ({ lan: '你确认的', evidence: '有来源可查', peter: '角色自述' })[it.source] || it.source || '';
           const status = ({ confirmed: '已确认', uncertain: '未确认' })[it.status];
-          const injectHint = (it.status === 'confirmed' && !it.evidence_degraded) ? '可注入' : '当前不注入';
+          const injectHint = isRelInjectable(it) ? '可注入' : '当前不注入';
           const badges = [formatTime(it.updated_at), srcLabel, status, injectHint, it.locked && '已锁定',
+            it.prompt_vetoed && '已被笔记否决',
+            it.evidence_state === 'rebutted' && '证据已被反驳',
             it.evidence_degraded ? '证据失效已降级' : it.stale_ref && '部分引用失效'].filter(Boolean);
           row.append(el('small', 'muted', badges.join(' · ')));
         }
@@ -1884,12 +1911,14 @@
         row.append(evDet);
 
         const actions = el('div', 'workspace-links');
-        if (it.status !== 'confirmed') {
+        if (!isRelInjectable(it)) {
           const okBtn = btn('确认生效', 'sm primary');
           okBtn.addEventListener('click', async () => {
             okBtn.disabled = true;
-            const next = relItems.map(r => (r.id === it.id ? { ...r, status: 'confirmed', source: 'lan' } : r));
-            await saveRelationshipItems(next);
+            const next = relItems.map(r => (r.id === it.id
+              ? { ...r, status: 'confirmed', source: 'lan', evidence_degraded: false, stale_ref: false }
+              : r));
+            await saveRelationshipItems(next, okBtn);
           });
           actions.append(okBtn);
         }
@@ -1897,7 +1926,7 @@
         vetoBtn.addEventListener('click', async () => {
           vetoBtn.disabled = true;
           const next = relItems.map(r => (r.id === it.id ? { ...r, status: 'outdated' } : r));
-          await saveRelationshipItems(next);
+          await saveRelationshipItems(next, vetoBtn);
         });
         actions.append(vetoBtn);
         const editBtn = btn('在档案中纠正', 'sm');
@@ -1918,7 +1947,8 @@
           const restoreBtn = btn('恢复为当前', 'sm');
           restoreBtn.addEventListener('click', async () => {
             restoreBtn.disabled = true;
-            await reqJson(req, '/api/peter-page', {
+            relErrBox.textContent = '';
+            const res = await reqJson(req, '/api/peter-page', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -1927,6 +1957,11 @@
                 expected_updated_at: relUpdatedAt,
               }),
             });
+            if (!res.ok) {
+              restoreBtn.disabled = false;
+              relErrBox.textContent = `恢复失败：${res.data?.error || res.error || '请刷新后重试'}`;
+              return;
+            }
             await renderCognitionWorkspace(host, req);
           });
           sRow.append(restoreBtn);

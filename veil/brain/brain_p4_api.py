@@ -1924,8 +1924,15 @@ def _load_recall_indexes(data_root, role_id):
     snap_dir = role_dir / 'request-snapshots'
     if snap_dir.is_dir():
         try:
-            snap_files = sorted(snap_dir.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:1000]
-            for sp in reversed(snap_files):
+            snap_entries = []
+            for p in snap_dir.glob('*.json'):
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                snap_entries.append((mtime, p))
+            snap_entries.sort(key=lambda item: item[0], reverse=True)
+            for _, sp in reversed(snap_entries[:1000]):
                 try:
                     rec = json.loads(sp.read_text(encoding='utf-8'))
                 except (OSError, ValueError):
