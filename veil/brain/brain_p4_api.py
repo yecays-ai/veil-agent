@@ -564,11 +564,10 @@ def overview(hub):
 
                 cdt = _parse_dt(r['created'])
                 if cdt:
-                    if cdt >= seven_days_ago:
-                        counts['week_added'] += 1
                     dk = cdt.strftime('%Y-%m-%d')
                     if dk in day_added:
                         day_added[dk] += 1
+                        counts['week_added'] += 1
                     diff_days = (now_dt.date() - cdt.date()).days
                     if 0 <= diff_days < 28:
                         week_added_buckets[3 - (diff_days // 7)] += 1
@@ -582,11 +581,10 @@ def overview(hub):
                         "WHERE substr(time, 1, 10) >= ?", (window_start,)):
                     vdt = _parse_dt(vr['time'])
                     if vdt:
-                        if vdt >= seven_days_ago:
-                            counts['week_updated'] += 1
                         dk = vdt.strftime('%Y-%m-%d')
                         if dk in day_updated:
                             day_updated[dk] += 1
+                            counts['week_updated'] += 1
                         diff_days = (now_dt.date() - vdt.date()).days
                         if 0 <= diff_days < 28:
                             week_upd_buckets[3 - (diff_days // 7)] += 1
@@ -1036,11 +1034,74 @@ def overview(hub):
     }
 
 
+def _format_learned_snapshot(raw):
+    """Turn a learned-context JSON snapshot string into readable sectioned text for diffing."""
+    if not raw:
+        return ''
+    if isinstance(raw, str):
+        parsed = _json_load(raw, None)
+    elif isinstance(raw, dict):
+        parsed = raw
+    else:
+        parsed = None
+    if not isinstance(parsed, dict):
+        return str(raw)
+    parts = []
+    facts_text = ((parsed.get('facts') or {}).get('text') or '').strip() if isinstance(parsed.get('facts'), dict) else ''
+    if facts_text:
+        parts.append('[习得认知]\n' + facts_text)
+    growth_text = ((parsed.get('growth') or {}).get('text') or '').strip() if isinstance(parsed.get('growth'), dict) else ''
+    if growth_text:
+        parts.append('[成长记录]\n' + growth_text)
+    rel = parsed.get('relationship')
+    rel_items = rel.get('items') if isinstance(rel, dict) else None
+    if isinstance(rel_items, list) and rel_items:
+        lines = [f"- ({it.get('status') or 'active'}) {it.get('text') or ''}" for it in rel_items if isinstance(it, dict)]
+        if lines:
+            parts.append('[关系底座]\n' + '\n'.join(lines))
+    ong = parsed.get('ongoing')
+    ong_items = ong.get('items') if isinstance(ong, dict) else None
+    if isinstance(ong_items, list) and ong_items:
+        lines = [f"- ({it.get('status') or 'active'}) {it.get('text') or ''}" for it in ong_items if isinstance(it, dict)]
+        if lines:
+            parts.append('[进行中事项]\n' + '\n'.join(lines))
+    return '\n\n'.join(parts)
+
+
+_LEARNED_TOOL_LABELS = {
+    'save_facts': '更新习得认知',
+    'save_growth': '更新成长记录',
+    'save_relationship': '更新关系底座',
+    'save_ongoing': '更新进行中事项',
+    'confirm_relationship': '确认关系底座',
+    'veto_relationship': '否决关系底座',
+    'restore_relationship': '恢复关系底座',
+    'lan_edit': '人工编辑',
+}
+
+
 def learned_versions(hub):
     profile = getattr(getattr(hub, 'chat', None), 'profile', None)
-    if hasattr(profile, 'read_version_history'):
-        return profile.read_version_history()
-    return []
+    raw_items = profile.read_version_history() if hasattr(profile, 'read_version_history') else []
+    if not isinstance(raw_items, list):
+        return []
+    enriched = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        tool = str(row.get('tool') or row.get('action') or '')
+        if not row.get('reason'):
+            row['reason'] = _LEARNED_TOOL_LABELS.get(tool) or (tool if tool else '自动更新')
+        if not row.get('diff') and ('before' in row or 'after' in row):
+            before_txt = _format_learned_snapshot(row.get('before'))
+            after_txt = _format_learned_snapshot(row.get('after'))
+            row['before_text'] = before_txt
+            row['after_text'] = after_txt
+            if before_txt != after_txt:
+                row['diff'] = compute_line_diff(before_txt, after_txt)
+        enriched.append(row)
+    return enriched
 
 
 def _utf8_bytes(text):
@@ -1858,6 +1919,33 @@ def _load_recall_indexes(data_root, role_id):
     role_dir = Path(data_root) / role_id
     snap_path = diag.snapshot_path(data_root, role_id)
     raw_snaps = _read_all_jsonl(snap_path, max_rows=5000)
+
+    # Also read per-request JSON files under request-snapshots/ (actual runtime storage format).
+    snap_dir = role_dir / 'request-snapshots'
+    if snap_dir.is_dir():
+        try:
+            snap_entries = []
+            for p in snap_dir.glob('*.json'):
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    continue
+                snap_entries.append((mtime, p))
+            snap_entries.sort(key=lambda item: item[0], reverse=True)
+            for _, sp in reversed(snap_entries[:1000]):
+                try:
+                    rec = json.loads(sp.read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(rec, dict):
+                    if rec.get('sent') is False:
+                        continue
+                    if not rec.get('request_id'):
+                        rec['request_id'] = sp.name.split('.', 1)[0]
+                    raw_snaps.append(rec)
+        except OSError:
+            pass
+
     if not raw_snaps:
         raw_snaps = diag.snapshots(data_root, role_id, '', limit=5000) or []
 
@@ -1865,14 +1953,13 @@ def _load_recall_indexes(data_root, role_id):
     dedup_map = {}
     ordered_snaps = []
     for row in raw_snaps:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or row.get('sent') is False:
             continue
         rid = str(row.get('request_id') or row.get('id') or '')
         if rid:
             dedup_map[rid] = row
         else:
             ordered_snaps.append(row)
-    ordered_snaps.extend(dedup_map.values())
 
     ctx_by_rid = {}
     for cr in _read_all_jsonl(role_dir / 'context-log.jsonl', max_rows=5000):
@@ -1892,6 +1979,34 @@ def _load_recall_indexes(data_root, role_id):
         if rid:
             costs_by_rid.setdefault(rid, []).append(cor)
 
+    # Synthesize base turn rows for historical context-log / recall-diagnostics turns
+    # that do not have a request-snapshot file on disk. Skip turns where context-log
+    # explicitly records sent=False (never actually sent to the model).
+    unsent_rids = set()
+    for rid, ctx_list in ctx_by_rid.items():
+        sent_rows = [c for c in ctx_list if c.get('sent') is not False]
+        if not sent_rows:
+            unsent_rids.add(rid)
+            continue
+        if rid not in dedup_map:
+            latest = sent_rows[-1]
+            dedup_map[rid] = {
+                'request_id': rid,
+                'time': latest.get('time') or '',
+                'model': latest.get('model') or '',
+                'purpose': latest.get('kind') or 'chat',
+                'step': latest.get('step'),
+            }
+    for rid, rr in recall_by_rid.items():
+        if rid not in dedup_map and rid not in unsent_rids:
+            dedup_map[rid] = {
+                'request_id': rid,
+                'time': rr.get('time') or '',
+                'model': rr.get('model') or '',
+                'purpose': rr.get('purpose') or 'chat',
+            }
+
+    ordered_snaps.extend(dedup_map.values())
     return ordered_snaps, ctx_by_rid, recall_by_rid, costs_by_rid
 
 

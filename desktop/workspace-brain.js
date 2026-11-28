@@ -1662,15 +1662,27 @@
       const ev = res.data.event || res.data;
       readerPane.replaceChildren();
 
+      const evStatusMap = {
+        open: '进行中（open）',
+        uncertain: '待确认（uncertain · 证据不足或待核实）',
+        closed: '已结束（closed）',
+        resolved: '已解决（resolved）',
+      };
       const tags = el('div', 'index-tags');
-      if (ev.status) tags.append(pill(ev.status, 'rose'));
+      if (ev.status) tags.append(pill(evStatusMap[ev.status] || ev.status, ev.status === 'uncertain' ? 'warn' : 'rose'));
       if (ev.pending_review) tags.append(pill('待审核冲突', 'warn'));
       if (ev.story_pending) tags.append(pill('待重整故事', 'gold'));
+
+      const stages = res.data.stages || ev.stages || [];
+      const sameTime = ev.first_at && ev.last_at && ev.first_at === ev.last_at;
+      const timeLabel = sameTime
+        ? `记录时间: ${formatTime(ev.first_at)}（单阶段记录）`
+        : `时间: ${formatTime(ev.first_at)} ~ ${formatTime(ev.last_at)}`;
 
       readerPane.append(
         tags,
         el('h3', 'reader-title', ev.title || evId),
-        el('div', 'reader-meta-grid', `事件ID: ${evId} · 时间: ${formatTime(ev.first_at)} ~ ${formatTime(ev.last_at)}`),
+        el('div', 'reader-meta-grid', `事件ID: ${evId} · ${timeLabel}`),
         el('div', 'reader-prose', ev.story || ev.summary || ev.body || '（暂无事件正文）'),
       );
 
@@ -1689,7 +1701,6 @@
         readerPane.append(linkCard);
       }
 
-      const stages = res.data.stages || ev.stages || [];
       if (stages.length) {
         const stHead = el('h4', '', `阶段与片段 (${stages.length})`);
         const tl = el('ul', 'veil-timeline');
@@ -1697,15 +1708,46 @@
           const li = el('li', 'tl-item');
           li.append(el('span', 'tl-dot gold'));
           const card = el('div', 'tl-card');
+          const stageBody = st.text || st.summary || st.note || st.content || '（该阶段未记录正文）';
+          const stageMeta = [st.stage_title || formatTime(st.at) || '阶段', st.state ? `状态: ${st.state}` : ''].filter(Boolean).join(' · ');
           card.append(
-            el('div', 'tl-title', st.stage_title || st.at || '阶段'),
-            el('div', 'tl-detail', st.summary || st.note || st.content || ''),
+            el('div', 'tl-title', stageMeta),
+            el('div', 'tl-detail', stageBody),
           );
+          if (Array.isArray(st.facts) && st.facts.length) {
+            card.append(el('small', 'muted', `阶段要点：${st.facts.join('；')}`));
+          } else if (st.facts && typeof st.facts === 'object') {
+            const factParts = Object.entries(st.facts)
+              .filter(([, v]) => (Array.isArray(v) ? v.length > 0 : Boolean(v)))
+              .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+            if (factParts.length) card.append(el('small', 'muted', `阶段要点：${factParts.join('；')}`));
+          }
           li.append(card);
           tl.append(li);
         }
         readerPane.append(stHead, tl);
       }
+
+      const topSources = res.data.sources || ev.sources || [];
+      const stageEvidences = [];
+      for (const st of stages) {
+        if (Array.isArray(st.evidence)) stageEvidences.push(...st.evidence);
+      }
+      const evSources = [...topSources, ...stageEvidences];
+      const srcCard = el('div', 'veil-card');
+      srcCard.style.marginTop = '12px';
+      srcCard.append(el('h4', '', `原始来源与证据 (${evSources.length})`));
+      if (evSources.length) {
+        const ul = el('ul', 'model-list');
+        for (const s of evSources) {
+          const label = typeof s === 'string' ? s : (s.quote || s.text || s.summary || s.source_id || JSON.stringify(s));
+          ul.append(el('li', '', label));
+        }
+        srcCard.append(ul);
+      } else {
+        srcCard.append(el('p', 'muted', '该事件暂无可追溯的原始聊天证据记录（历史迁移或整理阶段未附带原话引用）。'));
+      }
+      readerPane.append(srcCard);
     }
 
     function drawList(q = '') {
@@ -1799,9 +1841,49 @@
     const grid = el('div', 'cognition-grid');
 
     // Relationship Base
+    const relUpdatedAt = (learned.relationship && learned.relationship.updated_at) || '';
+    const isRelInjectable = it => (
+      it.status === 'confirmed'
+      && !it.evidence_degraded
+      && !it.prompt_vetoed
+      && it.evidence_state !== 'rebutted'
+    );
+    const confirmedInjectableRel = activeRel.filter(isRelInjectable);
+    const degradedOrUncertainRel = activeRel.filter(it => !isRelInjectable(it));
+    const relSummaryText = !activeRel.length
+      ? '0 条有效'
+      : (degradedOrUncertainRel.length
+        ? `${activeRel.length} 条已存储 · ${confirmedInjectableRel.length} 条可注入 · ${degradedOrUncertainRel.length} 条未确认/已降级`
+        : `${confirmedInjectableRel.length} 条已确认可注入`);
+
+    const relErrBox = el('small', 'muted', '');
+    async function saveRelationshipItems(nextItems, triggerBtn) {
+      relErrBox.textContent = '';
+      const res = await reqJson(req, '/api/peter-page', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_relationship',
+          items: nextItems,
+          expected_updated_at: relUpdatedAt,
+        }),
+      });
+      if (!res.ok) {
+        if (triggerBtn) triggerBtn.disabled = false;
+        relErrBox.textContent = `保存失败：${res.data?.error || res.error || '请刷新后重试'}`;
+        return false;
+      }
+      await renderCognitionWorkspace(host, req);
+      return true;
+    }
+
     const relCard = el('article', 'veil-card');
     relCard.append(el('div', 'veil-card-head'));
-    relCard.firstChild.append(el('h3', '', '关系底座'), pill(`${activeRel.length} 条有效`));
+    relCard.firstChild.append(
+      el('h3', '', '关系底座'),
+      pill(relSummaryText, confirmedInjectableRel.length ? 'good' : (activeRel.length ? 'warn' : '')),
+    );
+    relCard.append(relErrBox);
     if (!activeRel.length) {
       relCard.append(el('p', 'muted', '暂无有效关系底座记录。'));
     } else {
@@ -1812,11 +1894,45 @@
         if (it.updated_at || it.source || it.locked || it.stale_ref || it.evidence_degraded || it.status) {
           const srcLabel = ({ lan: '你确认的', evidence: '有来源可查', peter: '角色自述' })[it.source] || it.source || '';
           const status = ({ confirmed: '已确认', uncertain: '未确认' })[it.status];
-          const badges = [formatTime(it.updated_at), srcLabel, status, it.locked && '已锁定',
+          const injectHint = isRelInjectable(it) ? '可注入' : '当前不注入';
+          const badges = [formatTime(it.updated_at), srcLabel, status, injectHint, it.locked && '已锁定',
+            it.prompt_vetoed && '已被笔记否决',
+            it.evidence_state === 'rebutted' && '证据已被反驳',
             it.evidence_degraded ? '证据失效已降级' : it.stale_ref && '部分引用失效'].filter(Boolean);
           row.append(el('small', 'muted', badges.join(' · ')));
-          if (it.sources?.length) row.append(el('small', 'muted', `证据：${it.sources.join('、')}`));
         }
+        const evDet = el('details');
+        evDet.append(el('summary', '', `查看证据 (${(it.sources || []).length})`));
+        if (it.sources?.length) {
+          evDet.append(el('small', 'muted', `证据引用：${it.sources.join('、')}`));
+        } else {
+          evDet.append(el('small', 'muted', '暂无绑定证据引用（角色自述或早期记录）。'));
+        }
+        row.append(evDet);
+
+        const actions = el('div', 'workspace-links');
+        if (!isRelInjectable(it)) {
+          const okBtn = btn('确认生效', 'sm primary');
+          okBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            const next = relItems.map(r => (r.id === it.id
+              ? { ...r, status: 'confirmed', source: 'lan', evidence_degraded: false, stale_ref: false }
+              : r));
+            await saveRelationshipItems(next, okBtn);
+          });
+          actions.append(okBtn);
+        }
+        const vetoBtn = btn('否决/标记过时', 'sm');
+        vetoBtn.addEventListener('click', async () => {
+          vetoBtn.disabled = true;
+          const next = relItems.map(r => (r.id === it.id ? { ...r, status: 'outdated' } : r));
+          await saveRelationshipItems(next, vetoBtn);
+        });
+        actions.append(vetoBtn);
+        const editBtn = btn('在档案中纠正', 'sm');
+        editBtn.addEventListener('click', () => window.veilWorkspace?.go('peter'));
+        actions.append(editBtn);
+        row.append(actions);
         list.append(row);
       }
       relCard.append(list);
@@ -1824,7 +1940,34 @@
     if (staleRel.length) {
       const det = el('details');
       det.append(el('summary', '', `历史/过时关系记录 (${staleRel.length})`));
-      for (const it of staleRel) det.append(el('p', 'muted', it.text || ''));
+      for (const it of staleRel) {
+        const sRow = el('div', 'layer-item');
+        sRow.append(el('p', 'muted', it.text || ''));
+        if (it.id) {
+          const restoreBtn = btn('恢复为当前', 'sm');
+          restoreBtn.addEventListener('click', async () => {
+            restoreBtn.disabled = true;
+            relErrBox.textContent = '';
+            const res = await reqJson(req, '/api/peter-page', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'restore_relationship',
+                id: it.id,
+                expected_updated_at: relUpdatedAt,
+              }),
+            });
+            if (!res.ok) {
+              restoreBtn.disabled = false;
+              relErrBox.textContent = `恢复失败：${res.data?.error || res.error || '请刷新后重试'}`;
+              return;
+            }
+            await renderCognitionWorkspace(host, req);
+          });
+          sRow.append(restoreBtn);
+        }
+        det.append(sRow);
+      }
       relCard.append(det);
     }
 
@@ -2022,16 +2165,25 @@
       consNodes.push(consCard, p7Card);
     }
 
-    // Versions & Technical Details (collapsed)
+    // Versions & Technical Details (expandable per version)
     const techCard = el('article', 'veil-card');
     const techDet = el('details');
     techDet.append(el('summary', '', `认知版本历史 (${versions.length}) 与技术结构`));
     if (versions.length) {
-      for (const v of versions.slice(0, 8)) {
-        const box = el('div', 'layer-item');
-        box.append(el('strong', '', `${formatTime(v.time)} · ${v.reason || v.action || '自动更新'}`));
-        if (v.diff) box.append(buildLineDiffNode(v.diff));
-        techDet.append(box);
+      for (const v of versions) {
+        const vDet = el('details', 'layer-item');
+        const summaryText = `${formatTime(v.time)} · ${v.reason || v.tool || v.action || '自动更新'}`;
+        vDet.append(el('summary', '', summaryText));
+        if (v.tool) vDet.append(el('small', 'muted', `触发工具：${v.tool}`));
+        if (v.diff) {
+          vDet.append(buildLineDiffNode(v.diff));
+        } else if (v.before_text || v.after_text) {
+          const pre = el('pre', 'diff-box', v.after_text || v.before_text || '');
+          vDet.append(pre);
+        } else {
+          vDet.append(el('p', 'muted', '该历史版本未记录文本差异。'));
+        }
+        techDet.append(vDet);
       }
     } else {
       techDet.append(el('p', 'muted', '暂无认知版本变更记录。'));
@@ -2477,7 +2629,7 @@
         pHead.append(el('h3', '', '指定期间变化与异常（与全库当前分开）'),
           pill(`${report.from_date || '最早'} 至 ${report.to_date || '最新'}`, 'warn'));
         const described = describeHealthPeriod(period);
-        const pBody = el('div', 'health-kv');
+        const pBody = el('div', 'stack-sm');
         for (const line of described.lines) pBody.append(el('div', line.muted ? 'muted' : '', line.text));
         if (described.samples.length) {
           const ul = el('ul', 'model-list');
