@@ -201,6 +201,27 @@ class HealthPeriodOrphanTests(unittest.TestCase):
         self.assertIn('全库当前状态检查明细', text)
         self.assertNotIn('范围外的记忆。', text)
 
+    def test_health_probe_reports_cache_empty_hint_and_p7_slot_usage(self):
+        rows = [
+            {'time': '2026-11-28T09:00:00+08:00', 'request_id': 'r1',
+             'kind': 'tool_step_context', 'sent': True, 'actual_input_tokens': 1000,
+             'cached_tokens': 700, 'empty_memory_notices_omitted': 0},
+            {'time': '2026-11-28T09:00:01+08:00', 'request_id': 'r1',
+             'kind': 'tool_step_context', 'sent': True, 'actual_input_tokens': 1100,
+             'cached_tokens': 800, 'empty_memory_notices_omitted': 1},
+            {'time': '2026-11-28T09:00:00+08:00', 'request_id': 'r1',
+             'kind': 'chat', 'sent': False,
+             'p7_experience_hints': {'status': 'injected'}},
+        ]
+        (self.role / 'context-log.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+
+        impact = self.check(self.run_scan(), 'H-8')['impact']
+
+        self.assertIn('缓存用量已报告 2 次（1500/2100 tokens）', impact)
+        self.assertIn('省略空记忆提示 1 块', impact)
+        self.assertIn('P7 槽位注入 1 次', impact)
+
     def test_period_uses_existing_snapshots_and_marks_coverage(self):
         self.add_memory('m1', '2026-11-10T10:00:00+08:00', '记忆正文。')
         reports = self.role / 'health-reports'

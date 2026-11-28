@@ -71,6 +71,8 @@ LOOP_MESSAGE_TOOLS = frozenset({'send_message', 'stay_silent', 'reply_later'})
 PHOTO_PLACEHOLDER = '[Lan sent a photo]'
 PHOTO_MIME_TYPES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
+P7_EXPERIENCE_HINTS_MAX_TOKENS = 600
+P7_EXPERIENCE_HINTS_MAX_ITEMS = 4
 PLACEHOLDER = re.compile(r'\{([a-z_]+)\}')
 
 
@@ -1943,11 +1945,11 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channe
                    '"remember"); relevant memories are also recalled automatically each turn; '
                    'Lan can read, edit and delete them on the memory page. '
                    if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
-    tools_line = ((capabilities.description if isinstance(getattr(capabilities, 'description', None), str)
-                   else 'Tools are currently unavailable. ') if capabilities else
-                  ('You have no tools (cannot open files/folders or run scripts). '
-                   if not cfg.tools or not cfg.tools.get('enabled', True)
-                   else 'Tools are currently unavailable. '))
+    # The live inventory belongs in the per-request tail. Keeping it here made every
+    # expand/collapse rewrite the otherwise stable system prefix.
+    tools_line = ('Current tool availability is described by the runtime capability block. '
+                  if capabilities or cfg.tools and cfg.tools.get('enabled', True) else
+                  'You have no tools (cannot open files/folders or run scripts). ')
     voice_line = ('You can speak in voice messages with send_message voice: true. '
                   if voice and capabilities else 'You have no voice. ')
     capability_line = ('Your callable tools are the ones defined for this request; capability_history has the dated '
@@ -1973,9 +1975,21 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channe
     return stable, changing
 
 
+def empty_memory_notice(message):
+    """True only for a generated empty recall/opening block, never a real memory story."""
+    if not isinstance(message, dict) or message.get('role') != 'system':
+        return False
+    content = message.get('content')
+    return content in {
+        prompts.text('memory.recall.head') + '\n' + prompts.text('memory.recall.empty'),
+        prompts.text('memory.opening.head') + '\n' + prompts.text('memory.opening.empty'),
+    }
+
+
 def build_self_description(cfg, budget, memory=False, capabilities=None, voice=False):
     stable, changing = self_facts(cfg, budget, memory, capabilities, voice)
-    return stable + '\n' + changing
+    live = ((getattr(capabilities, 'description', '') or '').strip() if capabilities else '')
+    return stable + '\n' + ((live + '\n') if live else '') + changing
 
 
 def history_keep(total, limit):
@@ -2676,13 +2690,15 @@ class Chat:
         if schemas is None:
             schemas = (self._active_capability_schemas if self._capability_request_active
                        else self.current_request_tool_schemas())
-        # Names only: each tool's own definition already tells the model how to use it.
+        # The attached schemas already carry names and instructions; repeat only live state here.
         groups = {}
+        offered_names = []
         for schema in schemas:
             name = schema.get('function', {}).get('name')
             if not isinstance(name, str):
                 continue
             canonical_name = self._resolve_tool_name(name, schemas) or name
+            offered_names.append(name)
             policy = (self.mcp_services.permission_for(canonical_name)
                       if canonical_name.startswith('mcp__') else tool_policy(canonical_name))
             if policy == 'allow':
@@ -2705,12 +2721,15 @@ class Chat:
                 label = "Deletion needs Lan's approval"
             else:
                 label = 'Available'
-            groups.setdefault(label, []).append(name)
-        rows = [f'- {label}: {", ".join(names)}.' for label, names in groups.items()]
+            groups[label] = groups.get(label, 0) + 1
+        fingerprint = hashlib.sha256('\n'.join(sorted(offered_names)).encode('utf-8')).hexdigest()[:12]
+        rows = [f'- Current attached tool definitions: {sum(groups.values())} callable tools (set {fingerprint}).']
+        rows.extend(f'- {label}: {count} tools.' for label, count in groups.items())
         files = getattr(self.tools, 'files', None) if self.tools else None
         if not isinstance(getattr(files, 'tools', None), (list, tuple)):
             files = self.tools
-        if not rows:
+        if not groups:
+            rows = []
             notice = getattr(files, 'startup_notice', None)
             if notice or getattr(files, 'client', None) is None and getattr(files, 'enabled', None) is True:
                 rows.append('- File tools: currently unavailable because the filesystem service is not running.')
@@ -2732,6 +2751,51 @@ class Chat:
         rows.append(f'- Autonomous activity: {"enabled" if activity else "paused or unavailable"}.')
         rows.append('- VEIL enforces permissions; this list grants none.')
         return 'CURRENT CAPABILITIES (live runtime):\n' + '\n'.join(rows)
+
+    def p7_experience_hints_context(self, situation):
+        """Render P7-owned confirmed hints into its reserved AUXILIARY slot.
+
+        S7 owns placement, limits and diagnostics only. P7 may install
+        ``experience_hint_provider`` later; without it the slot costs zero tokens.
+        """
+        debug = {'slot': 'p7.experience_hints', 'budget_tokens': P7_EXPERIENCE_HINTS_MAX_TOKENS,
+                 'selected': 0, 'dropped': 0, 'used_tokens': 0, 'status': 'empty'}
+        provider = getattr(self, 'experience_hint_provider', None)
+        if not callable(provider):
+            self.p7_experience_hints_debug = debug
+            return None
+        try:
+            rows = provider(situation)
+        except Exception:
+            debug['status'] = 'provider_failed'
+            self.p7_experience_hints_debug = debug
+            return None
+        rows = rows if isinstance(rows, list) else []
+        header = prompts.text('memory.experience.hints')
+        kept = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get('status') != 'confirmed':
+                debug['dropped'] += 1
+                continue
+            trigger = ' '.join(str(row.get('trigger_condition') or '').split())
+            guidance = ' '.join(str(row.get('guidance') or '').split())
+            if not trigger or not guidance or len(kept) >= P7_EXPERIENCE_HINTS_MAX_ITEMS:
+                debug['dropped'] += 1
+                continue
+            candidate = f'- When: {trigger}\n  Guidance: {guidance}'
+            message = {'role': 'system', 'content': header + '\n' + '\n'.join([*kept, candidate])}
+            used = estimate_message_tokens([message], 0.5)
+            if used > P7_EXPERIENCE_HINTS_MAX_TOKENS:
+                debug['dropped'] += 1
+                continue
+            kept.append(candidate)
+            debug['used_tokens'] = used
+        if not kept:
+            self.p7_experience_hints_debug = debug
+            return None
+        debug.update(selected=len(kept), status='injected')
+        self.p7_experience_hints_debug = debug
+        return {'role': 'system', 'content': header + '\n' + '\n'.join(kept)}
 
     @property
     def capability_history_record(self):
@@ -3893,11 +3957,12 @@ class Chat:
         ]
 
     def _log_context(self, text, autonomy, request_id, head, profile_context, stable, history, recalled,
-                     background_details, short_term_details, runtime_context, tool_schema, user, estimate):
+                     background_details, short_term_details, runtime_context, tool_schema, user, estimate,
+                     *, context_modules=(), p7_experience_hints=None):
         # Ticket 121: one line per request with sizes, ids and keywords only, never the text itself.
         window = getattr(self, 'history_window', {}) or {}
         row = {
-            'kind': request_kind(self, text, autonomy), 'request_id': request_id,
+            'time': now(), 'kind': request_kind(self, text, autonomy), 'request_id': request_id,
             'autonomy_run_id': str(getattr(self, 'autonomy_run_id', '') or '') if autonomy else '',
             'sent': not self.tool_mode, 'usage_status': 'preflight',
             'model': self.cfg.provider.get('model'),
@@ -3917,6 +3982,8 @@ class Chat:
             'experience_chars': context_chars(head[-1:]) if head[-1].get('content', '').startswith(
                 '[What you remember of the last few days]') else 0,
             'runtime_chars': context_chars(runtime_context),
+            'context_modules': list(context_modules),
+            'p7_experience_hints': dict(p7_experience_hints or {}),
             'tool_schema_bytes': len(json.dumps(tool_schema or [], ensure_ascii=False).encode('utf-8')),
             'tool_schema_top': schema_top(tool_schema),
             'user_chars': context_chars([user]), 'estimated_input_tokens': estimate,
@@ -4440,6 +4507,7 @@ class Chat:
         short_term_message, short_term_details = (self.short_term_notes.context()
                                                   if self.short_term_notes and not autonomy
                                                   else (None, {'count': 0, 'characters': 0}))
+        p7_experience_hints = self.p7_experience_hints_context(background_current)
         recalled_memories = list(recalled)
         recall_context_msg = {'role': 'system', 'content': self.recall_context()} if (self.current_request_tool_schemas() and self.recall_context()) else None
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
@@ -4484,6 +4552,7 @@ class Chat:
             *([('investigation_checkpoint', checkpoint_context)] if checkpoint_context else []),
             *([('background', background_message)] if background_message else []),
             *([('memory.short_notes', short_term_message)] if short_term_message else []),
+            *([('p7.experience_hints', p7_experience_hints)] if p7_experience_hints else []),
             *([('recall_candidates', recall_context_msg)] if recall_context_msg else []),
             *([('virtual_cards', card_context_msg)] if card_context_msg else []),
             *runtime_auxiliary,
@@ -4494,6 +4563,10 @@ class Chat:
             auxiliary_context.append(message)
 
         runtime_required = []
+        if tool_schema or self.tools is not None:
+            capability_state = {'role': 'system', 'content': self.current_capability_snapshot(tool_schema)}
+            runtime_required.append(capability_state)
+            labels[id(capability_state)] = 'capability_state'
         if not autonomy and persist_user and getattr(self, 'profile', None) and self.tool_mode:
             current_rows = user_events if isinstance(user_events, list) and user_events else [
                 {'message_id': message_id},
@@ -4736,9 +4809,18 @@ class Chat:
                     'state': 'pending', 'at': now()})
                 self.last_send_persisted = True
         self.refresh_tool_inventory()
+        p7_debug = dict(getattr(self, 'p7_experience_hints_debug', {}) or {})
+        if (p7_experience_hints is not None and p7_experience_hints not in auxiliary_context
+                and p7_debug.get('status') == 'injected'):
+            p7_debug['status'] = 'trimmed_by_request_budget'
+            self.p7_experience_hints_debug = p7_debug
+        context_modules = [{'label': labels.get(id(message), ''),
+                            'chars': context_chars([message])}
+                           for message in [*auxiliary_context, *runtime_required]]
         self._log_context(text, autonomy, request_id, head, profile_context, stable, history, recalled_memories,
                           background_details, short_term_details, [*auxiliary_context, *runtime_required], tool_schema, user,
-                          bound(history))
+                          bound(history), context_modules=context_modules,
+                          p7_experience_hints=p7_debug)
         # Ticket 403: one snapshot per real model request (a turn with tools has several). Writes never
         # feed back into the request and never break it.
         from veil.system import request_snapshots
@@ -5563,6 +5645,7 @@ class Chat:
         loop_failure_history = {}
         no_progress_batches = 0
         no_progress_nudges = 0
+        empty_memory_notices_omitted = 0
 
 
         def log_tool(name, path, state, call_id=None, detail=None, **metadata):
@@ -5630,10 +5713,11 @@ class Chat:
                                  sent=True, usage_status='reported', completion_tokens=None,
                                  cached_tokens=None, finish_reason='', latency_seconds=None):
             row = {
-                'kind': 'tool_step_context', 'request_id': request_id, 'step': step,
+                'kind': 'tool_step_context', 'request_id': request_id, 'step': step, 'time': now(),
                 'sent': bool(sent), 'usage_status': usage_status,
                 'completion_tokens': completion_tokens, 'cached_tokens': cached_tokens,
                 'finish_reason': finish_reason or '', 'latency_seconds': latency_seconds,
+                'empty_memory_notices_omitted': empty_memory_notices_omitted,
                 'model': self.cfg.provider['model'],
                 'model_input_limit': self.cfg.provider['max_input_tokens'],
                 'estimated_input_tokens': estimated_tokens,
@@ -5879,6 +5963,10 @@ class Chat:
 
         for step in range(max_steps):
             self.long_tasks.set_tool_step(step)
+            if step > 0:
+                before = len(loop_messages)
+                loop_messages[:] = [message for message in loop_messages if not empty_memory_notice(message)]
+                empty_memory_notices_omitted += before - len(loop_messages)
             if not autonomy and self.user_stop.is_set():
                 self.investigation.interrupt('user_stop', request_id, checkpoint_resuming)
                 checkpoint_interrupted = True

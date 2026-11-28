@@ -173,6 +173,70 @@ output_cny_per_million = "8"
                      if row.get('message_id') == chat.last_reply_message_id)
         self.assertEqual(reply['request_id'], rows[0]['request_id'])
 
+    def test_later_tool_requests_omit_only_empty_memory_notices(self):
+        from veil import prompts
+        tool_call = SimpleNamespace(id='digest-call', function=SimpleNamespace(
+            name='lab_file_digest', arguments='{"path":"lab/sample.txt"}'))
+        first = SimpleNamespace(content=None, tool_calls=[tool_call],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'tool_calls': [{
+                'id': 'digest-call', 'type': 'function', 'function': {
+                    'name': 'lab_file_digest', 'arguments': '{"path":"lab/sample.txt"}'}}]})
+        final = SimpleNamespace(content='Done.', tool_calls=[],
+            model_dump=lambda exclude_none=True: {'role': 'assistant', 'content': 'Done.'})
+        tools = SimpleNamespace(tools=[SimpleNamespace(name='lab_file_digest', description='Digest', inputSchema={})],
+            description='Fictional tools.', capability_event=None, capability_event_model=None,
+            capability_record=None, consume_capability_event=Mock(),
+            invoke=Mock(return_value=('digest metadata', '成功', 'lab/sample.txt')))
+        memory = Mock()
+        memory.budgets_recall = False
+        memory.last_context_refs = []
+        memory.last_context_kinds = {}
+        memory.context.return_value = [{'role': 'system', 'content':
+            prompts.text('memory.recall.head') + '\n' + prompts.text('memory.recall.empty')}]
+        seen = []
+        replies = iter([(first, 100, 20, 0), (final, 120, 5, 0)])
+        def respond(messages, **_kwargs):
+            seen.append([dict(row) for row in messages])
+            return next(replies)
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 3}),
+                    self.store, self.budget, Mock(side_effect=respond),
+                    memory=memory, tools=tools, output=lambda _: None)
+
+        chat.send('Digest the fictional file.')
+
+        empty = prompts.text('memory.recall.empty')
+        self.assertTrue(any(empty in str(row.get('content')) for row in seen[0]))
+        self.assertFalse(any(empty in str(row.get('content')) for row in seen[1]))
+        rows = [row for row in self.store.read('test/context-log.jsonl')
+                if row.get('kind') == 'tool_step_context']
+        self.assertEqual(rows[-1]['empty_memory_notices_omitted'], 1)
+
+    def test_p7_slot_is_auxiliary_bounded_and_confirmed_only(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        chat.experience_hint_provider = lambda _situation: [
+            {'status': 'uncertain', 'trigger_condition': 'uncertain trigger', 'guidance': 'do not inject'},
+            {'status': 'confirmed', 'trigger_condition': 'when a fictional export fails',
+             'guidance': 'read the local error before retrying'},
+            *[{'status': 'confirmed', 'trigger_condition': f'case {index}',
+               'guidance': 'whole guidance ' + ('x' * 700)} for index in range(8)],
+        ]
+
+        chat.send('A fictional export failed.')
+
+        sent = self.model.call_args.args[0]
+        index = next(i for i, row in enumerate(sent)
+                     if str(row.get('content')).startswith('PROGRAM-SELECTED EXPERIENCE HINTS'))
+        self.assertGreater(index, 1)
+        self.assertLess(index, len(sent) - 1)
+        self.assertNotIn('do not inject', sent[index]['content'])
+        debug = chat.p7_experience_hints_debug
+        self.assertEqual(debug['slot'], 'p7.experience_hints')
+        self.assertLessEqual(debug['used_tokens'], 600)
+        self.assertLessEqual(debug['selected'], 4)
+        context = self.store.read('test/context-log.jsonl')[-1]
+        self.assertEqual(context['p7_experience_hints']['status'], 'injected')
+        self.assertIn('p7.experience_hints', [row['label'] for row in context['context_modules']])
+
     def test_saved_raw_text_and_reopened_context(self):
         self.chat.send('虚构的中文消息')
         reopened = Chat(self.cfg, self.store, self.budget, self.model)
@@ -391,7 +455,7 @@ output_cny_per_million = "8"
         self.assertEqual(notice, tools.capability_event)
         self.assertEqual(self.store.read('test/tools.jsonl'), [])
 
-    def test_tool_request_offers_tools_without_repeating_a_capability_list(self):
+    def test_tool_request_keeps_live_capabilities_outside_the_stable_facts(self):
         schemas = [
             {'type': 'function', 'function': {'name': 'lab_file_digest',
              'description': 'Read metadata only for a regular file inside lab; no outside access.',
@@ -417,13 +481,16 @@ output_cny_per_million = "8"
 
         messages = model.call_args.args[0]
         prompt_text = '\n'.join(item['content'] for item in messages if item['role'] == 'system')
-        # Tool definitions carry names and usage; no second list is added to every turn.
-        self.assertNotIn('CURRENT CAPABILITIES', prompt_text)
+        self.assertIn('CURRENT CAPABILITIES', prompt_text)
+        stable_facts = next(item['content'] for item in messages
+                            if item['role'] == 'system' and item['content'].startswith('SYSTEM FACTS'))
+        self.assertNotIn('lab_file_digest', stable_facts)
+        self.assertNotIn('Fictional lab tools.', stable_facts)
         offered = {item['function']['name'] for item in model.call_args.kwargs['tools']}
         self.assertTrue({'lab_file_digest', 'move_lab_file', 'long_task_status',
                          'long_task_update', 'send_message'} <= offered)
         snapshot = chat.current_capability_snapshot(model.call_args.kwargs['tools'])
-        self.assertIn('lab_file_digest', snapshot)
+        self.assertIn(f'{len(offered)} callable tools', snapshot)
         self.assertIn('anywhere in your own workspace', snapshot)
 
     def test_pure_send_message_calls_show_and_save_only_their_individual_bubbles(self):
@@ -629,12 +696,12 @@ output_cny_per_million = "8"
         chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 2}),
                     self.store, self.budget, self.model, tools=tools)
         current = chat.current_capability_snapshot()
-        self.assertIn('search_files', current)
+        self.assertIn('callable tools', current)
         # The tool definition already carries the description; the snapshot only names it.
         self.assertNotIn('Search configured folder.', current)
         final_step_chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 1}),
                               self.store, self.budget, self.model, tools=tools)
-        self.assertNotIn('search_files', final_step_chat.current_capability_snapshot())
+        self.assertIn('No callable tools', final_step_chat.current_capability_snapshot())
         files.tools.clear()
         files.startup_notice = 'Fictional file service is unavailable.'
         unavailable = chat.current_capability_snapshot()
@@ -655,7 +722,7 @@ output_cny_per_million = "8"
                     self.store, self.budget, self.model, tools=tools)
         offered = chat.tool_schemas()
         snapshot = chat.current_capability_snapshot(offered)
-        self.assertIn('search_files', snapshot)
+        self.assertIn(f'{len(offered)} callable tools', snapshot)
         self.assertNotIn('move_file', snapshot)
         self.assertNotIn('future_private_tool', snapshot)
         self.assertNotIn('move_file', {item['function']['name'] for item in offered})
@@ -681,19 +748,28 @@ output_cny_per_million = "8"
         chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 2}),
                     self.store, self.budget, Mock(), tools=tools, output=lambda _: None)
         calls = []
+        sent_messages = []
         def fake_model(messages, **kwargs):
-            self.assertFalse(any(str(item.get('content')).startswith('CURRENT CAPABILITIES') for item in messages))
+            live = next(str(item.get('content')) for item in messages
+                        if str(item.get('content')).startswith('CURRENT CAPABILITIES'))
+            offered_names = {item['function']['name'] for item in (kwargs.get('tools') or [])}
+            self.assertEqual(f'{len(offered_names)} callable tools' in live,
+                             bool(offered_names))
+            sent_messages.append([dict(item) for item in messages])
             calls.append((chat.current_capability_snapshot(), kwargs.get('tools')))
             return (first if len(calls) == 1 else final), 100, 20, 0
         chat.model.side_effect = fake_model
 
         chat.send('Please calculate the fictional Lab file digest.')
 
-        self.assertIn('lab_file_digest', calls[0][0])
-        self.assertIn('anywhere in your own workspace', calls[0][0])
-        self.assertNotIn('lab_file_digest', calls[1][0])
+        self.assertIn('callable tools', calls[0][0])
+        self.assertIn('own workspace', calls[0][0])
         self.assertIn('No callable tools', calls[1][0])
         self.assertIsNone(calls[1][1])
+        stable_facts = [next(item['content'] for item in messages
+                             if str(item.get('content')).startswith('SYSTEM FACTS'))
+                        for messages in sent_messages]
+        self.assertEqual(stable_facts[0], stable_facts[1])
 
     def test_peter_looks_up_timestamped_capability_record_on_demand(self):
         record = ('CAPABILITY RECORD (program-maintained; use it when asked what changed, do not claim an '
@@ -836,7 +912,7 @@ output_cny_per_million = "8"
         tools.consume_capability_event.assert_not_called()
         self.assertEqual(self.store.read('test/tools.jsonl'), [])
         autonomous_prompt = '\n'.join(item['content'] for item in model.call_args.args[0])
-        self.assertNotIn('CURRENT CAPABILITIES', autonomous_prompt)
+        self.assertIn('CURRENT CAPABILITIES', autonomous_prompt)
 
         chat.send('fictional normal chat')
         prompt = model.call_args.args[0]

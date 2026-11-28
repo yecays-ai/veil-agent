@@ -13,6 +13,10 @@ def tool(name, description='Do a thing.', parameters=None):
 
 
 class SnapshotBuildTests(unittest.TestCase):
+    def test_s7_dynamic_context_titles_are_registered(self):
+        self.assertEqual(request_snapshots.title_of('capability_state'), '当前可用能力')
+        self.assertEqual(request_snapshots.title_of('p7.experience_hints'), '情境经验提示（P7）')
+
     def test_labels_images_redaction_and_tools(self):
         messages = [
             {'role': 'system', 'content': 'persona text'},
@@ -30,6 +34,10 @@ class SnapshotBuildTests(unittest.TestCase):
         self.assertEqual(record['tools'][0]['name'], 'lookup')
         self.assertTrue(record['complete'])
         self.assertEqual(record['cache_prefix'], 1)
+        self.assertGreater(record['cache_prefix_bytes'], 0)
+        self.assertEqual(len(record['cache_prefix_sha256']), 64)
+        self.assertEqual(record['module_chars']['identity.persona'], len('persona text'))
+        self.assertEqual(len(record['tool_schema_sha256']), 64)
 
     def test_truncation_is_recorded(self):
         record = request_snapshots.build([{'role': 'system', 'content': 'x' * 20000}], ['history'],

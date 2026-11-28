@@ -1371,9 +1371,15 @@ max_result_bytes = 200
         responses = [self.message([expand]), self.message([read]),
                      self.message(content='I read the posts and finished the reply.')]
         requests = []
+        stable_facts = []
+        capability_states = []
 
         def model(messages, *, tools=None, **_kwargs):
             requests.append(tools)
+            stable_facts.append(next(row['content'] for row in messages
+                                     if str(row.get('content')).startswith('SYSTEM FACTS')))
+            capability_states.append(next(row['content'] for row in messages
+                                          if str(row.get('content')).startswith('CURRENT CAPABILITIES')))
             answer = responses[len(requests) - 1]
             prompt_tokens = round(request_byte_size(messages, tools) * 0.2)
             return answer, prompt_tokens, 20, 0
@@ -1390,6 +1396,9 @@ max_result_bytes = 200
         self.assertTrue(any(schema['function']['name'] == 'mcp__galatea_garden__get_thread'
                             for schema in requests[1]),
                         [schema['function']['name'] for schema in requests[1]])
+        self.assertEqual(len(set(stable_facts)), 1)
+        self.assertNotEqual(capability_states[0], capability_states[1])
+        self.assertIn(f'{len(requests[1])} callable tools', capability_states[1])
         chat.mcp_services.invoke.assert_called_once()
         diagnostics = [row for row in self.store.read('test/context-log.jsonl')
                        if row.get('kind') == 'tool_step_context']

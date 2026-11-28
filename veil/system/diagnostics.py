@@ -917,8 +917,9 @@ def trace(root, role, request_id='', run_id='', call_id=''):
         chain['context'].append({key: row.get(key) for key in
                                  ('time', 'kind', 'step', 'sent', 'usage_status',
                                   'estimated_input_tokens', 'actual_input_tokens',
-                                  'completion_tokens', 'latency_seconds', 'finish_reason',
-                                  'history_rounds')})
+                                  'completion_tokens', 'cached_tokens', 'latency_seconds', 'finish_reason',
+                                  'history_rounds', 'context_modules', 'p7_experience_hints',
+                                  'empty_memory_notices_omitted')})
         chain['context'][-1]['trim_note'] = _redact(row.get('trim_note'))
     for row in recalls:
         if ids and _text(row.get('request_id')) in ids:
@@ -984,6 +985,11 @@ def snapshots(root, role, request_id, limit=8):
             out.append({'step': record.get('step'), 'kind': record.get('kind'),
                         'model': record.get('model'), 'created_at': record.get('created_at'),
                         'estimated_tokens': record.get('estimated_tokens'),
+                        'request_structure_bytes': record.get('request_structure_bytes'),
+                        'cache_prefix_bytes': record.get('cache_prefix_bytes'),
+                        'cache_prefix_sha256': record.get('cache_prefix_sha256'),
+                        'tool_schema_sha256': record.get('tool_schema_sha256'),
+                        'module_chars': record.get('module_chars'),
                         'blocks': len(record.get('blocks') or []),
                         'complete': record.get('complete')})
     except OSError:

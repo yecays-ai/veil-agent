@@ -275,7 +275,9 @@ class GitHubWakeIntegrationTests(unittest.TestCase):
             self.assertIn('2:     return', json.dumps(seen[2][0]))
             self.assertEqual(get.call_count, 6)
             self.assertEqual(chat.mcp_services.permission_for('mcp__github__github_read'), 'allow')
-            self.assertIn('mcp__github__github_read', chat.current_capability_snapshot())
+            self.assertIn('mcp__github__github_read',
+                          {row['function']['name'] for row in chat.tool_schemas()})
+            self.assertIn('callable tools', chat.current_capability_snapshot())
             self.assertEqual(tool_policy('desktop_create_file'), 'desktop_create')
             # Existing file protection remains active, including on repeated wakes.
             self.assertEqual(manager.invoke('desktop_create_file', requests[-1][1])[1], '被拒绝')

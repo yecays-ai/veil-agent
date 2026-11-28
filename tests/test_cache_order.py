@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from veil.core.veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage
+from veil.core.veil_agent import Budget, Character, Chat, Store, history_keep, parse_cache_usage, self_facts
 
 
 class CacheOrderTests(unittest.TestCase):
@@ -40,6 +40,15 @@ class CacheOrderTests(unittest.TestCase):
             self.assertNotIn('ledger', message['content'])
         self.assertIn('Local time: 2026-10-19T09:05', second[-2]['content'])
         self.assertEqual(second[-1], {'role': 'user', 'content': 'two'})
+
+    def test_live_tool_description_cannot_rewrite_stable_system_facts(self):
+        collapsed = SimpleNamespace(description='Collapsed tool groups.')
+        expanded = SimpleNamespace(description='Expanded browser and files.')
+        left = self_facts(self.cfg, self.budget, capabilities=collapsed)[0]
+        right = self_facts(self.cfg, self.budget, capabilities=expanded)[0]
+        self.assertEqual(left, right)
+        self.assertNotIn('Collapsed tool groups', left)
+        self.assertNotIn('Expanded browser', right)
 
     def test_recalled_memory_does_not_break_the_prefix(self):
         memory = Mock()

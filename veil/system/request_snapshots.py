@@ -56,6 +56,8 @@ TITLES = {
     'extra': '本轮附加说明',
     'screen_pop': '弹幕与屏幕消息记录',
     'return_activity': '你回来期间他做了什么',
+    'p7.experience_hints': '情境经验提示（P7）',
+    'capability_state': '当前可用能力',
     'capability_event': '能力更新',
     'mcp_problem': 'MCP 故障说明',
     'time_ledger': '时间与花费',
@@ -134,8 +136,11 @@ def build(messages, labels, *, request_id, step=1, kind, model, message_ids=(), 
     total = 0
     redacted = 0
     truncated = 0
+    module_chars = {}
     for index, message in enumerate(messages):
         text = _text(message.get('content'))
+        label = labels[index] if index < len(labels) else ''
+        module_chars[label or 'unlabelled'] = module_chars.get(label or 'unlabelled', 0) + len(text)
         text, hidden = _redact(text)
         redacted += hidden
         was_cut = False
@@ -148,13 +153,16 @@ def build(messages, labels, *, request_id, step=1, kind, model, message_ids=(), 
             was_cut = True
         if was_cut:
             truncated += 1
-        label = labels[index] if index < len(labels) else ''
         blocks.append({'role': _safe(message.get('role')), 'label': _safe(label),
                        'title': title_of(label), 'chars': len(text), 'text': text,
                        'truncated': was_cut})
     tool_list, tools_complete, tools_bytes = _tools(tools)
+    prefix_count = max(0, min(len(messages), int(cache_prefix or 0)))
+    prefix_data = json.dumps(messages[:prefix_count], ensure_ascii=False, separators=(',', ':'), default=str)
+    message_data = json.dumps(messages, ensure_ascii=False, separators=(',', ':'), default=str)
+    tool_data = json.dumps(tools or [], ensure_ascii=False, separators=(',', ':'), default=str)
     record = {
-        'version': 3,
+        'version': 4,
         'sent': bool(sent),
         'request_id': str(request_id),
         'step': int(step),
@@ -165,6 +173,13 @@ def build(messages, labels, *, request_id, step=1, kind, model, message_ids=(), 
         'autonomy_run_id': _safe(autonomy_run_id),
         'estimated_tokens': int(estimated_tokens or 0),
         'cache_prefix': int(cache_prefix or 0),
+        'cache_prefix_chars': sum(len(_text(item.get('content'))) for item in messages[:prefix_count]),
+        'cache_prefix_bytes': len(prefix_data.encode('utf-8')),
+        'cache_prefix_sha256': hashlib.sha256(prefix_data.encode('utf-8')).hexdigest(),
+        'message_bytes': len(message_data.encode('utf-8')),
+        'request_structure_bytes': len(message_data.encode('utf-8')) + len(tool_data.encode('utf-8')),
+        'tool_schema_sha256': hashlib.sha256(tool_data.encode('utf-8')).hexdigest(),
+        'module_chars': module_chars,
         'trim_note': _safe(trim_note or ''),
         'memory_ids': [str(item) for item in memory_ids if item],
         'tools': tool_list,

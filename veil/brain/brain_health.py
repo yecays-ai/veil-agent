@@ -1121,6 +1121,20 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         if not timed_out:
             recall_rows = [row for row in _read_jsonl(rdir / 'recall-diagnostics.jsonl', 600)
                            if _in_range(row.get('time'), dt_from, dt_to)]
+            context_rows = [row for row in _read_jsonl(rdir / 'context-log.jsonl', 600)
+                            if _in_range(row.get('time'), dt_from, dt_to)]
+            sent_context = [row for row in context_rows if row.get('sent') is True]
+            cache_rows = [row for row in sent_context if type(row.get('cached_tokens')) is int]
+            actual_input = sum(int(row.get('actual_input_tokens') or 0) for row in cache_rows)
+            cached_input = sum(int(row.get('cached_tokens') or 0) for row in cache_rows)
+            p7_injected = sum(1 for row in context_rows
+                              if (row.get('p7_experience_hints') or {}).get('status') == 'injected')
+            omitted_by_request = {}
+            for row in sent_context:
+                rid = str(row.get('request_id') or '')
+                omitted_by_request[rid] = max(omitted_by_request.get(rid, 0),
+                                              int(row.get('empty_memory_notices_omitted') or 0))
+            empty_notices_omitted = sum(omitted_by_request.values())
             degraded_count = 0
             judge_fail_count = 0
             budget_drop_count = 0
@@ -1144,8 +1158,11 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                 'title': '运行期召回、整理与注入异常统计',
                 'severity': 'warn' if runtime_warns else 'good',
                 'status_label': f"{runtime_warns} 次运行降级/异常" if runtime_warns else '运行平稳',
-                'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"),
-                'object': 'recall-diagnostics.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
+                'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"
+                           f"实际发送 {len(sent_context)} 次；缓存用量已报告 {len(cache_rows)} 次"
+                           + (f"（{cached_input}/{actual_input} tokens）" if actual_input else '')
+                           + f"；后续工具请求省略空记忆提示 {empty_notices_omitted} 块；P7 槽位注入 {p7_injected} 次。"),
+                'object': 'recall-diagnostics.jsonl / context-log.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
                 'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
                 'source': 'role runtime jsonl',
                 'confidence': '高可信（真实日志计数）',
