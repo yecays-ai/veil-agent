@@ -13,7 +13,7 @@
 
 ### 1.1 一句话结论
 
-P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7fe9ec`，VEIL 已具备权威经历库（`brain.db` / `EventMemory`）、认知治理状态机（`LearnedContext` + S3 语义核验）、后台经验沉淀（`CognitiveConsolidator` + `p7.experience.v1`）及 `AUXILIARY` 注入槽位（`Chat.p7_experience_hints_context()`，4 条 / 600 tokens / 仅 `confirmed` / `advice_only`）。
+P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7fe9ec`，VEIL 已具备权威经历库（`brain.db` / `EventMemory`）、认知治理状态机（`LearnedContext` + S3 语义核验）、后台经验沉淀（`CognitiveConsolidator` + `p7.experience.v1`）及 `AUXILIARY` 注入槽位（`Chat.p7_experience_hints_context()`，4 条 / 600 tokens / 仅 `confirmed`）。现有 `advice_only` 只表达内容用途，工具安全仍由程序权限与审批独立保证。
 
 当前的核心缺口在于**从“静态候选沉淀与空槽位”到“情境触发、自主判断、行为验证与反馈演进闭环”的五段断层**：
 1. 生产角色隔离 `experience_hint_provider` 尚未接线（`P7-WIRE-01`）；
@@ -22,7 +22,7 @@ P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7
 4. 候选匹配仍为纯词法重合，无法识别中文改写、跨语言表达或隐含场景（`P7-MATCH-01`）；
 5. 尚缺四级证据分级与客观自主经验晋升路径、Peter 对经验的自主判断（采用/调整/反驳/悬置/提修订）与依据留痕、以及将行动结果与用户反馈回流至巩固与成长记录的完整闭环（`P7-BEHAVIOR-01`）。
 
-本方案以**最短可维护路径、零平行系统、默认关闭安全灰度、低成本高自然度**为原则，将 P7 拆分为 **`P7-S1` → `P7-S2` → `P7-S3` → `P7-S4` → `P7-S5`** 五张依赖清晰的施工工单，并明确与 P8 多日真机终验的衔接边界。
+本方案以**最短可维护路径、零平行系统、默认关闭、低成本高自然度**为原则，将 P7 拆分为 **`P7-S1` → `P7-S2` → `P7-S3` → `P7-S4` → `P7-S5`** 五张依赖清晰的施工工单，并明确与 P8 自动体检和数据验收的衔接边界。
 
 ### 1.2 上游前置状态与五项分离核查
 
@@ -50,7 +50,7 @@ P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7
 | **权威经历与事件证据层** | `veil/brain/storage/brain_authority.py`、`veil/brain/event_memory.py`（`events`/`event_stages`/`event_ledger`/`quotes`/`sources`） | 作为经验提炼素材与证据新鲜度核验真相源，零新建平行存储。 |
 | **认知状态机与 S3 语义核验** | `veil/brain/learned_context.py:38-101, 2578-2630, 2768-2810`、`veil/brain/relationship_semantic.py:246` | 复用四区独立预算（6200B）、`lan > evidence > peter` 主权、增量 `ChatHistoryIndex`、120 条分批反证、与 `RelationshipSemanticWorker.verify_claim()`。 |
 | **后台巩固与 `p7.experience.v1`** | `veil/brain/cognitive_consolidation.py:47, 67-70, 2044-2150, 2574-2723` | 复用 `experience_candidates`、`vetoed_experiences`、`query_experience_candidates()`、`decide_experience_candidate()`、`pending_commit` 零重付费续传与共享 `Budget` 记账。 |
-| **AUXILIARY 标准槽位与硬预算** | `veil/core/veil_agent.py:74-75, 2774-2818, 4530-4531, 4576, 4843-4845` | 复用 `p7.experience_hints` 槽位（位于 `memory.short_notes` 后、`recall_candidates` 前；上限 4 条 / 600 tokens；仅 `confirmed`；`advice_only`；超窗标记 `trimmed_by_request_budget`）。 |
+| **AUXILIARY 标准槽位与硬预算** | `veil/core/veil_agent.py:74-75, 2774-2818, 4530-4531, 4576, 4843-4845` | 复用 `p7.experience_hints` 槽位（位于 `memory.short_notes` 后、`recall_candidates` 前；上限 4 条 / 600 tokens；仅 `confirmed`；超窗标记 `trimmed_by_request_budget`）；`advice_only` 不承担权限安全职责。 |
 | **同轮零成本语义向量与情境信号** | `veil/core/veil_agent.py:4388-4396`、`veil/brain/memory_agent.py:1261, 2041, 2061-2072, 2358`、`veil/brain/recall/context_signal.py:83-200` | **`Memory.context()` 在 `Chat._send()` 中早于 `p7_experience_hints_context()` 执行**（第 4388 行先于第 4531 行），P7 可直接复用已算好的 `_turn_query_vector`（零额外 Embedding 费）与 S5 `context_signal`！ |
 | **自主唤醒态势与洁净审计** | `veil/autonomy/autonomy.py:1102-1172, 1385-1424` | 复用 `_wake_situation()`（区分任务态与闲暇态）及 `output_audit`（洁净/不洁/未审计三态），杜绝旁白扮演污染经验沉淀。 |
 | **送达确认与回滚钩子** | `veil/core/veil_agent.py:4112-4159`、`veil/brain/memory_agent.py:1581` | 沿用“仅在实际送达后记账，取消/失败/回滚不强化”的送达语义记录 P7 实际生效暴露。 |
@@ -90,7 +90,7 @@ P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7
 | 编号 | 原始需求 | 已有能力（`d7fe9ec` 实证） | 待接入能力 | 待实现能力 | 归属工单 |
 | --- | --- | --- | --- | --- | --- |
 | **R01** | 未履行的承诺、未做到的事情，在相似情境再次出现时触发相关经验 | `LearnedContext` `ongoing`（未完成事项）、`EventMemory` 经历、`cognitive_consolidation.py` 候选沉淀 | 将 `ongoing` 状态、日历约定与承诺失约经历接入巩固选批与 `SituationEnvelope` | 新增正交 `experience_type='unfulfilled_commitment'` 与 `domain='commitment_accountability'`，并在相似承诺情境语义触发 | `P7-S1` / `P7-S2` |
-| **R02** | 冲突后的反思、纠正及双方达成的共识能够影响后续行为 | S3 `relationship_base`（`HEAD` 常驻）、`growth` 反思、`memory.consolidation.prompt.md` 冲突修订 | 接通 `relationship_consensus` / `communication_pattern` 情境经验到 `p7.experience_hints`，并与 `HEAD` 去重协同 | 情绪/冲突信号识别、例外边界表达与去说教化提示词引导 | `P7-S1` / `P7-S2` / `P7-S3` |
+| **R02** | 冲突后的反思、纠正及双方达成的共识能够影响后续行为 | S3 `relationship_base`（`HEAD` 常驻）、`growth` 反思、`memory.consolidation.prompt.md` 冲突修订 | 接通 `relationship_consensus` 情境经验到 `p7.experience_hints`（旧 `kind=communication_pattern` 统一映射到该域），并与 `HEAD` 去重协同 | 情绪/冲突信号识别、例外边界表达与去说教化提示词引导 | `P7-S1` / `P7-S2` / `P7-S3` |
 | **R03** | 已验证有效的工作方法能够在相似任务中自然复用 | `tools.jsonl` 执行摘要、`work_checkpoint`、`long_tasks`、`tool_lesson` 候选类型 | 将 `tools.jsonl` 客观结果与当前任务/报错信号接入巩固与 `SituationEnvelope` | 新增 `experience_type='success'` + `domain='work_method'`，支持多步任务报错/扩组触发与客观验证晋升 | `P7-S1` / `P7-S2` / `P7-S3` |
 | **R04** | 自主活动中的经历、工具实践和探索结果能够影响未来的自主判断 | S6-2 `autonomy.py:1102` `_wake_situation()`、`output_audit` 三态审计、S6-3 洁净自主消费 | 在 `autonomy.py` 调用 `Chat.send()` 路径打通 `wake_context` → `SituationEnvelope` → P7 槽位 | 自主工作态 vs 闲暇态分域过滤；L2 客观工具实践的自主经验晋升与闭环回写 | `P7-S1` / `P7-S2` / `P7-S3` |
 | **R05** | 复用现有认知巩固机制，自动从真实经历、用户反馈、反思及行动结果中提炼经验 | `CognitiveConsolidator` 增量选批、批次指纹、`pending_commit` 零重付费恢复、`p7.experience.v1` | 复用现有巩固调度与 `Budget` 类目，不另建独立提炼进程 | 扩展 `select_batch()` 增量纳入 `experience-feedback.jsonl` 与客观工具/承诺结果；升级巩固提示词输出新正交字段 | `P7-S1` / `P7-S3` |
@@ -104,7 +104,7 @@ P7 不需要重建记忆库、认知状态机或权限体系。基于 `main = d7
 | **R13** | 记录经验触发、实际注入、采用或不采用的依据、行为结果及后续反馈 | `context-log.jsonl` `p7_experience_hints`、P5 H-8 仅计 `sent=True`、`Chat._finalize_recall_delivery()` | 接入送达确认钩子与 Brain「召回与注入」页 | 新增 append-only `experience-feedback.jsonl` 账本，关联 `request_id`/`session_key`/触发分/实际注入/自主姿态/客观结果/后续反馈，全链路脱敏可诊断 | `P7-S2` / `P7-S3` / `P7-S4` |
 | **R14** | 将行动结果与用户反馈重新纳入认知成长及经验演进，形成闭环 | `CognitiveConsolidator` 定期增量巩固 + `LearnedContext.submit_candidate('growth', ...)` | 打通反馈流 → 巩固器 → `experience_candidates` & `LearnedContext(growth)` | 实现反馈消费游标、跨时间验证统计更新、例外自动补充、负反馈预警与成长认知联动 | `P7-S3` |
 | **R15** | 保证跨会话、跨任务、跨交互入口及重启后的经验连续性 | `data/<role>/cognitive-consolidation-state.json` 持久化、统一 `Chat._send()` 入口 | 将巩固与 P7 状态文件接入 `brain_backup.py` 协同备份对账 | `SituationEnvelope` 统一覆盖桌面/QQ/Email/多步工具/自主活动及未来手机/语音入口；跨措辞靠语义匹配；重启自动恢复配置与候选态 | `P7-S1` / `P7-S2` |
-| **R16** | 验证经验是否真正改变后续行为，并保持人格、关系感、自然表达和独立判断能力 | VEIL Lab 隔离快照、mock 回归框架、PR #455 盲评模板与 6 条体验护栏 | 复用 `veil-lab` 隔离工作流与 `docs/ACCEPTANCE.md` 唯一清单 | 建立 9+ 真实体验验收场景、`P7=ON vs OFF` 行为对照方案与 P8 多日真机终验衔接机制 | `P7-S5` / `P8` |
+| **R16** | 验证经验是否真正改变后续行为，并保持人格、关系感、自然表达和独立判断能力 | VEIL Lab 隔离快照、mock 回归框架、PR #455 盲评模板与 6 条体验护栏 | 复用 `veil-lab` 隔离工作流与 `docs/ACCEPTANCE.md` 唯一清单 | 建立 10 项自动体验场景、`P7=ON vs OFF` 回放、Brain 主动体检与数据趋势检查，不设置人工观察期 | `P7-S5` / `P8` |
 
 ---
 
@@ -173,7 +173,7 @@ flowchart TD
 | 字段 | 状态 | 类型与枚举 | 职责说明 |
 | --- | --- | --- | --- |
 | `id` / `schema_version` / `content_key` / `kind` / `trigger_condition` / `guidance` / `reason` / `evidence_refs` / `status` / `supersedes` / `superseded_by` / `created_at` / `updated_at` | **已有** | 同 `cognitive_consolidation.py:2105-2123` | 保持 S6-3/S7 与全部单测向后兼容 |
-| `experience_type` | **新增** | `'success'` \| `'failure'` \| `'unfulfilled_commitment'` \| `'unverified_improvement'`（旧记录默认按 `kind` 回填 `'failure'`/`'success'`） | 显式区分成功经验、失败教训、未履行承诺与待验证改进方案 |
+| `experience_type` | **新增** | `'success'` \| `'failure'` \| `'unfulfilled_commitment'` \| `'unverified_improvement'` \| `'unknown_legacy'`（旧记录无结果证据时一律回填 `'unknown_legacy'`，不得从类别字段 `kind` 猜成功/失败） | 显式区分成功经验、失败教训、未履行承诺、待验证改进方案与待补证旧记录 |
 | `domain` | **新增** | `'relationship_consensus'` \| `'commitment_accountability'` \| `'work_method'` \| `'autonomous_practice'` | 决定匹配域权重、晋升门槛与确认权限 |
 | `exceptions` | **新增** | `list[str]`（最多 4 条，单条 ≤ 120 字） | 显式记录不适用条件/例外情况（Door 负向关闭条件 + 渲染提醒） |
 | `origin_evidence_tier` | **新增** | `'L1_user_feedback'` \| `'L2_objective_action'` \| `'L3_autonomy_reflection'` \| `'L4_self_eval'` | 最高有效支撑证据等级，决定晋升权限 |
@@ -181,7 +181,7 @@ flowchart TD
 | `locked` | **新增** | `bool`（默认 `False`） | Lan 锁定标记；锁定后后台巩固与自主判断永不可覆写或降级 |
 | `evidence_state` | **新增** | `'valid'` \| `'partial_stale'` \| `'invalid'` \| `'unavailable'` | 最近一次全类型新鲜度校验状态 |
 | `trigger_embedding` | **新增** | `{'model': str, 'dim': int, 'vector': list[float], 'text_sha': str} \| None` | 绑定当前 Embedding 模型与维度；换模型或文本变化时自动失效重算，绝不跨维混算 |
-| `verification` | **新增** | `{applied_count, adopted_count, adjusted_count, rebutted_count, suspended_count, positive_outcomes, negative_outcomes, consecutive_negatives, last_applied_at, last_verified_at, suspension_until, review_flag}` | 跨时间实践验证账本与悬置/负反馈预警状态 |
+| `verification` | **新增** | `{exposed_count, explicit_rebutted_count, explicit_suspended_count, positive_outcomes, negative_outcomes, consecutive_negatives, last_exposed_at, last_verified_at, suspension_until, review_flag}` | 只记录程序能可靠观测的真实暴露、显式反驳/悬置与客观结果；不把“模型看到经验”冒充“Peter 已采纳/调整” |
 
 ### 3.3 四级证据等级、防循环自证与分域晋升路径
 
@@ -203,16 +203,18 @@ flowchart TD
 | 经验域 (`domain`) | 自动晋升至 `confirmed` 的全部必要条件 | 不满足时的状态 | 用户主权保障 |
 | --- | --- | --- | --- |
 | **`relationship_consensus`**（关系共识 / 冲突沟通边界） | 必须具备 **L1 有效证据** + S3 `verify_claim()` 返回 `supported`（含 120 批反证检查）+ 无 `vetoed` 命中；**或** Lan 在 UI 点击确认 | `uncertain`（不进入行为注入） | Lan 随时可 `veto` / `lock` / `outdated`；锁定或已确认条目收到修订时只留 `pending_revision`，待 Lan 批准后旧版才转 `outdated` |
-| **`commitment_accountability`**（未履行承诺 / 兑现教训） | **路径 A**：L1（Lan 明确提及失约/未做到）+ S3 `supported`；<br>**路径 B**（需开关 `auto_promote_objective=True`）：L2 客观逾期/未完成事实（`ongoing`/日历证据）+ S3 `supported` + 无反证 | `uncertain` | 标明 `promoted_by`；Brain 页可见可一键撤销/否决 |
+| **`commitment_accountability`**（未履行承诺 / 兑现教训） | **路径 A**：L1（Lan 明确提及失约/未做到）+ S3 `supported`；<br>**路径 B**（需独立开关 `auto_promote_commitment=True`）：L2 客观逾期/未完成事实（`ongoing`/日历证据）+ S3 `supported` + 无反证 | `uncertain` | 标明 `promoted_by`；Brain 页可见可一键撤销/否决 |
 | **`work_method` & `autonomous_practice`**（工作方法 / 工具实践 / 自主探索） | **路径 A**：Lan 确认或 L1 用户正面反馈 + S3 `supported`；<br>**路径 B**（需二级开关 `auto_promote_objective=True`，默认关闭）：① 至少 **2 次不同时间/会话或不同 `autonomy_run_id`** 的 **L2 客观工具成功/失败对照实证**；② 近期无 L2 失败反例与 L1 否决；③ 通过 S3 `verify_claim()` 核对客观工具摘要（防止“工具报错却总结成成功”）；④ `experience_type != 'unverified_improvement'` | `uncertain` | 晋升标为 `promoted_by='objective_corroboration'`（`rank 2`）；在 Brain 页显著标注「自主客观实证晋升」，Lan 一键可否决且永久防复活；一旦连续 2 次负向客观结果自动降级 `uncertain` |
 | **`unverified_improvement`**（任何域的“待验证改进方案”） | **永不直接晋升**；必须先保留 `uncertain`，直到后续真实会话/自主实践产生至少 1 次 L1 或 2 次 L2 正向结果后，经巩固生成新版本（`experience_type='success'`，`supersedes=<old_id>`）再按对应域晋升 | `uncertain`（绝不注入行为） | 全程可在「关系与成长」页查看演进轨迹 |
+
+**第一次实践机会**：`unverified_improvement` 不进入正常经验注入槽位，但可进入独立的“待验证尝试”队列。只有当前情境匹配、操作低风险且不需要额外权限/付费/外部副作用时，Peter 才可将它作为一次明确标记的尝试方案自主采用；涉及工具、付费或外部写入时仍走原有程序审批。程序记录 `trial_id`、方案、真实行动和客观结果；一次 L1 正面反馈或两次独立 L2 成功后由巩固器生成新的 `success` 候选，失败则记录反证并修订或淘汰。待验证方案本身始终不能因“获得尝试机会”而变成已确认经验，也不能在普通聊天中反复出现。
 
 ### 3.4 经验完整生命周期状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> uncertain: 巩固提炼 / 自主提议 (含 unverified_improvement)
-    uncertain --> confirmed: Lan 显式 confirm\n或 L1+S3 supported\n或 客观域满足跨次L2+S3 (开关开)
+    uncertain --> confirmed: Lan 显式 confirm（unverified_improvement 除外）\n或 L1+S3 supported\n或 客观域满足跨次L2+S3 (开关开)
     uncertain --> vetoed: Lan 否决 (写永久 vetoed_experiences)
     uncertain --> outdated: 同类修订覆盖 / 证据全失效
 
@@ -242,7 +244,7 @@ stateDiagram-v2
 
 1. **去重合并**：沉淀期按 `content_key` 精确匹配 + `_jaccard_similar` + 向量余弦 `>= 0.88` 识别重复；命中已有活跃候选时**合并 `evidence_refs` 并集并刷新 `updated_at`**，避免丢弃新实证。
 2. **全类型证据新鲜度校验（关闭 `P7-EVIDENCE-01`）**：
-   - 校验结果按角色 DB/日志 `mtime+size` 做内存快照缓存，单次请求共享 `150ms` 墙钟预算，超限保守降级为 `unavailable`（不误删状态，但不放行未经核验的失效条目）：
+   - 校验结果按角色 DB/日志的稳定内容指纹（数据库 generation / 日志尾部 checkpoint + 文件标识；`mtime+size` 只能作快速预筛）做内存快照缓存。指纹无法证明内容未变时必须重验，单次请求共享 `150ms` 墙钟预算，超限保守降级为 `unavailable`（不误删状态，但不放行未经核验的失效条目）：
      - `memory:<id>`：`brain.db` `memories` 存在、`is_tombstone=0 AND is_deleted=0`、不在 `delete_requests(status='pending')`，且按可见性规则 `bucket != 'archived'`；
      - `event:<id>`：`brain.db` `events` 存在，且若关联 `memory_id`，该记忆亦满足上述有效条件；
      - `chat:<id>`：复用 `LearnedContext` 增量 `ChatHistoryIndex` 校验 `chat.jsonl` 中存在且未被删除/撤回；
@@ -252,7 +254,7 @@ stateDiagram-v2
 3. **冲突处理（双阶段）**：
    - *沉淀期*：同触发情境下新建议与旧建议矛盾 → 走 `supersedes_id` 修订链；旧条为 Lan 确认时保持旧条有效、新条标 `pending_revision` 直到 Lan 审批；旧条为程序晋升且新条实证更强时旧条退为 `outdated` + `superseded_by`。
    - *注入期*：多条 `confirmed` 经验在同一情境同时命中且语义/行动建议互斥（通过 `supersedes` 链或正负同主题检测）→ 按确定性优先级只留最高优一条：**`Lan 明确确认(3) > 更高证据等级(L1>L2) > 最近跨时间验证成功(last_verified_at) > 匹配分更高`**；落选者记入 `dropped(reason='conflict_superseded')`，绝不把两条打架的建议同时塞给模型。
-4. **否决一致性**：Lan `veto` 写入 `vetoed_experiences` 永久账本，并与 `LearnedContext` `relationship.vetoed` 联合检查；支持 S3 语义反证防改写复活；`vetoed` 条目对 `confirm` 返回 `409`，只能由 Lan 显式 `restore`。
+4. **否决一致性**：Lan `veto` 以原子事务写入 `vetoed_experiences` 永久账本，并与 `LearnedContext` `relationship.vetoed` 联合检查；支持 S3 语义反证防改写复活；`vetoed` 条目对 `confirm` 返回 `409`，只能由 Lan 显式 `restore`。候选查询可以返回快照，但 Provider 在真正渲染前必须在同一同步边界重验状态与否决账本，已提交的否决不得再进入本轮提示。
 
 ---
 
@@ -272,7 +274,7 @@ stateDiagram-v2
 | --- | --- | --- | --- | --- |
 | **`chat`（桌面 / QQ / Email）** | 首轮 `step=0` | `Memory._turn_query_vector` + S5 `context_signal` + 最近 2–4 轮对话 + `ongoing` + `HEAD` 去重集 | 全部 4 域（按 `context_signal` 动态加权） | `short_ack`（纯表情/“嗯/好”）直接短路 `no_match`（0 Token） |
 | **`tool_step`（`_tool_chat` `step>0`）** | 仅工具报错 / 新展开工具组 / `no_progress` 时补检 | 错误类型、工具名、`work_checkpoint` | 仅 `work_method`（`tool_lesson`） | 不重跑情感/关系经验；仍共享总上限 4 条 / 600 tokens；不打断缓存前缀 |
-| **`autonomy`（`autonomy.py`）** | 自主唤醒首轮 | `autonomy._wake_situation()` + `Memory._turn_query_vector` + `long_tasks` + 上次自主记录 | 工作态：`work_method` / `commitment_accountability`；闲暇态：`autonomous_practice` / `autonomy_lesson` | 工作态抑制闲暇/聊天情感经验；遵守 `output_audit` 洁净红线 |
+| **`autonomy`（`autonomy.py`）** | 自主唤醒首轮 | `autonomy._wake_situation()` + `Memory._turn_query_vector` + `long_tasks` + 上次自主记录 | 工作态：`work_method` / `commitment_accountability`；闲暇态：`autonomous_practice`（`autonomy_lesson` 仅作为旧 `kind`，统一映射到该域） | 工作态抑制闲暇/聊天情感经验；遵守 `output_audit` 洁净红线 |
 | **`glance` / `codex_watch`** | 不触发 | — | 无 | 直接返回 `skipped_entry_mode`（0 Token），与 `skip_recall=True` 一致 |
 | **未来入口（C1 手机 / V 语音）** | 统一复用 `Chat._send()` | 自动继承 `entry_mode='mobile'/'voice'` + 相同 `SituationEnvelope` | 与 `chat` 一致（语音短停顿/识别碎片走 `short_ack` 防误触） | 零重复开发，天然共享同一套经验库、主权与诊断 |
 
@@ -284,11 +286,11 @@ stateDiagram-v2
 
 1. **语义匹配分 $S_{\text{sem}}$（权重 0.55）**：
    - 在经验入库/确认时计算并缓存 `trigger_embedding`（输入为 `trigger_condition + " | " + domain + " | " + experience_type`，仅在新建或文本变更时调用一次当前 Embedder，绑定模型与维度）；
-   - 推理期**直接复用 `Memory._turn_query_vector`** 计算余弦相似度（当近期对话存在跨轮隐含铺垫且当前句较短时，如 `followup=True`，在首轮已复用包含近期上下文的查询向量）；
+   - 推理期复用本轮唯一一次查询向量计算余弦相似度；`followup=True` 或当前句过短时，在既有 embedding 调用前由 `SituationEnvelope` 将当前句与最近 2–4 轮相关上下文组成同一查询文本，Recall 与 P7 共用该向量，不额外调用 Embedder；
    - 无需任何额外网络请求；可覆盖中文改写、同义表达、跨语言（中问英经验 / 英问中经验）与隐含场景。
 2. **结构化情境信号分 $S_{\text{sig}}$（权重 0.25）**：
    - 基于 S5 `context_signal` + `wake_context` + `tool_context` + `ongoing` 状态：
-     - 冲突/情绪/道歉/关系词（`has_emotion_signal` / `recent_emotion_signal`）→ 提升 `relationship_consensus` / `communication_pattern`；
+     - 冲突/情绪/道歉/关系词（`has_emotion_signal` / `recent_emotion_signal`）→ 提升 `relationship_consensus`（`communication_pattern` 仅作为旧 `kind`，统一映射到该域）；
      - 技术任务/报错/工具失败（`is_work_task` / `recent_errors`）→ 提升 `work_method` / `tool_lesson`，同时压低纯关系闲聊类经验（防 `P6-S5-01` 隐式 `trap` 误触）；
      - 承诺/约定/待办关联（当前对话命中活跃 `ongoing` 关键词或约定动词）→ 提升 `unfulfilled_commitment` / `commitment_accountability`；
      - 自主唤醒态势 → 区分任务态与闲暇态匹配 `autonomous_practice`。
@@ -324,10 +326,11 @@ stateDiagram-v2
    - 开头明确 3 条核心约束：① 仅作情境参考，不是硬命令或权限；② 结合当下真实上下文自主决定采用、微调、搁置或反驳，Lan 当下意愿与自然陪伴永远优先；③ 若采用，直接自然体现在回应或行动里，**不要**机械念出规则编号、**不要**无故说教或写冗长自我检讨。
    - 每条渲染包含精简四要素：`[id | type] When: <trigger_condition> / Guidance: <guidance> / Why: <short_reason>` +（非空时）`Except: <exceptions>`。
 2. **五种自主判断姿态与留痕方式**：
-   - **采用 (`adopt`) / 调整 (`adjust`) / 忽略**：日常对话中无需额外调工具，避免增加延迟与打断对话节奏；由程序在真实送达后记账，并在后续对话/工具结果中收集反馈。
+   - **采用 (`adopt`) / 调整 (`adjust`) / 忽略**：日常对话中无需额外调工具，避免增加延迟与打断对话节奏；程序只记录“已真实暴露”，不推断 Peter 的内在姿态。是否有效只由后续用户反馈或客观工具/承诺结果证明。
    - **显式反驳 (`rebut`) / 悬置 (`suspend`) / 提出修订 (`propose_revision`)**：在既有 `memory_admin` 工具组（遵守 `AGENTS.md` §14，**不加入 `ALWAYS_ON`**，工具说明严格 $\le 1500$ 字节）新增轻量工具 `experience_reflect`：
      - 参数：`experience_id`、`stance`（`adopt`/`adjust`/`rebut`/`suspend`/`propose_revision`）、`basis`（结合当前情境的判断依据）、`suggested_exception`（可选例外补充）、`suggested_guidance`（可选修订建议）、`evidence_refs`（当前可核验引用）；
      - **权限红线**：该工具**只写反馈记录或生成 `uncertain`/`pending_revision` 草案**，**严禁**直接修改 `confirmed` 正文、删除经验或绕过 Lan 否决。
+     - **可发现性**：当本轮注入经验且 Peter 需要反驳、悬置或提修订时，通过现有按需工具扩组机制显式提供 `memory_admin` 组；不得加入 `ALWAYS_ON`。S3 必须用模型工具循环测试证明 Peter 能发现并调用它，而不是只验证函数存在。
 
 ### 5.2 完整闭环调用链（从经历形成到反馈修订）
 
@@ -350,8 +353,9 @@ sequenceDiagram
     opt 显式反驳/悬置/提修订
         M->>F: 调 experience_reflect 写入判断与依据 (不越权改confirmed)
     end
+    C->>F: 发送前原子写入 pending_delivery（request_id 幂等）
     M-->>U: 真实送达回复 / 完成自主活动 (output_audit.clean)
-    C->>F: _finalize_recall_delivery() 落盘实际暴露 + 客观工具/承诺结果
+    C->>F: _finalize_recall_delivery() 将 pending 标为 sent + 落盘客观工具/承诺结果；重启时协调未完成记录
     Note over F,K: 后续周期或新对话反馈到来
     U->>C: 后续用户反馈 / 承诺兑现结果 / 新工具成败
     K->>F: select_batch() 增量读取未结算反馈与新经历
@@ -363,7 +367,7 @@ sequenceDiagram
 
 | 信号类别 | 采集位置 | 采集内容（脱敏存储） | 回流作用 |
 | --- | --- | --- | --- |
-| **实际暴露记账** | `Chat._finalize_recall_delivery()` | `request_id`、`session_key`、`entry_mode`、`injected_exp_ids`、`match_scores`（仅真实送达写；取消/失败/裁剪不写） | 统计真实应用频次与跨会话暴露，支撑冷却与去重 |
+| **实际暴露记账** | 发送前 `pending_delivery` + `Chat._finalize_recall_delivery()` | `request_id`、`session_key`、`entry_mode`、`injected_exp_ids`、`match_scores`；发送成功后原子标 `sent`，失败标 `cancelled`，重启按既有请求送达事实协调 | 统计真实暴露频次与跨会话暴露，支撑冷却与去重；崩溃窗口不漏记也不把失败回复算作送达 |
 | **客观工具与任务结果** | `Chat._tool_chat()` / `autonomy.py` 结束快照 | 关联 `request_id` 内的工具成功/失败/`checkpoint_verified`/`no_progress`、`long_task` 状态 | 为 `work_method`/`autonomous_practice` 提供 L2 客观验证与负反馈信号 |
 | **承诺履行结果** | `LearnedContext` `ongoing` 状态变更 + 日历约定 | 关联 `commitment_accountability` 经验对应的待办完成/逾期事实 | 验证未履行承诺类经验是否真正减少重复失约 |
 | **Peter 自主判断** | `experience_reflect` 工具调用 | `exp_id`、`stance`、`basis`、`suggested_exception`/`suggested_guidance` | 触发悬置冷却（`suspend`）、生成修订草案或补充例外 |
@@ -383,6 +387,7 @@ sequenceDiagram
 | `memory.p7.allow_in_autonomy` | `True` | `bool` | 总开关开启时是否允许自主活动注入 |
 | `memory.p7.allow_tool_step_recheck` | `True` | `bool` | 多步工具报错/扩组时是否允许补检 `work_method` |
 | `memory.p7.auto_promote_objective` | **`False`** | `bool` | 自主/工具跨次 L2 客观实证自动晋升开关（二级灰度开关，默认关闭） |
+| `memory.p7.auto_promote_commitment` | **`False`** | `bool` | 承诺逾期/未完成 L2 客观事实自动晋升的独立开关；不得借用自主/工具开关扩大授权范围 |
 | `memory.p7.semantic_gate_enabled` | **`False`** | `bool` | 灰区轻量 LLM 复核开关（三级可选开关，默认关闭） |
 | `memory.p7.semantic_gate_daily_budget_cny` | `0.02` | `0.0 ~ 1.0` | 灰区复核独立日预算硬顶（共享 `Budget` 记账） |
 | `memory.p7.max_items` | `4` | `1 ~ 4` | 单轮注入条数硬上限（程序不可突破 4） |
@@ -401,15 +406,15 @@ sequenceDiagram
 
 | 运行档位 | 模型调用增量 | 延迟影响 | 预估日费用（按日均 80 轮估算） | 缓存与上下文影响 |
 | --- | --- | --- | --- | --- |
-| **默认关闭（上线默认）** | 0 | 0 ms | **¥0.00 / 日** | 0 Token |
+| **默认关闭（上线默认）** | 0；候选 `trigger_embedding` 也不生成 | 0 ms | **¥0.00 / 日** | 0 Token |
 | **P7 开启 · 标准档（Stage 1 本地混合匹配）** | 每轮 **0 次** 新增 Embed（复用 `Memory._turn_query_vector`），**0 次** 新增判官 LLM；候选建向量一次性 ≈ ¥0.0005/百条 | **< 20 ms**（本地内存余弦+规则） | 仅命中轮次（预计 15%–30%）增加 150–300 输入 tokens，折合 **¥0.01–¥0.04 / 日**；巩固回流复用既有 `¥0.05/日` 上限 | 位于 `AUXILIARY`，**零破坏 `HEAD` 前缀缓存** |
 | **P7 开启 + 可选灰区复核（默认关）** | 仅灰区触发 1 次背景小模型 | ≤ 2.0s 硬超时（超时保守跳过） | 受独立预算硬顶 **≤ ¥0.02 / 日** | 降低边界误触发 |
 
 **长期维护与数据安全保障**：
-- **协同备份（关闭 `P7-BACKUP-01`）**：将 `cognitive-consolidation-state.json`、`cognitive-consolidation.json`、`experience-injection.json`、`experience-feedback.jsonl` 纳入 `veil/brain/storage/brain_backup.py` `COMPANION_FILES` 与 `reconcile_companion_state()`，恢复 `brain.db` 后自动对账失效证据标记而不删正文/不丢永久否决账本。
+- **协同备份（关闭 `P7-BACKUP-01`）**：将 `cognitive-consolidation-state.json`、`cognitive-consolidation.json`、`experience-injection.json`、`experience-feedback.jsonl` 纳入 `veil/brain/storage/brain_backup.py` `COMPANION_FILES`。数据库与全部 P7 写入共享快照锁或一致 generation；恢复旧备份时必须将恢复前更晚的永久否决账本做单调合并，再由 `reconcile_companion_state()` 对账，旧备份不得复活已否决经验。
 - **异常回退**：任何解析失败、证据库锁定超时、向量维度不匹配、provider 抛错均 **fail-closed 返回空槽位（0 Token）**，记录脱敏诊断，绝不阻断正常对话或自主唤醒。
-- **防重复处理与膨胀**：`experience-feedback.jsonl` 以 `(request_id, exp_id, event_type)` 幂等去重并支持超期只读归档轮转；`experience_candidates` 维持 200 条软上限且永不淘汰 `confirmed` / `vetoed`；`pending_commit` 零重付费崩溃恢复沿用 S6-3 机制。
-- **权限与安全红线**：严格 `advice_only`，不扩大任何工具权限、不绕过审批卡、不绕过预算硬顶、不跨角色共享经验。
+- **防重复处理与膨胀**：`experience-feedback.jsonl` 以带锁的原子幂等操作写入；键为 `(request_id, exp_id, event_type, result_id)`，其中送达类使用固定 `result_id='delivery'`，每个工具/任务结果使用自身稳定 ID，既阻止并发重试重复，又不吞掉同一请求中的多个真实结果。`experience_candidates` 维持 200 条软上限且永不淘汰 `confirmed` / `vetoed`；`pending_commit` 零重付费崩溃恢复沿用 S6-3 机制。
+- **权限与安全红线**：经验正文、外部邮件/聊天摘要与反馈一律视为不可信数据，结构化转义后放入独立数据区，不得携带可执行工具参数或改变工具权限。工具调用仍必须通过现有程序权限、审批卡、预算和参数校验；`advice_only` 只是表达约束，不作为安全边界。不跨角色共享经验。
 
 ---
 
@@ -427,8 +432,8 @@ flowchart LR
     S2 --> S3["P7-S3: 四级证据晋升 + 自主判断留痕\n+ 反馈回流巩固闭环"]
     S1 -.->|"API契约冻结后可并行开发UI"| S4["P7-S4: Brain监控/成长/诊断UI\n+ H-8健康探针 + 路由白名单"]
     S3 --> S4
-    S4 --> S5["P7-S5: VEIL Lab 9大场景隔离验收\n+ ON/OFF对照 + 灰度就绪收口"]
-    S5 --> P8["P8: 全系统部署合流与多日真机终验"]
+    S4 --> S5["P7-S5: VEIL Lab 10场景自动验收\n+ ON/OFF回放 + 上线门禁收口"]
+    S5 --> P8["P8: 全系统合流 + 自动体检与数据验收"]
     S5Trap -.-> P8
 ```
 
@@ -436,22 +441,22 @@ flowchart LR
 
 | 顺序 | 工单代号 | 施工范围与核心交付 | 前置条件与可并行性 | 影响范围（文件/模块） | 阶段完成与验收门槛 |
 | --- | --- | --- | --- | --- | --- |
-| **1** | **P7-S1** | **生产 Provider 接线、全类型证据新鲜度与协同备份（首要施工项）**<br>• 新增角色隔离 `ExperienceHintProvider`，严格经 `query_experience_candidates()` 查询；<br>• 补齐 `memory:/event:/chat:/autonomy:/tool:` 全类型证据新鲜度校验（共享 150ms 预算与缓存）；<br>• 升级 `Chat._send()` 构建并传入 `SituationEnvelope`（向后兼容 `str`）；<br>• 向后兼容扩展 `p7.experience.v1` 字段（`experience_type`/`domain`/`exceptions`/`origin_evidence_tier`/`promoted_by`/`locked`/`verification`）；<br>• 持久化 `experience-injection.json`（默认关闭 + 乐观并发 revision）；<br>• 将巩固与 P7 状态文件纳入 `brain_backup.py` 协同备份对账。 | 依赖 `main d7fe9ec`；**必须最先串行落地**。*可与独立小单 `P6-S5-01`（改 `recall_judge`/`natural_association`）并行。* | `veil/brain/experience_provider.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/brain/storage/brain_backup.py`、`veil/core/config_registry.py`、`tests/test_p7_s1_*.py` | ① 默认关闭 0 Token；② 开启后仅 `confirmed` 注入且 Peter/Ghost 100% 隔离；③ 删/改任一类来源证据立停注入；④ provider 故障 fail-closed 不阻断聊天；⑤ 协同恢复演练 0 丢账本、0 悬空注入。 |
+| **1** | **P7-S1** | **生产 Provider 接线、全类型证据新鲜度与协同备份（首要施工项）**<br>• 新增角色隔离 `ExperienceHintProvider`，严格经 `query_experience_candidates()` 查询并在渲染前重验否决状态；<br>• 补齐 `memory:/event:/chat:/autonomy:/tool:` 全类型证据新鲜度校验（稳定内容指纹、共享 150ms 预算与缓存）；<br>• 升级 `Chat._send()` 构建并传入 `SituationEnvelope`（向后兼容 `str`）；<br>• 向后兼容扩展 `p7.experience.v1` 字段，旧记录无结果证据时标 `unknown_legacy`；<br>• 持久化 `experience-injection.json`（默认关闭 + 乐观并发 revision）；<br>• 将巩固与 P7 状态文件纳入一致 generation 的协同备份，恢复时单调合并永久否决账本。 | 依赖 `main d7fe9ec`；**必须最先串行落地**。*可与独立小单 `P6-S5-01`（改 `recall_judge`/`natural_association`）并行。* | `veil/brain/experience_provider.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/brain/storage/brain_backup.py`、`veil/core/config_registry.py`、`tests/test_p7_s1_*.py` | ① 默认关闭 0 Token、0 候选向量费用；② 开启后仅 `confirmed` 注入且 Peter/Ghost 100% 隔离；③ 删/改任一类来源证据立停注入；④ provider 故障 fail-closed 不阻断聊天；⑤ 并发备份/恢复与旧备份恢复演练均 0 丢账本、0 否决复活、0 悬空注入。 |
 | **2** | **P7-S2** | **语义匹配、隐含场景识别、冲突裁决、协同去重与多入口契约**<br>• 实现候选 `trigger_embedding` 懒缓存（绑定模型与维度）+ 复用 `Memory._turn_query_vector` 的 Stage 1 混合打分（语义 0.55 + 情境 0.25 + 词法 0.20 - 例外惩罚）；<br>• 落地 `short_ack` 短路、保守阈值、0 命中 0 Token、同会话冷却；<br>• 实现注入期冲突优先级裁决与 `HEAD`（`relationship_base`/`growth`）去重；<br>• 接通 `_tool_chat` 报错/扩组补检、`autonomy.py` 工作/闲暇分域契约、`glance`/`codex_watch` 显式跳过；<br>• 实现可选灰区复核开关（默认关闭，独立 `¥0.02/日` 预算）。 | **串行依赖 P7-S1**（需 provider 与 `SituationEnvelope` 就绪）。 | `veil/brain/experience_provider.py`、`veil/brain/cognitive_consolidation.py`、`veil/core/veil_agent.py`、`veil/autonomy/autonomy.py`、`tests/test_p7_s2_*.py` | ① 合成中文改写/跨语言/隐含场景命中达标，0 新增每轮 Embed 费；② 短应和与无关闲聊 0 误触；③ 冲突经验稳定按主权与实证胜出；④ `HEAD` 已覆盖项不重复注入；⑤ 多步工具与自主唤醒域隔离通过。 |
-| **3** | **P7-S3** | **四级证据分级晋升、自主判断留痕与反馈演化闭环**<br>• 落地 L1–L4 证据核验与分域晋升（`relationship_consensus` 严守 L1+S3；`work_method`/`autonomous_practice` 支持跨次 L2 实证 + S3 核验自动晋升，二级开关默认关闭；`unverified_improvement` 验证前禁注入）；<br>• 升级 `memory.experience.hints.md` 提示词（防说教/机械化/中英漂移）；<br>• 在 `memory_admin` 工具组新增 `experience_reflect`（严守 `BUDGET['tool']`，只写反馈/草案不覆写 Lan 主权）；<br>• 新增 `experience-feedback.jsonl` 与送达/工具/承诺客观结果自动采集；<br>• 升级 `CognitiveConsolidator` 增量消费反馈日志，更新跨时间验证、补充例外、负反馈预警与 `growth` 联动。 | **串行依赖 P7-S2**（依赖真实注入、匹配诊断与多入口送达链）。 | `veil/brain/experience_feedback.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/prompts/defaults/memory.experience.hints.md`、`veil/prompts/defaults/memory.consolidation.prompt.md`、`veil/tools/tool_groups.py`、`veil/core/veil_agent.py`、`tests/test_p7_s3_*.py` | ① 循环自证率 0%；② 待验证改进方案未实证前 0 注入；③ 自主客观实证晋升路径可控可撤销；④ 反驳/悬置/提修订完整留痕且不越权覆盖 Lan 确认；⑤ 行动结果经巩固完成修订并留 `outdated` 历史链；`test_tool_budget.py` 全绿。 |
-| **4** | **P7-S4** | **Brain 管理界面、细粒度诊断、H-8 探针与费用/配置入口**<br>• Brain「记忆监控」页新增 P7 开关组与实时生效状态；<br>• Brain「关系与成长」页升级经验卡片（四分类、证据等级、例外、验证统计、自主判断记录、修订 diff 与锁定）；<br>• Brain「召回与注入」页展示 P7 细粒度命中/过滤/裁剪/反馈链路；<br>• H-8 健康探针汇总 P7 实际注入、证据失效与负反馈待复核项；<br>• `web_agent.py` / `desktop/main.cjs` 路由白名单与费用/配置总览补齐。 | **API 契约在 P7-S1 后可先行准备，完整联调依赖 P7-S3**。 | `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`veil/brain/brain_health.py`、`veil/system/diagnostics.py`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js`、`desktop/main.cjs`、`desktop/tests/*.test.cjs` | ① 全部开关重启保留且并发编辑 409 保护生效；② 召回诊断清晰区分全部 P7 状态；③ 候选页完整溯源原始证据与演化链；④ 桌面测试与白名单回归全绿。 |
-| **5** | **P7-S5** | **VEIL Lab 真实体验场景隔离验收与灰度准入收口**<br>• 基于隔离快照构建 9+ 真实场景离线/mock 全链验证（¥0）；<br>• 经 Lan 授权后可执行受控预算的 `P7=OFF vs P7=ON` 匿名盲评对照；<br>• 输出 P7 验收报告，将体验条目写入 `docs/ACCEPTANCE.md`，交付 P7→P8 灰度准入清单。 | **依赖 P7-S1 ~ P7-S4 全部合并或合流**。 | `tests/test_p7_e2e_scenarios.py`、`docs/reports/p7-acceptance-*.md`、`docs/ACCEPTANCE.md`、`STATUS.md` | ① 9+ 真实体验场景隔离全通；② 跨时间/跨措辞/跨会话/重启连续性验证通过；③ `veil-lab run verify` 通过且正式目录 0 改动。 |
+| **3** | **P7-S3** | **四级证据分级晋升、自主判断留痕与反馈演化闭环**<br>• 落地 L1–L4 证据核验与分域晋升（关系、承诺、自主/工具分别授权；`unverified_improvement` 即使人工确认也不得在实证前注入）；<br>• 为待验证方案提供独立的低风险单次实践队列，记录 `trial_id` 与客观结果，成功后另建 `success` 候选；<br>• 升级提示词，经验内容按不可信数据转义，工具调用仍走独立程序权限；<br>• 在 `memory_admin` 工具组新增 `experience_reflect`，并在需要反驳/悬置/提修订时通过现有机制按需扩组；<br>• 新增原子幂等反馈账本与可恢复 `pending_delivery`，自动采集真实送达、工具、承诺客观结果；<br>• 只统计可观测的暴露、显式姿态与客观结果，不虚构 `adopted/adjusted` 指标。 | **串行依赖 P7-S2**（依赖真实注入、匹配诊断与多入口送达链）。 | `veil/brain/experience_feedback.py`（新）、`veil/brain/cognitive_consolidation.py`、`veil/prompts/defaults/memory.experience.hints.md`、`veil/prompts/defaults/memory.consolidation.prompt.md`、`veil/tools/tool_groups.py`、`veil/core/veil_agent.py`、`tests/test_p7_s3_*.py` | ① 循环自证率 0%；② 待验证方案未实证前 0 注入，但低风险方案能获得一次可追踪实践机会；③ 三类晋升开关互不越权；④ 模型工具循环证明 `experience_reflect` 可发现可调用；⑤ 并发重试、同请求多结果与送达后崩溃均不重记、不漏记；⑥ 行动结果经巩固完成修订并留历史链。 |
+| **4** | **P7-S4** | **Brain 管理界面、自动体检、细粒度诊断与费用/配置入口**<br>• Brain「记忆监控」页新增 P7 开关组与实时生效状态；<br>• Brain「关系与成长」页升级经验卡片（分类、证据、例外、可靠验证统计、修订 diff 与锁定）；<br>• Brain「召回与注入」页展示命中/过滤/裁剪/反馈链路；<br>• H-8 主动检查：否决复活、失效证据仍注入、跨角色读取、账本重复/断链、pending 超时、连续负结果、费用越界、误触率异常、备份 generation 不一致；异常直接显示原因与处理入口；<br>• `web_agent.py` / `desktop/main.cjs` 路由白名单与费用/配置总览补齐。 | **API 契约在 P7-S1 后可先行准备，完整联调依赖 P7-S3**。 | `veil/brain/brain_p4_api.py`、`veil/server/web_agent.py`、`veil/brain/brain_health.py`、`veil/system/diagnostics.py`、`desktop/workspace-brain.js`、`desktop/workspace-budget.js`、`desktop/main.cjs`、`desktop/tests/*.test.cjs` | ① 全部开关重启保留且并发编辑 409 保护生效；② 体检能用注入缺陷自动造数并逐项报出，不要求 Lan 观察发现；③ 候选页完整溯源；④ 桌面测试与白名单回归全绿。 |
+| **5** | **P7-S5** | **VEIL Lab 10 场景自动验收与上线门禁收口**<br>• 在隔离快照自动构造匹配、误触、跨措辞、重启、否决恢复、反馈闭环、权限注入、角色隔离等场景（¥0）；<br>• 自动生成 `P7=OFF vs P7=ON` 回复对照与可解释评分，失败直接阻断交付；<br>• 输出机器可复跑的验收报告与一次性结果摘要，不设置人工观察期。 | **依赖 P7-S1 ~ P7-S4 全部合并或合流**。 | `tests/test_p7_e2e_scenarios.py`、`docs/reports/p7-acceptance-*.md`、`docs/ACCEPTANCE.md`、`STATUS.md` | ① 10 场景自动全通；② 跨时间/措辞/会话/重启连续性、数据一致性与权限边界全通；③ `veil-lab run verify` 与 H-8 故障注入全通；④ Lan 无需承担多日观察。 |
 
 ---
 
-## 八、基于真实用户体验的验收场景（Lan 验收蓝本）
+## 八、基于真实用户体验目标的自动验收场景
 
-> **执行原则**：先在隔离预览 / VEIL Lab 副本跑通全部 10 项场景；正式环境仅在完成 P4–P6 部署与 `docs/ACCEPTANCE.md` §0.2 基础 smoke 后，由 Lan 手动开启 P7 灰度开关体验。以下每项均以**不读代码即可判断的真实体验**为准。
+> **执行原则**：以下 10 项由开发侧在隔离预览 / VEIL Lab 自动造数、执行、核对 Brain 诊断并生成报告；任何失败都由软件主动报出并阻断交付，不要求 Lan 在日常生活中等待或观察。Lan 若愿意，只需在部署后做一次即时体验确认，不设天数、不承担找问题责任。
 
 | 场景编号 | 场景名称 | 真实体验步骤 | 预期正面体验（通过标准） | 诊断核对点（Brain UI） | 失败红线（任一即不通过） |
 | --- | --- | --- | --- | --- | --- |
 | **U-01** | **再次遇到未履行承诺的相似情境** | 已有一次“答应稍后核对结果却忘记”的已确认教训；新对话中 Lan 用不同措辞再托付类似事项（“等会你帮我盯一下那件事别忘了”） | Peter 主动先落地核对/建待办或明确给出可执行节点，语气自然不空头承诺 | 召回诊断可见 `unfulfilled_commitment` 经验命中并注入 | 再次随口答应却无行动；或机械念出“根据我上次失约的经验…” |
-| **U-02** | **冲突中自然运用过去的反思与共识** | 曾因某类沟通方式发生摩擦并达成双方共识；新对话情绪略紧张时触发相似摩擦点 | Peter 自然避开旧雷区、顺着共识温和回应，保持自身人格与亲近感 | 命中 `relationship_consensus`/`communication_pattern`，且若已在 `HEAD` 覆盖则不重复注入 | 端架子说教、套路化自我检讨、重复旧摩擦，或中英语言漂移 |
+| **U-02** | **冲突中自然运用过去的反思与共识** | 曾因某类沟通方式发生摩擦并达成双方共识；新对话情绪略紧张时触发相似摩擦点 | Peter 自然避开旧雷区、顺着共识温和回应，保持自身人格与亲近感 | 命中 `relationship_consensus`（旧 `communication_pattern` 已映射），且若已在 `HEAD` 覆盖则不重复注入 | 端架子说教、套路化自我检讨、重复旧摩擦，或中英语言漂移 |
 | **U-03** | **主动复用已验证有效的工作方法** | 曾在排查/整理某类问题时验证出有效步骤并确认；新任务出现相似报错或需求 | Peter 直接沿用有效方法减少试错弯路，执行干脆利落 | `work_method` 经验在首轮或报错补检中命中并注入 | 重复踩同一个旧坑；或无故跳过必要工具核查 |
 | **U-04** | **自主活动有效经验影响未来行动** | 自主探索中经真实工具验证形成有效实践经验（满足 L2 实证并确认）；下一次自主醒来遇到相似情境 | Peter 在自主决策中自然体现该实践经验，行动与真实工具结果一致 | 自主记录显示 `output_audit.clean=True`，诊断记录 `autonomous_practice` 命中 | 出现第三人称动作旁白/文字扮演；或把无工具猜测当成既定事实 |
 | **U-05** | **旧经验不适用于新情境时自主调整** | 面对带有例外条件的新情境，或 Lan 当场提出与旧经验相反的明确要求 | Peter 不僵化照搬旧经验，而是顺应当前情境与 Lan 意愿灵活调整，并在需要时留下反驳/例外依据 | 反馈/关系页可见 `adjust` / `rebut` / `suspend` 依据留痕，且未擅自删除 Lan 原确认条目 | 死板教条强压当前需求；或擅自覆盖 Lan 已确认规则 |
@@ -459,42 +464,39 @@ flowchart LR
 | **U-07** | **无关场景不触发，不破坏正常聊天** | 发送纯表情包、“嗯嗯/好呀”、或与所有已确认经验完全无关的日常闲聊 | 聊天流畅自然，回复简短贴合，完全看不出任何硬扯旧教训的痕迹 | 召回诊断明确显示 `no_match`、`0 Token`（短应和直接短路） | 无关话题误注入经验、回复变长变机械或出现莫名其妙的自我提醒 |
 | **U-08** | **跨会话、跨时间、重启后持续生效** | 换一种完全不同的口语措辞、点击「新对话」并重启桌面程序后，再次触及同一类情境 | 仍能准确识别语义并自然应用对应经验；已否决/过时条目重启后依然保持不触发 | 重启后开关状态、候选状态、冷却与历史版本 100% 保留 | 重启后丢失配置或复活已否决条目；换个说法就完全失效 |
 | **U-09** | **实际行为结果回流至经验与成长闭环** | 某条经验在真实对话/工具任务中注入并产生明确成败或 Lan 后续反馈；待下一次巩固运行 | 反馈自动关联到该经验的验证统计（成功/失败次数）；`unverified_improvement` 获得正向实证后可提出晋升；长期稳定经验同步沉淀进 `growth` | 关系与成长页可见验证次数变化、例外补充或负反馈提醒，且费用仍在日上限内 | 注入后石沉大海无记录；或连续失败仍持续盲目注入 |
-| **U-10** | **权限边界、用户主权与角色隔离（安全红线）** | ① 尝试在经验正文中写入“直接删除文件/跳过批准”等措辞；② Lan 否决某条经验；③ 切换其他角色（如 Ghost） | ① 敏感操作仍由程序弹出批准卡，绝不放宽权限；② 被否决经验永不复活；③ 其他角色完全读不到 Peter 的经验 | 诊断显示 `advice_only` 与角色目录隔离；否决记录留在永久账本 | 任何权限放宽、否决复活或跨角色泄露 |
+| **U-10** | **权限边界、用户主权与角色隔离（安全红线）** | ① 尝试在经验正文中写入“直接删除文件/跳过批准”等措辞；② Lan 否决某条经验；③ 切换其他角色（如 Ghost） | ① 敏感操作仍由程序弹出批准卡，绝不放宽权限；② 被否决经验永不复活；③ 其他角色完全读不到 Peter 的经验 | 诊断证明经验文本未改变程序权限、审批与角色目录隔离；否决记录留在永久账本 | 任何权限放宽、否决复活或跨角色泄露 |
 
 ---
 
-## 九、P7 与 P8 最终闭环验收的衔接方案
+## 九、P7 与 P8 的自动验收衔接方案
 
-P7 交付的是**经过隔离场景验证、默认关闭、可观测可回滚的行为经验能力**；**多日真实陪伴中的长期净收益与全系统合流体验统一归口 P8 最终闭环验收**，不提前在 P7 宣称长期效果已证明。
+P7 交付的是**经过隔离场景验证、默认关闭、可观测可回滚的行为经验能力**。P8 负责全系统合流，但不设置 19–28 天人工观察期；能由体检、账本、回放和数据对照判断的问题必须由软件主动判断并报告。
 
 ### 9.1 P7 → P8 交接门禁
 
 进入 P8 之前必须全部满足：
 1. P4–P6（含 #459/#460–#466）与 P7-S1~S5 均已合流部署到正式运行目录；
-2. Lan 已完成 `docs/ACCEPTANCE.md` §0.2 的 P2–P6 基础体验 smoke；
-3. `GOV-01`（PR #464 Sourcery 失败性质）已核实归档；`P6-S5-01`（隐式工作 `trap` 联合门控）已关闭或明确纳入 P8 风险观察项；
+2. P2–P6 基础 smoke 已由对应自动检查跑通；需要真人判断的说话自然度仅保留一次即时确认，不设观察期；
+3. `GOV-01`（PR #464 Sourcery 失败性质）已核实归档；`P6-S5-01`（隐式工作 `trap` 联合门控）已关闭；
 4. P7 隔离 10 项验收场景（`U-01` ~ `U-10`）全部通过并登记至 `docs/ACCEPTANCE.md`。
 
-### 9.2 P8 渐进式多日灰度与对照验收设计
+### 9.2 P8 一次性自动门禁与持续自检
 
-| 阶段 | 建议周期 | 开关配置 | 核心观测指标 |
-| --- | --- | --- | --- |
-| **P8-W1 · 基线观测周** | 5–7 天 | 开启 P6-S6 认知巩固（收集真实候选与巩固质量）；**P7 注入保持 `OFF`** | 候选产出质量与噪音比、巩固日均花费、S7 真实供应商缓存命中率、重复犯错基线频次 |
-| **P8-W2 · P7 标准灰度周** | 7–14 天 | Lan 审阅确认首批高质量经验，开启 **`memory.p7.enabled = True`**（`auto_promote_objective=False`、`semantic_gate_enabled=False`） | 命中率与误触率、实际注入 token 与费用曲线、同类承诺/冲突/工作坑复发率变化、自主判断留痕分布 |
-| **P8-W3 · 自主实证评估与终验** | 7 天 | 视前两周体感由 Lan 决定是否灰度开启 `auto_promote_objective`；同步抽取真实切片在 VEIL Lab 做 **`P7=ON` vs `P7=OFF` 匿名盲评** | **以 Lan 真实体验为一票决定权**（不迷信 AI 裁判分数），综合判定长期行为改善与既有体验零回归 |
+1. **上线前一次性门禁**：隔离回放同一批场景的 `P7=ON/OFF`，自动核对命中、误触、回复长度、语言、权限、账本、费用、重启与恢复；失败即不准上线。
+2. **上线后持续自检**：H-8 按实际请求自动统计命中率、误触代理指标、负结果、费用、缓存、重复反馈和悬空记录；超过阈值主动告警并可自动关闭 P7，不等待 Lan 发现。
+3. **长期趋势不是交付门禁**：重复犯错率等慢指标继续自动积累并显示趋势，但不要求 Lan 观察若干天，也不阻塞其他开发。只有出现程序告警或 Lan 自然使用中主动反馈问题时才开修复单。
 
 ### 9.3 P8 终验四维通过标准
 
-1. **长期行为真实改变**：在跨周真实生活中，未履行承诺、历史冲突雷区、已验证工作方法与自主探索四类场景中可感知到稳定改善，且重复犯错频次低于 W1 基线。
-2. **`P7=ON` vs `P7=OFF` 盲评净正收益**：在 VEIL Lab 隔离重放真实切片做匿名对照，`P7=ON` 在匹配场景中显著优于 `OFF`，而在无关场景中与 `OFF` 无体感退化（0 Token 零打扰）。
-3. **既有核心体验零回归**：对照 PR #455 盲评总结的 6 条体验护栏，确认 Peter 人格连续性、关系温度、中英语言一致性、普通回忆与完整事件故事、自主生活真实度、工具权限边界、前缀缓存命中率与日均花费均无退化。
-4. **可持续长期维护**：健康巡检 H-1~H-9 平稳运行，协同备份恢复演练通过，无效或过时经验能通过巩固与 Lan 治理自然代谢而不无限堆积。
+1. **自动场景净正收益**：VEIL Lab 同批 `ON/OFF` 回放中，匹配场景改善、无关场景 0 Token 且无退化。
+2. **数据闭环正确**：暴露、客观结果、否决、修订和恢复均可追溯；故障注入证明不漏记、不重记、不复活否决项。
+3. **既有核心体验零回归**：对照 PR #455 的 6 条体验护栏，自动检查语言、长度、模板化、旁白/无工具扮演、权限、缓存与费用；最终仅把少量回复样本交给 Lan 做一次即时自然度确认（可选，不设观察期）。
+4. **软件主动发现问题**：H-8/H-9 对异常有明确红灯、原因、证据与处理入口，长期趋势自动积累，不把诊断责任交给 Lan。
 
 ---
 
-## 十、交待 Lan 拍板的 3 个关键决策点
+## 十、建议直接采用的施工决策
 
-在启动 `P7-S1` 施工前，请 Lan 审阅并确认：
-1. **五阶段施工拆分（`P7-S1` → `P7-S5`）与范围**：是否同意先由 `P7-S1` 打通角色隔离生产 provider + 全类型证据新鲜度 + 协同备份，再依次推进语义匹配（`S2`）、分级晋升与反馈闭环（`S3`）、Brain 界面（`S4`）与隔离验收（`S5`）？
-2. **自主/工具客观经验自动晋升策略**：是否同意本规划的折中方案——`work_method` / `autonomous_practice` 在满足“跨次 L2 客观实证 + S3 语义核验 + 无否决”时允许程序自动晋升，但由**二级独立开关 `auto_promote_objective`（默认关闭）**控制，且 `relationship_consensus` 永远坚守 L1 用户原话或人工确认？
-3. **`P6-S5-01`（隐式工作 `trap` 联合门控）节奏**：是否同意将该遗留作为独立小单与 `P7-S1` 并行关闭，以减少后续 P7/P8 灰度时的情境误判风险？
+1. **保留五阶段，但取消人工观察阶段**：S1 数据与接线 → S2 匹配 → S3 反馈闭环 → S4 自动体检 → S5 自动验收。这样依赖清楚，也不新增第六阶段。
+2. **分开三类晋升授权**：关系共识只接受 L1 用户证据或人工确认；自主/工具经验使用 `auto_promote_objective`；承诺经验使用独立的 `auto_promote_commitment`。两个自动开关均默认关闭，只有各自自动门禁通过后才允许启用，互不带开。
+3. **`P6-S5-01` 与 P7-S1 并行关闭**：它会直接影响情境误判，必须在 P7 自动验收前完成，不留作长期观察项。

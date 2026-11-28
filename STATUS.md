@@ -5,7 +5,7 @@
 
 ## 一句话现状
 
-P2–P6 主工程链与交付审计（PR #467，`d7fe9ec`）均已合入 `main`，但 P4(#459)/P5(#462)/P6-S3~S7(#460–#466) 未完整部署且缺 Lan 基础体验验收。**工单 467（P7-0）**已完成基于 `d7fe9ec` 的 P7 完整施工规划：逐项覆盖 16 条原始需求、确立零平行系统架构与四级证据/分域晋升路径、拆解 `P7-S1`~`P7-S5` 五阶段工单（首项接通角色隔离生产 provider + 全类型证据新鲜度 + 协同备份）及 10 项真实体验验收场景与 P8 终验衔接；完整方案见 `docs/reports/p7-0-experience-injection-construction-plan-20261128.md`。
+P2–P6 主工程链与交付审计（PR #467，`d7fe9ec`）均已合入 `main`，后续部署与验收状态见下表。**工单 467（P7-0）**已完成基于 `d7fe9ec` 的 P7 施工规划并按 PR #468 审查意见修订：保留 `P7-S1`~`P7-S5` 五阶段，补齐否决/恢复、备份一致性、反馈幂等、权限隔离、旧数据与费用边界；验收改为测试、Brain 主动体检、数据检查和 10 项自动场景回放，不设置 Lan 多日观察期。
 
 ## 近期工单真实状态
 
@@ -13,7 +13,7 @@ P2–P6 主工程链与交付审计（PR #467，`d7fe9ec`）均已合入 `main`�
 
 | 工单 | PR | 合并提交 | 合并时间（UTC） | 部署 | 验收入口（以 ACCEPTANCE 为准） |
 | --- | --- | --- | --- | --- | --- |
-| 467 · P7-0 情境触发式经验注入与自主判断力完整施工规划 | #468 | — | — | 文档类 | [P7-0 规划报告](docs/reports/p7-0-experience-injection-construction-plan-20261128.md)（待 Lan 拍板） |
+| 467 · P7-0 情境触发式经验注入与自主判断力完整施工规划 | #468 | — | — | 文档类 | [P7-0 规划报告](docs/reports/p7-0-experience-injection-construction-plan-20261128.md)（审查修订在本地，待前置 PR 合并后再同步） |
 | 466 · P2–P6 阶段交付总结与 P7 前置验收 | #467 | `d7fe9ec` | 2026-11-28 05:24 UTC | 文档类 | [基础体验清单](docs/ACCEPTANCE.md#02-p2p6-基础体验验收) |
 | 465 · P6-S7 上下文纯化、缓存优化与跨阶段接口收口 | #466 | `a5db802` | 2026-11-28 04:01 UTC | 未部署 | [§3 B-14](docs/ACCEPTANCE.md#b-14-p6-s7-上下文纯化缓存优化与-p7-插槽工单-465) |
 | 464 · P6-S6-3 后台认知巩固与经验提炼 | #465 | `c8bc8bb` | 2026-11-28 00:58 UTC | 未部署 | [§3 B-13](docs/ACCEPTANCE.md#b-13-p6-s6-3-后台认知巩固与经验提炼工单-464) |
@@ -42,13 +42,13 @@ P2–P6 主工程链与交付审计（PR #467，`d7fe9ec`）均已合入 `main`�
 ## 当前开发阶段
 
 - 产品阶段：A 陪伴核心（记忆注入与精修已到 P6 收口；P7 进入规划确认阶段）；B 的权限底座已具备；C1 手机、V 语音未进入正式施工。
-- 工程阶段：P6-S0～S7 及 P2–P6 交付审计（PR #467，`d7fe9ec`）均已合入 `main`；S5 延期的一条隐式工作 `trap` 联合门控（`P6-S5-01`）仍未关闭。P7-0 完整施工规划已完成（工单 467），**尚未启动 P7 正式施工**，等待 Lan 确认方案与拍板项。
+- 工程阶段：P6-S0～S7 及 P2–P6 交付审计（PR #467，`d7fe9ec`）均已合入 `main`；S5 延期的一条隐式工作 `trap` 联合门控（`P6-S5-01`）仍未关闭。P7-0 完整施工规划已完成并按审查意见本地修订，**尚未启动 P7 正式施工**；等待前置 PR 合并后处理冲突再同步。
 - 正式底座：`main`，本机正式目录跟随 `main`，用 `update-main.cmd` 一键更新；本单未启停正式 Peter、未写正式记忆、未部署。
 
 ## 本单（工单 467 · P7-0 情境触发式经验注入与自主判断力完整施工规划）
 
-- **基线与前置复核**：同步最新 `main = d7fe9ec`（PR #467 已合并，CI 全绿），复核 `brain.db` / `EventMemory`、`LearnedContext`、`CognitiveConsolidator`（`p7.experience.v1`）、`Chat.p7_experience_hints_context()`（4 条 / 600 tokens / AUXILIARY / `advice_only`）、同轮 `Memory._turn_query_vector` 与 S5 `context_signal`，并新识别出 `brain_backup.py` `COMPANION_FILES` 缺巩固与 P7 状态文件的备份缺口（`P7-BACKUP-01`）。
-- **完整蓝图交付**：报告 [`docs/reports/p7-0-experience-injection-construction-plan-20261128.md`](docs/reports/p7-0-experience-injection-construction-plan-20261128.md) 交付 16 项原始需求逐项覆盖矩阵、四级证据（L1–L4）与分域晋升路径、Nocturne `Mirror/Door` 复用边界、两阶段情境匹配（Stage 1 零新增 Embed 费 + 可选 Stage 2 灰区复核）、多入口 `SituationEnvelope` 契约、自主判断留痕与反馈回流巩固闭环、默认关闭开关与费用评估、`P7-S1`~`P7-S5` 五阶段工单拆分、10 项真实用户体验验收场景及 P7→P8 多日灰度终验衔接方案。
+- **基线与前置复核**：同步最新 `main = d7fe9ec`（PR #467 已合并，CI 全绿），复核 `brain.db` / `EventMemory`、`LearnedContext`、`CognitiveConsolidator`（`p7.experience.v1`）、`Chat.p7_experience_hints_context()`（4 条 / 600 tokens / AUXILIARY）、同轮查询向量与 S5 `context_signal`，并新识别出 `brain_backup.py` `COMPANION_FILES` 缺巩固与 P7 状态文件的备份缺口（`P7-BACKUP-01`）；`advice_only` 不作为权限安全边界。
+- **完整蓝图交付**：报告 [`docs/reports/p7-0-experience-injection-construction-plan-20261128.md`](docs/reports/p7-0-experience-injection-construction-plan-20261128.md) 交付 16 项原始需求逐项覆盖矩阵、四级证据（L1–L4）与分域晋升路径、Nocturne `Mirror/Door` 复用边界、两阶段情境匹配、多入口 `SituationEnvelope` 契约、原子反馈闭环、默认关闭开关与费用评估、`P7-S1`~`P7-S5` 五阶段工单拆分、10 项自动体验场景及 P7→P8 主动体检/数据验收方案。
 - **严格守界**：纯只读设计，未改动运行代码、配置或正式数据，未新增付费实验，未启动 P7 正式施工。
 
 ## 上一单（工单 465 · P6-S7 上下文纯化、缓存优化与跨阶段接口收口）
@@ -119,14 +119,14 @@ P2–P6 主工程链与交付审计（PR #467，`d7fe9ec`）均已合入 `main`�
 
 ## 等 lan 定的事
 
-1. **审阅并拍板工单 467（P7-0）施工规划**（见 `docs/reports/p7-0-experience-injection-construction-plan-20261128.md` §10）：① `P7-S1`~`P7-S5` 五阶段工单拆分；② 自主/工具客观经验二级自动晋升开关（`auto_promote_objective`，默认关闭）策略；③ `P6-S5-01`（隐式工作 `trap` 联合门控）是否作为独立小单与 `P7-S1` 并行关闭。
+1. **确认工单 467（P7-0）修订后的施工结论**（见报告 §10）：保留五阶段但取消人工观察期；自主/工具与承诺自动晋升分别授权；`P6-S5-01` 与 `P7-S1` 并行关闭。
 2. 体验 `docs/ACCEPTANCE.md` 中 §0.2 P2–P6 基础体验验收（需先部署缺失的 #459/#460–#466）与 B-8 ~ B-14、既有 A/B 项。
 3. B-3/B-4/H-1：三项**待授权**操作是否在下一个维护窗口执行。
 4. 本单（工单 467）PR 的审阅与合并；本单不部署、不合并、不启动 P7 施工。
 
 ## 下一步
 
-- 本单（工单 467）：提交 P7-0 完整施工规划 PR，跑完 CI 后暂停，等待 Lan 确认方案与拍板项。
+- 本单（工单 467）：PR #468 审查修订已留在本地分支；不提交、不推送，等待前置 PR 合并后处理冲突再同步。
 - Lan 确认方案并授权开工后：从最新 `main` 开独立工单启动 `P7-S1`（角色隔离生产 `experience_hint_provider` + 全类型证据新鲜度 + `SituationEnvelope` + 协同备份加固）；正式环境灰度开启 P7 前须先完成 P4–P6 部署与 `docs/ACCEPTANCE.md` §0.2 基础 smoke。
 
 ## 验收入口
