@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 更新：2026-11-28 13:37 +08:00 · 基线 `main = d7fe9ec`（工单 466 / PR #467 · P2–P6 阶段交付总结与 P7 前置验收已合并，2026-11-28 05:24:46 UTC，Actions/Sourcery 全通过）· 当前分支 `ticket/467-p7-0-experience-injection-plan` / worktree `worktrees/467-p7-0-experience-injection-plan` / 工单 467（P7-0 专项只读设计；规划报告、工单、STATUS 与 HANDOFF 已完成，待提交 PR、跑 CI 后暂停等待 Lan 确认施工方案）
+> 更新：2026-11-28 13:39 +08:00 · 基线 `main = d7fe9ec`（工单 466 / PR #467 · P2–P6 阶段交付总结与 P7 前置验收已合并，2026-11-28 05:24:46 UTC，Actions/Sourcery 全通过）· 当前分支 `ticket/467-p7-0-experience-injection-plan` / worktree `worktrees/467-p7-0-experience-injection-plan` / **工单 467 · PR #468**（P7-0 专项只读设计；PR #468 已创建，待 CI 完成并暂停等待 Lan 确认施工方案）
 
 ## 当前停点
 
