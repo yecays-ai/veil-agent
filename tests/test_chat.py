@@ -217,7 +217,8 @@ output_cny_per_million = "8"
 
     def test_p7_slot_is_auxiliary_bounded_and_confirmed_only(self):
         chat = Chat(self.cfg, self.store, self.budget, self.model)
-        chat.experience_hint_provider = lambda _situation: [
+        situations = []
+        chat.experience_hint_provider = lambda situation: situations.append(situation) or [
             {'status': 'uncertain', 'trigger_condition': 'uncertain trigger', 'guidance': 'do not inject'},
             {'status': 'confirmed', 'trigger_condition': 'when a fictional export fails',
              'guidance': 'read the local error before retrying'},
@@ -226,6 +227,11 @@ output_cny_per_million = "8"
         ]
 
         chat.send('A fictional export failed.')
+
+        from veil.brain.experience_provider import SituationEnvelope
+        self.assertIsInstance(situations[0], SituationEnvelope)
+        self.assertEqual(situations[0].entry_mode, 'chat')
+        self.assertIn('fictional export failed', situations[0].text.casefold())
 
         sent = self.model.call_args.args[0]
         index = next(i for i, row in enumerate(sent)
@@ -292,6 +298,52 @@ output_cny_per_million = "8"
         self.assertEqual(second_debug['selected'], 2)
         self.assertEqual(first_debug['selected'], 1)
         self.assertFalse(hasattr(chat, 'p7_experience_hints_debug'))
+
+    def test_production_p7_provider_defaults_off_and_provider_failure_is_fail_closed(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        self.assertIsNotNone(chat.experience_hint_provider)
+        disabled_debug = {}
+        self.assertIsNone(chat.p7_experience_hints_context('fictional export failure', debug=disabled_debug))
+        self.assertEqual(disabled_debug['used_tokens'], 0)
+        self.assertEqual(disabled_debug['selected'], 0)
+
+        def broken_provider(_situation):
+            raise RuntimeError('fictional provider failure')
+
+        chat.experience_hint_provider = broken_provider
+        failed_debug = {}
+        self.assertIsNone(chat.p7_experience_hints_context('fictional export failure', debug=failed_debug))
+        self.assertEqual(failed_debug['status'], 'provider_failed')
+        self.assertEqual(failed_debug['used_tokens'], 0)
+
+    def test_production_p7_provider_reaches_the_real_request_chain_when_enabled(self):
+        self.store.append('test/chat.jsonl', {
+            'role': 'user', 'content': 'The fictional export failed before.',
+            'message_id': 'p7-evidence-1',
+        })
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        state = chat.consolidation._load_state()
+        state['experience_candidates'] = [{
+            'id': 'exp-real-chain', 'schema_version': 'p7.experience.v1',
+            'content_key': 'real-chain', 'kind': 'tool_lesson',
+            'trigger_condition': 'fictional export failure',
+            'guidance': 'read the local error before retrying',
+            'reason': 'fictional verified evidence',
+            'evidence_refs': ['chat:p7-evidence-1'], 'status': 'confirmed',
+            'created_at': '2026-11-28T10:00:00+08:00',
+            'updated_at': '2026-11-28T10:00:00+08:00',
+        }]
+        chat.consolidation._save_state(state)
+        chat.experience_hint_provider.update_settings({'enabled': True}, expected_revision=1)
+
+        chat.send('The fictional export failed again.')
+
+        sent = self.model.call_args.args[0]
+        p7 = next(row for row in sent
+                  if str(row.get('content')).startswith('PROGRAM-SELECTED EXPERIENCE HINTS'))
+        self.assertIn('read the local error before retrying', p7['content'])
+        context = self.store.read('test/context-log.jsonl')[-1]
+        self.assertEqual(context['p7_experience_hints']['status'], 'injected')
 
     def test_capability_state_keeps_tool_names_and_permissions(self):
         schemas = [

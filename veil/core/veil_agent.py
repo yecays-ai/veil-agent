@@ -2448,8 +2448,10 @@ class Chat:
                                                load_settings(experience_config))
         # P6-S6-3: background cognitive consolidation (default disabled for gray-scale rollout).
         self.consolidation = None
+        self.experience_hint_provider = None
         if store is not None and budget is not None:
             from veil.brain.cognitive_consolidation import CognitiveConsolidator
+            from veil.brain.experience_provider import ExperienceHintProvider
             # Keep budget pricing/limits strictly aligned with the actually invoked model adapter.
             cons_cfg = background_cfg(cfg) if background_model is not None else cfg
             cons_src = background_model if background_model is not None else model
@@ -2458,6 +2460,10 @@ class Chat:
                 cons_cfg, store, budget, cons_request,
                 memory=self.memory, profile=self.profile,
                 semantic_verifier=self.relationship_semantic_verifier,
+            )
+            self.experience_hint_provider = ExperienceHintProvider(
+                cfg, store, consolidator=self.consolidation,
+                memory=self.memory, profile=self.profile,
             )
 
     def start_short_term_notes_scheduler(self):
@@ -2781,9 +2787,16 @@ class Chat:
         """
         if debug is None:
             debug = {}
-        debug.update({'slot': 'p7.experience_hints', 'budget_tokens': P7_EXPERIENCE_HINTS_MAX_TOKENS,
-                      'selected': 0, 'dropped': 0, 'used_tokens': 0, 'status': 'empty'})
         provider = getattr(self, 'experience_hint_provider', None)
+        provider_settings = getattr(provider, 'settings', None)
+        try:
+            values = provider_settings() if callable(provider_settings) else {}
+        except Exception:
+            values = {}
+        budget_tokens = min(P7_EXPERIENCE_HINTS_MAX_TOKENS, int(values.get('max_tokens', P7_EXPERIENCE_HINTS_MAX_TOKENS)))
+        max_items = min(P7_EXPERIENCE_HINTS_MAX_ITEMS, int(values.get('max_items', P7_EXPERIENCE_HINTS_MAX_ITEMS)))
+        debug.update({'slot': 'p7.experience_hints', 'budget_tokens': budget_tokens,
+                      'selected': 0, 'dropped': 0, 'used_tokens': 0, 'status': 'empty'})
         if not callable(provider):
             return None
         try:
@@ -2800,13 +2813,13 @@ class Chat:
                 continue
             trigger = ' '.join(str(row.get('trigger_condition') or '').split())
             guidance = ' '.join(str(row.get('guidance') or '').split())
-            if not trigger or not guidance or len(kept) >= P7_EXPERIENCE_HINTS_MAX_ITEMS:
+            if not trigger or not guidance or len(kept) >= max_items:
                 debug['dropped'] += 1
                 continue
             candidate = f'- When: {trigger}\n  Guidance: {guidance}'
             message = {'role': 'system', 'content': header + '\n' + '\n'.join([*kept, candidate])}
             used = estimate_message_tokens([message], 0.5)
-            if used > P7_EXPERIENCE_HINTS_MAX_TOKENS:
+            if used > budget_tokens:
                 debug['dropped'] += 1
                 continue
             kept.append(candidate)
@@ -4527,8 +4540,21 @@ class Chat:
         short_term_message, short_term_details = (self.short_term_notes.context()
                                                   if self.short_term_notes and not autonomy
                                                   else (None, {'count': 0, 'characters': 0}))
+        from veil.brain.experience_provider import SituationEnvelope
+        memory_debug = getattr(self.memory, 'last_recall_debug', None) if self.memory else None
+        context_signal = memory_debug.get('context_signal') if isinstance(memory_debug, dict) else {}
+        query_vector = getattr(self.memory, '_turn_query_vector', None) if self.memory else None
+        entry_mode = ('glance' if self.glance_mode else 'codex_watch' if self.codex_watch_mode
+                      else 'autonomy' if autonomy else 'chat')
+        p7_situation = SituationEnvelope(
+            text=background_current,
+            entry_mode=entry_mode,
+            query_vector=tuple(query_vector) if isinstance(query_vector, (list, tuple)) else (),
+            context_signal=dict(context_signal) if isinstance(context_signal, dict) else {},
+            wake_context=dict(wake_context) if isinstance(wake_context, dict) else {},
+        )
         p7_debug = {}
-        p7_experience_hints = self.p7_experience_hints_context(background_current, debug=p7_debug)
+        p7_experience_hints = self.p7_experience_hints_context(p7_situation, debug=p7_debug)
         recalled_memories = list(recalled)
         recall_context_msg = {'role': 'system', 'content': self.recall_context()} if (self.current_request_tool_schemas() and self.recall_context()) else None
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None

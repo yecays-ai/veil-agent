@@ -2823,6 +2823,7 @@ def make_handler(hub, token):
                     return
                 from veil.core.config_registry import (
                     consolidation_config_overview,
+                    experience_injection_config_overview,
                     model_config_overview,
                     semantic_config_overview,
                 )
@@ -2850,6 +2851,18 @@ def make_handler(hub, token):
                             role_id=cfg.id, persisted=persisted_cons, runtime=runtime_cons,
                         )
                         view['entries'].extend(cons_view.get('entries') or [])
+                    except Exception:
+                        pass
+                provider = getattr(hub.chat, 'experience_hint_provider', None)
+                if provider is not None:
+                    try:
+                        from veil.brain.experience_provider import load_persisted as load_p7_persisted
+                        p7_view = experience_injection_config_overview(
+                            role_id=cfg.id,
+                            persisted=load_p7_persisted(getattr(hub.chat, 'store', None), cfg.id),
+                            runtime=provider.settings(),
+                        )
+                        view['entries'].extend(p7_view.get('entries') or [])
                     except Exception:
                         pass
                 self._send(200, view)

@@ -39,6 +39,7 @@ from veil.brain.learned_context import (
     _norm_text,
 )
 from veil.brain.relationship_semantic import _contains_secret
+from veil.brain.storage.brain_lock import write_lock
 from veil.core.agent_types import BudgetExceeded, UserError
 
 COST_CATEGORY = 'cognitive_consolidation'
@@ -68,6 +69,22 @@ _VALID_EXP_KINDS = frozenset({
     'behavioral_pattern', 'tool_lesson', 'communication_pattern', 'autonomy_lesson',
 })
 _VALID_EXP_STATUSES = frozenset({'uncertain', 'confirmed', 'outdated', 'vetoed'})
+_VALID_EXP_TYPES = frozenset({
+    'success', 'failure', 'unfulfilled_commitment', 'unverified_improvement', 'unknown_legacy',
+})
+_VALID_EXP_DOMAINS = frozenset({
+    'relationship_consensus', 'commitment_accountability', 'work_method', 'autonomous_practice',
+})
+_VALID_EVIDENCE_TIERS = frozenset({
+    'L1_user_feedback', 'L2_objective_action', 'L3_autonomy_reflection', 'L4_self_eval',
+})
+_VALID_PROMOTERS = frozenset({'lan', 'objective_corroboration', 's3_user_evidence', ''})
+_VALID_EVIDENCE_STATES = frozenset({'valid', 'partial_stale', 'invalid', 'unavailable'})
+_KIND_DOMAINS = {
+    'communication_pattern': 'relationship_consensus',
+    'tool_lesson': 'work_method',
+    'autonomy_lesson': 'autonomous_practice',
+}
 
 DEFAULTS = {
     # Default off for gray-scale rollout per PR #455 AB-E1 decision table.
@@ -291,6 +308,10 @@ def parse_consolidation_output(raw_text):
         if not isinstance(refs, list) or not all(isinstance(r, str) and r.strip() for r in refs):
             continue
         supersedes = str(row.get('supersedes_id') or '').strip()
+        exp_type = str(row.get('experience_type') or 'unknown_legacy').strip()
+        domain = str(row.get('domain') or '').strip()
+        exceptions = row.get('exceptions')
+        tier = str(row.get('origin_evidence_tier') or 'L4_self_eval').strip()
         experiences.append({
             'kind': kind,
             'trigger_condition': trigger_cond[:240],
@@ -298,6 +319,11 @@ def parse_consolidation_output(raw_text):
             'reason': reason[:360],
             'evidence_refs': [r.strip() for r in refs[:12]],
             'supersedes_id': supersedes[:64],
+            'experience_type': exp_type if exp_type in _VALID_EXP_TYPES else 'unknown_legacy',
+            'domain': domain if domain in _VALID_EXP_DOMAINS else _KIND_DOMAINS.get(kind, ''),
+            'exceptions': [str(item).strip()[:120] for item in exceptions[:4]
+                           if isinstance(item, str) and item.strip()] if isinstance(exceptions, list) else [],
+            'origin_evidence_tier': tier if tier in _VALID_EVIDENCE_TIERS else 'L4_self_eval',
         })
 
     return {
@@ -361,6 +387,45 @@ def _strip_injection_lines(text):
         if not _INJECTION_RE.search(line):
             lines.append(line)
     return '\n'.join(lines)
+
+
+def _normalise_experience(row):
+    """Project old p7.experience.v1 rows into the additive S1 contract without migrating files."""
+    out = dict(row or {})
+    exp_type = str(out.get('experience_type') or '')
+    out['experience_type'] = exp_type if exp_type in _VALID_EXP_TYPES else 'unknown_legacy'
+    domain = str(out.get('domain') or '')
+    inferred = _KIND_DOMAINS.get(str(out.get('kind') or ''), '')
+    out['domain'] = domain if domain in _VALID_EXP_DOMAINS else inferred
+    exceptions = out.get('exceptions')
+    out['exceptions'] = [str(item).strip()[:120] for item in exceptions[:4]
+                         if isinstance(item, str) and item.strip()] if isinstance(exceptions, list) else []
+    tier = str(out.get('origin_evidence_tier') or '')
+    out['origin_evidence_tier'] = tier if tier in _VALID_EVIDENCE_TIERS else 'L4_self_eval'
+    promoter = str(out.get('promoted_by') or '')
+    out['promoted_by'] = promoter if promoter in _VALID_PROMOTERS else ''
+    out['locked'] = out.get('locked') is True
+    evidence_state = str(out.get('evidence_state') or '')
+    out['evidence_state'] = evidence_state if evidence_state in _VALID_EVIDENCE_STATES else 'unavailable'
+    out['trigger_embedding'] = out.get('trigger_embedding') if isinstance(out.get('trigger_embedding'), dict) else None
+    verification = out.get('verification') if isinstance(out.get('verification'), dict) else {}
+    def count(key):
+        value = verification.get(key)
+        return value if type(value) is int and value >= 0 else 0
+
+    out['verification'] = {
+        'exposed_count': count('exposed_count'),
+        'explicit_rebutted_count': count('explicit_rebutted_count'),
+        'explicit_suspended_count': count('explicit_suspended_count'),
+        'positive_outcomes': count('positive_outcomes'),
+        'negative_outcomes': count('negative_outcomes'),
+        'consecutive_negatives': count('consecutive_negatives'),
+        'last_exposed_at': str(verification.get('last_exposed_at') or ''),
+        'last_verified_at': str(verification.get('last_verified_at') or ''),
+        'suspension_until': str(verification.get('suspension_until') or ''),
+        'review_flag': verification.get('review_flag') is True,
+    }
+    return out
 
 
 def _redact_run_for_log(record):
@@ -540,7 +605,8 @@ class CognitiveConsolidator:
             current = load_persisted(self.store, self.cfg.id)
             next_rev = cur_rev + 1 if updates else cur_rev
             merged = {**current, **updates, '_revision': next_rev}
-            self.store.replace(self.settings_path(), merged)
+            with write_lock(self.store, self.cfg.id):
+                self.store.replace(self.settings_path(), merged)
             self._settings = settings_from(merged)
             self._settings_sig = self._sig()
             return {
@@ -618,7 +684,8 @@ class CognitiveConsolidator:
             room = max(0, MAX_PENDING_COGNITION - len(open_items))
             state['pending_cognition_updates'] = open_items + (closed_items[-room:] if room > 0 else [])
 
-        self.store.replace(self.state_path(), state)
+        with write_lock(self.store, self.cfg.id):
+            self.store.replace(self.state_path(), state)
 
     def _append_run(self, record):
         self.store.append(self.runs_path(), _redact_run_for_log(record))
@@ -2120,6 +2187,15 @@ class CognitiveConsolidator:
                 'supersedes': superseded_target['id'] if superseded_target else '',
                 'superseded_by': '',
                 'effective_in': 'p7_reserved',
+                'experience_type': exp.get('experience_type', 'unknown_legacy'),
+                'domain': exp.get('domain', ''),
+                'exceptions': list(exp.get('exceptions') or []),
+                'origin_evidence_tier': exp.get('origin_evidence_tier', 'L4_self_eval'),
+                'promoted_by': '',
+                'locked': False,
+                'evidence_state': 'unavailable',
+                'trigger_embedding': None,
+                'verification': {},
             }
             if superseded_target is not None:
                 if superseded_target.get('status') == 'confirmed':
@@ -2585,6 +2661,8 @@ class CognitiveConsolidator:
             'diagnostics': ['status', 'selected', 'dropped', 'used_tokens', 'budget_tokens'],
             'statuses': sorted(_VALID_EXP_STATUSES),
             'kinds': sorted(_VALID_EXP_KINDS),
+            'experience_types': sorted(_VALID_EXP_TYPES),
+            'domains': sorted(_VALID_EXP_DOMAINS),
             'injected_in_head': False,
         }
 
@@ -2600,12 +2678,13 @@ class CognitiveConsolidator:
                 continue
             if kind and row.get('kind') != kind:
                 continue
-            out.append(dict(row))
+            out.append(_normalise_experience(row))
             if len(out) >= max(1, min(200, int(limit or 50))):
                 break
         return out
 
-    def query_experience_candidates(self, *, situation='', kinds=None, statuses=('confirmed',), limit=5):
+    def query_experience_candidates(self, *, situation='', kinds=None, statuses=('confirmed',), limit=5,
+                                    semantic_pool=False, evidence_validator=None, evidence_deadline=None):
         """Unified P7 read contract: return verified, non-vetoed experience hints matching a situation."""
         allowed_statuses = set(statuses or ('confirmed',))
         allowed_kinds = set(kinds) if kinds else None
@@ -2615,8 +2694,8 @@ class CognitiveConsolidator:
             state = self._load_state()
             rows = list(state.get('experience_candidates') or [])
             vetoed_ledger = list(state.get('vetoed_experiences') or [])
-        valid_mems = self._existing_memory_ids()
-        scored = []
+        valid_mems = None if evidence_validator is not None else self._existing_memory_ids()
+        eligible = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -2626,13 +2705,26 @@ class CognitiveConsolidator:
                 continue
             if self._is_vetoed_experience(row.get('guidance', ''), rows, profile_data, vetoed_ledger):
                 continue
+            projected = _normalise_experience(row)
+            eligible.append((row, projected))
+        if evidence_validator is not None:
+            states = evidence_validator.validate_many(
+                [projected for _row, projected in eligible], deadline=evidence_deadline)
+        else:
+            states = [None] * len(eligible)
+        scored = []
+        for (row, projected), evidence_state in zip(eligible, states):
+            if evidence_state is not None:
+                projected['evidence_state'] = evidence_state
+                if evidence_state not in ('valid', 'partial_stale'):
+                    continue
             # Filter out candidates whose memory evidence was all hard-deleted.
             refs = list(row.get('evidence_refs') or [])
             mem_refs = [r.split(':', 1)[1] for r in refs if isinstance(r, str) and r.startswith('memory:')]
             if mem_refs and valid_mems is not None and not any(m in valid_mems for m in mem_refs):
                 continue
             score = 1.0 if row.get('status') == 'confirmed' else 0.5
-            if sit_tokens:
+            if sit_tokens and not semantic_pool:
                 cand_tokens = _lexical_tokens(
                     f"{row.get('trigger_condition', '')} {row.get('guidance', '')}"
                 )
@@ -2640,9 +2732,10 @@ class CognitiveConsolidator:
                 if overlap == 0:
                     continue
                 score += float(overlap)
-            scored.append((score, str(row.get('updated_at') or ''), dict(row)))
+            scored.append((score, str(row.get('updated_at') or ''), projected))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return [item[2] for item in scored[:max(1, min(20, int(limit or 5)))]]
+        cap = 200 if semantic_pool else 20
+        return [item[2] for item in scored[:max(1, min(cap, int(limit or 5)))]]
 
     def _existing_memory_ids(self):
         db = self._db_path()
