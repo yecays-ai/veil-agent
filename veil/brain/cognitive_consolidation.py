@@ -59,6 +59,8 @@ MAX_IMPORTANCE_LEDGER = 2000
 MAX_COGNITION_UPDATES = 4
 MAX_IMPORTANCE_PROPOSALS = 4
 MAX_EXPERIENCE_PER_RUN = 4
+MAX_COMMIT_ATTEMPTS = 3
+MAX_PENDING_COGNITION = 60
 
 _CODE_FENCE = chr(96) * 3
 _VALID_SECTIONS = frozenset({'relationship', 'growth', 'facts'})
@@ -313,6 +315,7 @@ def _empty_state():
         'processed_batches': {},
         'importance_proposed': {},
         'in_flight': None,
+        'pending_commit': None,
         'last_run_at': '',
         'last_success_at': '',
         'last_run_id': '',
@@ -338,6 +341,7 @@ def _empty_state():
             'experience_revised': 0,
         },
         'experience_candidates': [],
+        'pending_cognition_updates': [],
         'vetoed_experiences': [],
         'recent_ui_runs': [],
     }
@@ -428,13 +432,14 @@ def _redact_run_for_log(record):
 class CognitiveConsolidator:
     """Role-scoped background cognitive consolidation with S3/S6-1/S6-2 collaboration and P7 contract."""
 
-    def __init__(self, cfg, store, budget, model, *, memory=None, profile=None, now_fn=None):
+    def __init__(self, cfg, store, budget, model, *, memory=None, profile=None, semantic_verifier=None, now_fn=None):
         self.cfg = cfg
         self.store = store
         self.budget = budget
         self.model = model
         self.memory = memory
         self.profile = profile
+        self.semantic_verifier = semantic_verifier
         self._now = now_fn or _now
         self.mutex = threading.RLock()
         self._run_lock = threading.Lock()
@@ -606,6 +611,13 @@ class CognitiveConsolidator:
         if isinstance(ui_runs, list) and len(ui_runs) > 16:
             state['recent_ui_runs'] = ui_runs[-16:]
 
+        pend_cogs = state.get('pending_cognition_updates')
+        if isinstance(pend_cogs, list) and len(pend_cogs) > MAX_PENDING_COGNITION:
+            open_items = [p for p in pend_cogs if isinstance(p, dict) and p.get('status') == 'pending']
+            closed_items = [p for p in pend_cogs if isinstance(p, dict) and p.get('status') != 'pending']
+            room = max(0, MAX_PENDING_COGNITION - len(open_items))
+            state['pending_cognition_updates'] = open_items + (closed_items[-room:] if room > 0 else [])
+
         self.store.replace(self.state_path(), state)
 
     def _append_run(self, record):
@@ -634,7 +646,12 @@ class CognitiveConsolidator:
             pass
 
     def recover_interrupted(self):
-        """Recover cleanly from an interrupted in-flight run scoped strictly to this role."""
+        """Recover cleanly from an interrupted in-flight run scoped strictly to this role.
+
+        If a durable `pending_commit` checkpoint already captured the completed model output
+        before the crash, preserve it so the next run resumes committing at ¥0 without
+        re-calling or re-billing the consolidation model.
+        """
         with self.mutex:
             state = self._load_state()
             in_flight = state.get('in_flight')
@@ -642,7 +659,10 @@ class CognitiveConsolidator:
                 return False
             req_id = str(in_flight.get('request_id') or '').strip()
             phase = str(in_flight.get('phase') or '').strip()
-            self._reconcile_role_reservation(req_id)
+            has_pending = isinstance(state.get('pending_commit'), dict)
+            # Only reconcile unsettled reservations when the model call hadn't already settled.
+            if not has_pending or phase == 'dispatched':
+                self._reconcile_role_reservation(req_id)
             stamp = self._now()
             today = stamp[:10]
             if phase in ('dispatched', 'applying', 'apply_failed') and not in_flight.get('counted_run'):
@@ -654,13 +674,17 @@ class CognitiveConsolidator:
             failures = int(state.get('consecutive_failures') or 0) + 1
             state['in_flight'] = None
             state['last_run_at'] = stamp
-            state['last_status'] = 'interrupted'
-            state['last_reason'] = f'recovered_after_restart:{phase or "unknown"}'
+            state['last_status'] = 'pending_commit' if has_pending else 'interrupted'
+            state['last_reason'] = (
+                'interrupted_during_apply_resumable' if has_pending
+                else f'recovered_after_restart:{phase or "unknown"}'
+            )
             state['consecutive_failures'] = failures
-            backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
-            now_dt = _parse_dt(stamp)
-            if now_dt is not None:
-                state['cooldown_until'] = (now_dt + timedelta(minutes=backoff_min)).isoformat(timespec='seconds')
+            if not has_pending:
+                backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
+                now_dt = _parse_dt(stamp)
+                if now_dt is not None:
+                    state['cooldown_until'] = (now_dt + timedelta(minutes=backoff_min)).isoformat(timespec='seconds')
             state['totals']['runs'] += 1
             state['totals']['failed'] += 1
             rec = {
@@ -668,7 +692,7 @@ class CognitiveConsolidator:
                 'started_at': str(in_flight.get('started_at') or stamp),
                 'finished_at': stamp,
                 'trigger': str(in_flight.get('trigger') or 'scheduled'),
-                'status': 'interrupted',
+                'status': state['last_status'],
                 'reason': state['last_reason'],
                 'batch_key': str(in_flight.get('batch_key') or ''),
                 'policy_version': POLICY_VERSION,
@@ -1593,7 +1617,110 @@ class CognitiveConsolidator:
         new_toks = _lexical_tokens(f"{new_exp.get('trigger_condition', '')} {new_exp.get('guidance', '')}")
         return bool(old_toks & new_toks)
 
-    def _apply_outputs(self, parsed, batch, state, values, run_id):
+    @staticmethod
+    def _cognition_update_key(upd):
+        section = upd.get('section', '')
+        kind = upd.get('kind', '')
+        text = upd.get('text', '')
+        replace_old = upd.get('replace_old_text', '') if kind == 'revision' else ''
+        return _sha([section, kind, _norm_text(text), _norm_text(replace_old)])[:16]
+
+    def _build_semantic_verify_payload(self, upd, valid_refs, mem_by_id, auto_by_id, profile_data):
+        """Construct an S3-compatible semantic verification payload for facts/growth."""
+        section = upd['section']
+        evidence = []
+        seen_ev = set()
+        for ref in valid_refs:
+            if ref in seen_ev:
+                continue
+            txt = ''
+            if ref.startswith('memory:'):
+                mem = mem_by_id.get(ref.split(':', 1)[1])
+                if mem:
+                    txt = _strip_injection_lines(
+                        f"{mem.get('title', '')}\n{mem.get('event_story') or mem.get('body', '')}"
+                    )
+            elif ref.startswith('event:'):
+                ev_id = ref.split(':', 1)[1]
+                for mem in mem_by_id.values():
+                    if mem.get('event_id') == ev_id:
+                        txt = _strip_injection_lines(
+                            f"{mem.get('title', '')}\n{mem.get('event_story') or mem.get('body', '')}"
+                        )
+                        break
+            elif ref.startswith('autonomy:') and section == 'growth':
+                auto = auto_by_id.get(ref)
+                if auto:
+                    txt = _strip_injection_lines(f"{auto.get('decision', '')} {auto.get('focus', '')}")
+            txt = _clip(txt, 500)
+            if txt:
+                seen_ev.add(ref)
+                evidence.append({'id': ref, 'text': txt})
+
+        counterevidence = []
+        if isinstance(profile_data, dict):
+            rel = profile_data.get('relationship') or {}
+            for idx, v in enumerate((rel.get('vetoed') or [])[-12:]):
+                vtxt = str(v.get('text') if isinstance(v, dict) else v or '').strip()
+                if vtxt:
+                    counterevidence.append({'id': f'veto:{idx}', 'text': _clip(vtxt, 240)})
+            for item in (rel.get('items') or [])[:12]:
+                if isinstance(item, dict) and item.get('locked') and item.get('text'):
+                    counterevidence.append({'id': f"lock:{item.get('id', '')}", 'text': _clip(item['text'], 240)})
+        return {
+            'candidate': {'section': section, 'kind': upd['kind'], 'text': upd['text']},
+            'evidence': evidence[:8],
+            'counterevidence': counterevidence[:24],
+        }
+
+    def _preverify_facts_and_growth(self, parsed, batch, cached_verdicts, *, stopped=lambda: False):
+        """Run S3 semantic verification for facts/growth OUTSIDE self.mutex.
+
+        Lexical overlap is strictly a cheap pre-filter; only S3 semantic verification returning
+        `supported` authorizes automatic admission into effective Learned Context.
+        """
+        verdicts = dict(cached_verdicts or {})
+        batch_refs = batch['batch_refs']
+        mem_by_id = batch['mem_by_id']
+        auto_by_id = batch.get('auto_by_id') or {}
+        profile_data = self._read_profile_raw()
+
+        for upd in parsed.get('cognition_updates') or []:
+            if upd.get('section') not in ('facts', 'growth'):
+                continue
+            key = self._cognition_update_key(upd)
+            if key in verdicts:
+                continue
+            valid_refs = [r for r in upd.get('evidence_refs') or [] if r in batch_refs]
+            if not valid_refs:
+                continue
+            # Cheap lexical pre-filter only (never sufficient for admission).
+            if not self._verify_content_evidence(upd['section'], upd['text'], valid_refs, mem_by_id, auto_by_id):
+                verdicts[key] = {'verdict': 'prefilter_rejected', 'reason': 'lexical_prefilter_failed'}
+                continue
+            verifier = self.semantic_verifier
+            if verifier is None or not callable(getattr(verifier, 'verify_claim', None)):
+                verdicts[key] = {'verdict': 'pending_review', 'reason': 'semantic_verifier_unavailable'}
+                continue
+            payload = self._build_semantic_verify_payload(upd, valid_refs, mem_by_id, auto_by_id, profile_data)
+            if not payload['evidence']:
+                verdicts[key] = {'verdict': 'pending_review', 'reason': 'missing_evidence_text'}
+                continue
+            try:
+                res = verifier.verify_claim(payload, stopped=stopped)
+            except Exception as exc:
+                res = {'ok': False, 'verdict': 'failed', 'reason': type(exc).__name__}
+            v = str((res or {}).get('verdict') or 'failed')
+            reason = str((res or {}).get('reason') or v)
+            if v == 'supported':
+                verdicts[key] = {'verdict': 'supported', 'reason': ''}
+            elif v == 'contradicted':
+                verdicts[key] = {'verdict': 'contradicted', 'reason': reason or 'semantic_contradicted'}
+            else:
+                verdicts[key] = {'verdict': 'pending_review', 'reason': reason or 'semantic_unverified'}
+        return verdicts
+
+    def _apply_outputs(self, parsed, batch, state, values, run_id, *, semantic_verdicts=None):
         batch_refs = batch['batch_refs']
         mem_by_id = batch['mem_by_id']
         auto_by_id = batch.get('auto_by_id') or {}
@@ -1644,21 +1771,95 @@ class CognitiveConsolidator:
                 continue
 
             if section in ('facts', 'growth'):
-                if not self._verify_content_evidence(section, text, valid_refs, mem_by_id, auto_by_id):
+                upd_key = self._cognition_update_key(upd)
+                sem_res = (semantic_verdicts or {}).get(upd_key)
+                if sem_res is None:
+                    # Fallback when _apply_outputs is invoked directly without preverification:
+                    # lexical check can only reject; without S3 semantic confirmation hold for review.
+                    if not self._verify_content_evidence(section, text, valid_refs, mem_by_id, auto_by_id):
+                        sem_res = {'verdict': 'prefilter_rejected', 'reason': 'lexical_prefilter_failed'}
+                    else:
+                        sem_res = {'verdict': 'pending_review', 'reason': 'semantic_verifier_unavailable'}
+                verdict = sem_res.get('verdict', 'pending_review')
+                v_reason = sem_res.get('reason', '')
+                if verdict == 'prefilter_rejected':
                     summary['rejected_ungrounded'] += 1
                     summary['cognition_updates'].append({
-                        'kind': kind,
-                        'section': section,
-                        'text': text,
-                        'replace_old_text': replace_old,
-                        'reason': upd['reason'],
-                        'evidence_refs': valid_refs,
-                        's3_sources': [],
+                        'kind': kind, 'section': section, 'text': text,
+                        'replace_old_text': replace_old, 'reason': upd['reason'],
+                        'evidence_refs': valid_refs, 's3_sources': [],
                         'requested_status': 'uncertain',
                         'governance_outcome': 'rejected_ungrounded_content',
                         'effective_status': 'rejected_ungrounded_content',
-                        'message': 'content not grounded in cited evidence',
+                        'message': v_reason or 'content failed lexical prefilter',
                         'item_id': '',
+                    })
+                    continue
+                if verdict == 'contradicted':
+                    summary['rejected_ungrounded'] += 1
+                    summary['cognition_updates'].append({
+                        'kind': kind, 'section': section, 'text': text,
+                        'replace_old_text': replace_old, 'reason': upd['reason'],
+                        'evidence_refs': valid_refs, 's3_sources': [],
+                        'requested_status': 'uncertain',
+                        'governance_outcome': 'rejected_semantic_contradicted',
+                        'effective_status': 'rejected_semantic_contradicted',
+                        'message': v_reason or 'contradicted by S3 semantic verification',
+                        'item_id': '',
+                    })
+                    continue
+                if verdict != 'supported':
+                    # Never write unverified facts/growth into effective Learned Context; hold pending review.
+                    pend_list = state.setdefault('pending_cognition_updates', [])
+                    vetoed_ledger = state.get('vetoed_experiences') or []
+                    if any(isinstance(v, str) and _matches_governed_claim(text, v) for v in vetoed_ledger):
+                        summary['cognition_updates'].append({
+                            'kind': kind, 'section': section, 'text': text,
+                            'replace_old_text': replace_old, 'reason': upd['reason'],
+                            'evidence_refs': valid_refs, 's3_sources': [],
+                            'requested_status': 'uncertain',
+                            'governance_outcome': 'blocked_sovereignty',
+                            'effective_status': 'blocked_sovereignty',
+                            'message': 'previously rejected by Lan',
+                            'item_id': '',
+                        })
+                        state['totals']['cognition_blocked'] += 1
+                        continue
+                    existing_pend = next(
+                        (p for p in pend_list if isinstance(p, dict)
+                         and p.get('content_key') == upd_key and p.get('status') == 'pending'),
+                        None,
+                    )
+                    if existing_pend is None:
+                        pend_id = 'cog-' + uuid.uuid4().hex[:10]
+                        now_stamp = self._now()
+                        pend_list.append({
+                            'id': pend_id,
+                            'content_key': upd_key,
+                            'kind': kind,
+                            'section': section,
+                            'text': text,
+                            'replace_old_text': replace_old,
+                            'reason': upd['reason'],
+                            'evidence_refs': valid_refs,
+                            's3_sources': self._expand_s3_sources(valid_refs, mem_by_id, section=section),
+                            'status': 'pending',
+                            'verify_reason': v_reason or 'semantic_unverified',
+                            'run_id': run_id,
+                            'created_at': now_stamp,
+                            'updated_at': now_stamp,
+                        })
+                    else:
+                        pend_id = existing_pend['id']
+                    summary['cognition_updates'].append({
+                        'kind': kind, 'section': section, 'text': text,
+                        'replace_old_text': replace_old, 'reason': upd['reason'],
+                        'evidence_refs': valid_refs, 's3_sources': [],
+                        'requested_status': 'uncertain',
+                        'governance_outcome': 'pending_review',
+                        'effective_status': 'pending_review',
+                        'message': v_reason or 'held pending S3 verification or Lan approval',
+                        'item_id': pend_id,
                     })
                     continue
 
@@ -2027,20 +2228,221 @@ class CognitiveConsolidator:
             'existing_experience_count': len(batch['existing_experiences']),
         }
 
+    @staticmethod
+    def _serialize_sent_batch(batch):
+        """Serialize the exact sent batch into a durable JSON-safe pending-commit checkpoint."""
+        return {
+            'batch_key': batch['batch_key'],
+            'new_memories': list(batch['new_memories']),
+            'anchor_memories': list(batch['anchor_memories']),
+            'autonomy_items': list(batch['autonomy_items']),
+            'batch_refs': sorted(batch['batch_refs']),
+            'inputs_summary': CognitiveConsolidator._inputs_summary_for(batch),
+            'active_memory_ids': list(batch.get('active_memory_ids') or []),
+            'active_autonomy_ids': list(batch.get('active_autonomy_ids') or []),
+        }
+
+    @staticmethod
+    def _deserialize_sent_batch(raw):
+        new_mems = list(raw.get('new_memories') or [])
+        anc_mems = list(raw.get('anchor_memories') or [])
+        autos = list(raw.get('autonomy_items') or [])
+        mem_by_id = {m['id']: m for m in (*new_mems, *anc_mems) if isinstance(m, dict) and m.get('id')}
+        auto_by_id = {a['id']: a for a in autos if isinstance(a, dict) and a.get('id')}
+        return {
+            'batch_key': str(raw.get('batch_key') or ''),
+            'new_memories': new_mems,
+            'anchor_memories': anc_mems,
+            'autonomy_items': autos,
+            'batch_refs': set(raw.get('batch_refs') or []),
+            'mem_by_id': mem_by_id,
+            'auto_by_id': auto_by_id,
+            'inputs_summary': dict(raw.get('inputs_summary') or {}),
+            'active_memory_ids': list(raw.get('active_memory_ids') or []),
+            'active_autonomy_ids': list(raw.get('active_autonomy_ids') or []),
+            'existing_cognition': {'relationship_items': []},
+            'existing_experiences': [],
+        }
+
+    def _commit_pending(self, values, *, resumed=False, stopped=lambda: False):
+        """Apply a persisted `pending_commit` checkpoint without re-calling the consolidation model."""
+        start_mono = time.monotonic()
+        with self.mutex:
+            state = self._load_state()
+            pending = state.get('pending_commit')
+            if not isinstance(pending, dict):
+                return {'ok': False, 'status': 'skipped', 'reason': 'no_pending_commit'}
+            attempts = int(pending.get('attempts') or 0)
+            if attempts >= MAX_COMMIT_ATTEMPTS:
+                stamp = self._now()
+                abandoned = {
+                    'run_id': str(pending.get('run_id') or ''),
+                    'started_at': str(pending.get('started_at') or stamp),
+                    'finished_at': stamp,
+                    'trigger': str(pending.get('trigger') or 'manual'),
+                    'status': 'apply_abandoned',
+                    'reason': 'max_commit_attempts_exceeded',
+                    'batch_key': str(pending.get('batch_key') or ''),
+                    'policy_version': POLICY_VERSION,
+                    'inputs': dict((pending.get('sent_batch') or {}).get('inputs_summary') or {}),
+                    'results': {},
+                    'cost_cny': 0.0,
+                    'resumed_from_pending_commit': resumed,
+                }
+                state['pending_commit'] = None
+                state['in_flight'] = None
+                state['last_run_at'] = stamp
+                state['last_status'] = 'apply_abandoned'
+                state['last_reason'] = 'max_commit_attempts_exceeded'
+                state.setdefault('recent_ui_runs', []).append(abandoned)
+                self._save_state(state)
+                self._append_run(abandoned)
+                return {'ok': False, **abandoned}
+            pending['attempts'] = attempts + 1
+            state['pending_commit'] = pending
+            self._save_state(state)
+            parsed = pending.get('parsed') or {'cognition_updates': [], 'importance_proposals': [], 'experience_candidates': []}
+            sent_batch = self._deserialize_sent_batch(pending.get('sent_batch') or {})
+            cached_verdicts = dict(pending.get('semantic_verdicts') or {})
+            run_id = str(pending.get('run_id') or 'cons-resume')
+            started_at = str(pending.get('started_at') or self._now())
+            trigger = str(pending.get('trigger') or 'manual')
+            inputs_summary = dict(sent_batch.get('inputs_summary') or self._inputs_summary_for(sent_batch))
+            orig_cost = round(float(pending.get('cost_cny') or 0.0), 6)
+            prompt_tok = pending.get('prompt_tokens')
+            completion_tok = pending.get('completion_tokens')
+            cached_tok = pending.get('cached_tokens')
+            cache_status = pending.get('cache_status')
+
+        # Run S3 semantic verification for facts/growth OUTSIDE self.mutex and persist verdicts
+        # into pending_commit so even an interruption after verification never re-bills S3.
+        verdicts = self._preverify_facts_and_growth(parsed, sent_batch, cached_verdicts, stopped=stopped)
+        with self.mutex:
+            state = self._load_state()
+            if isinstance(state.get('pending_commit'), dict):
+                state['pending_commit']['semantic_verdicts'] = verdicts
+                self._save_state(state)
+
+            finished_at = self._now()
+            duration_ms = int((time.monotonic() - start_mono) * 1000)
+            try:
+                applied, retryable_refs = self._apply_outputs(
+                    parsed, sent_batch, state, values, run_id, semantic_verdicts=verdicts,
+                )
+            except Exception as exc:
+                # Preserve pending_commit so the next run resumes committing at ¥0!
+                if isinstance(state.get('pending_commit'), dict):
+                    state['pending_commit']['last_error'] = type(exc).__name__
+                state['in_flight'] = None
+                state['last_run_at'] = finished_at
+                state['last_run_id'] = run_id
+                state['last_status'] = 'apply_failed'
+                state['last_reason'] = type(exc).__name__
+                state['totals']['runs'] += 1
+                state['totals']['failed'] += 1
+                failures = int(state.get('consecutive_failures') or 0) + 1
+                state['consecutive_failures'] = failures
+                backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
+                now_dt = _parse_dt(finished_at)
+                if now_dt is not None:
+                    state['cooldown_until'] = (
+                        now_dt + timedelta(minutes=backoff_min)
+                    ).isoformat(timespec='seconds')
+                fail_rec = {
+                    'run_id': run_id, 'started_at': started_at, 'finished_at': finished_at,
+                    'trigger': trigger, 'status': 'apply_failed', 'reason': type(exc).__name__,
+                    'batch_key': sent_batch['batch_key'], 'policy_version': POLICY_VERSION,
+                    'inputs': inputs_summary, 'results': {},
+                    'cost_cny': 0.0 if resumed else orig_cost,
+                    'original_cost_cny': orig_cost,
+                    'resumed_from_pending_commit': resumed,
+                    'prompt_tokens': prompt_tok,
+                    'completion_tokens': completion_tok,
+                    'cached_tokens': cached_tok,
+                    'cache_status': cache_status,
+                    'duration_ms': duration_ms,
+                }
+                state.setdefault('recent_ui_runs', []).append(fail_rec)
+                self._save_state(state)
+                self._append_run(fail_rec)
+                return {'ok': False, **fail_rec}
+
+            for mem in sent_batch['new_memories']:
+                if f"memory:{mem['id']}" not in retryable_refs:
+                    state['processed_memories'][mem['id']] = mem['fingerprint']
+            for auto in sent_batch['autonomy_items']:
+                if auto['id'] not in retryable_refs:
+                    state['processed_autonomy'][auto['started_at']] = auto['fingerprint']
+            if not retryable_refs:
+                state['processed_batches'][sent_batch['batch_key']] = finished_at
+            state['pending_commit'] = None
+            state['in_flight'] = None
+            state['last_run_at'] = finished_at
+            state['last_success_at'] = finished_at
+            state['last_run_id'] = run_id
+            state['last_status'] = 'completed'
+            state['last_reason'] = ''
+            state['consecutive_failures'] = 0
+            state['cooldown_until'] = ''
+            state['totals']['runs'] += 1
+            state['totals']['completed'] += 1
+            run_record = {
+                'run_id': run_id,
+                'started_at': started_at,
+                'finished_at': finished_at,
+                'trigger': trigger,
+                'status': 'completed',
+                'reason': '',
+                'batch_key': sent_batch['batch_key'],
+                'policy_version': POLICY_VERSION,
+                'inputs': inputs_summary,
+                'results': applied,
+                'cost_cny': 0.0 if resumed else orig_cost,
+                'original_cost_cny': orig_cost,
+                'resumed_from_pending_commit': resumed,
+                'prompt_tokens': prompt_tok,
+                'completion_tokens': completion_tok,
+                'cached_tokens': cached_tok,
+                'cache_status': cache_status,
+                'duration_ms': duration_ms,
+            }
+            state.setdefault('recent_ui_runs', []).append(run_record)
+            self._save_state(
+                state,
+                active_memory_ids=sent_batch.get('active_memory_ids'),
+                active_autonomy_ids=sent_batch.get('active_autonomy_ids'),
+            )
+            self._append_run(run_record)
+        return {'ok': True, **run_record}
+
     def run_once(self, *, trigger='manual', force=False, stopped=lambda: False):
-        """Execute at most one bounded, idempotent consolidation pass."""
+        """Execute at most one bounded, idempotent consolidation pass (resuming pending commits first)."""
         if not self._run_lock.acquire(blocking=False):
             return {'ok': False, 'status': 'skipped', 'reason': 'already_running'}
         try:
             values = self.settings()
+            has_pending_commit = False
             with self.mutex:
                 state = self._load_state()
                 if isinstance(state.get('in_flight'), dict):
                     self.recover_interrupted()
                     state = self._load_state()
-                due, reason = self._due_check(state, values, trigger=trigger, force=force)
-                if not due:
-                    return {'ok': False, 'status': 'skipped', 'reason': reason}
+                if isinstance(state.get('pending_commit'), dict):
+                    if not values['enabled']:
+                        return {'ok': False, 'status': 'skipped', 'reason': 'disabled'}
+                    if not force and state.get('cooldown_until'):
+                        cd_dt = _parse_dt(state['cooldown_until'])
+                        now_dt = _parse_dt(self._now())
+                        if cd_dt is not None and now_dt is not None and now_dt < cd_dt:
+                            return {'ok': False, 'status': 'skipped', 'reason': 'failure_backoff'}
+                    has_pending_commit = True
+                else:
+                    due, reason = self._due_check(state, values, trigger=trigger, force=force)
+                    if not due:
+                        return {'ok': False, 'status': 'skipped', 'reason': reason}
+
+            if has_pending_commit:
+                return self._commit_pending(values, resumed=True, stopped=stopped)
 
             batch = self.select_batch(state, values)
             min_items = 1 if force else int(values['min_new_items'])
@@ -2132,14 +2534,31 @@ class CognitiveConsolidator:
                     self._append_run(run_record)
                 return {'ok': False, **run_record}
 
+            # Durable checkpoint BEFORE applying: persists completed model output so any
+            # mid-apply crash or exception resumes applying without re-paying the model!
             with self.mutex:
-                # Reload latest state under lock before applying so concurrent Lan decisions survive.
                 state = self._load_state()
                 if state.get('day') == today:
                     state['runs_today'] = int(state.get('runs_today') or 0) + 1
                 else:
                     state['day'] = today
                     state['runs_today'] = 1
+                state['pending_commit'] = {
+                    'run_id': run_id,
+                    'started_at': started_at,
+                    'trigger': trigger,
+                    'batch_key': sent_batch['batch_key'],
+                    'parsed': model_res['parsed'],
+                    'sent_batch': self._serialize_sent_batch(sent_batch),
+                    'semantic_verdicts': {},
+                    'cost_cny': round(float(model_res.get('cost_cny') or 0.0), 6),
+                    'prompt_tokens': model_res.get('prompt_tokens'),
+                    'completion_tokens': model_res.get('completion_tokens'),
+                    'cached_tokens': model_res.get('cached_tokens'),
+                    'cache_status': model_res.get('cache_status'),
+                    'counted_run': True,
+                    'attempts': 0,
+                }
                 if isinstance(state.get('in_flight'), dict):
                     state['in_flight']['phase'] = 'applying'
                     state['in_flight']['counted_run'] = True
@@ -2147,89 +2566,7 @@ class CognitiveConsolidator:
                     state['in_flight']['inputs'] = inputs_summary
                 self._save_state(state)
 
-                try:
-                    applied, retryable_refs = self._apply_outputs(
-                        model_res['parsed'], sent_batch, state, values, run_id,
-                    )
-                except Exception as exc:
-                    # Cleanly record apply failure so in_flight never lingers and retry is safe.
-                    state['in_flight'] = None
-                    state['last_run_at'] = finished_at
-                    state['last_run_id'] = run_id
-                    state['last_status'] = 'apply_failed'
-                    state['last_reason'] = type(exc).__name__
-                    state['totals']['runs'] += 1
-                    state['totals']['failed'] += 1
-                    failures = int(state.get('consecutive_failures') or 0) + 1
-                    state['consecutive_failures'] = failures
-                    backoff_min = min(120, 15 * (2 ** min(failures - 1, 3)))
-                    now_dt = _parse_dt(finished_at)
-                    if now_dt is not None:
-                        state['cooldown_until'] = (
-                            now_dt + timedelta(minutes=backoff_min)
-                        ).isoformat(timespec='seconds')
-                    fail_rec = {
-                        'run_id': run_id, 'started_at': started_at, 'finished_at': finished_at,
-                        'trigger': trigger, 'status': 'apply_failed', 'reason': type(exc).__name__,
-                        'batch_key': sent_batch['batch_key'], 'policy_version': POLICY_VERSION,
-                        'inputs': inputs_summary, 'results': {},
-                        'cost_cny': round(float(model_res.get('cost_cny') or 0.0), 6),
-                        'prompt_tokens': model_res.get('prompt_tokens'),
-                        'completion_tokens': model_res.get('completion_tokens'),
-                        'cached_tokens': model_res.get('cached_tokens'),
-                        'cache_status': model_res.get('cache_status'),
-                        'duration_ms': duration_ms,
-                    }
-                    state.setdefault('recent_ui_runs', []).append(fail_rec)
-                    self._save_state(state)
-                    self._append_run(fail_rec)
-                    return {'ok': False, **fail_rec}
-
-                # Only mark items that were actually sent AND had no retryable S3 write rejection.
-                for mem in sent_batch['new_memories']:
-                    if f"memory:{mem['id']}" not in retryable_refs:
-                        state['processed_memories'][mem['id']] = mem['fingerprint']
-                for auto in sent_batch['autonomy_items']:
-                    if auto['id'] not in retryable_refs:
-                        state['processed_autonomy'][auto['started_at']] = auto['fingerprint']
-                if not retryable_refs:
-                    state['processed_batches'][sent_batch['batch_key']] = finished_at
-                state['in_flight'] = None
-                state['last_run_at'] = finished_at
-                state['last_success_at'] = finished_at
-                state['last_run_id'] = run_id
-                state['last_status'] = 'completed'
-                state['last_reason'] = ''
-                state['consecutive_failures'] = 0
-                state['cooldown_until'] = ''
-                state['totals']['runs'] += 1
-                state['totals']['completed'] += 1
-                run_record = {
-                    'run_id': run_id,
-                    'started_at': started_at,
-                    'finished_at': finished_at,
-                    'trigger': trigger,
-                    'status': 'completed',
-                    'reason': '',
-                    'batch_key': sent_batch['batch_key'],
-                    'policy_version': POLICY_VERSION,
-                    'inputs': inputs_summary,
-                    'results': applied,
-                    'cost_cny': round(float(model_res.get('cost_cny') or 0.0), 6),
-                    'prompt_tokens': model_res.get('prompt_tokens'),
-                    'completion_tokens': model_res.get('completion_tokens'),
-                    'cached_tokens': model_res.get('cached_tokens'),
-                    'cache_status': model_res.get('cache_status'),
-                    'duration_ms': duration_ms,
-                }
-                state.setdefault('recent_ui_runs', []).append(run_record)
-                self._save_state(
-                    state,
-                    active_memory_ids=sent_batch.get('active_memory_ids'),
-                    active_autonomy_ids=sent_batch.get('active_autonomy_ids'),
-                )
-                self._append_run(run_record)
-            return {'ok': True, **run_record}
+            return self._commit_pending(values, resumed=False, stopped=stopped)
         finally:
             self._run_lock.release()
 
@@ -2376,6 +2713,80 @@ class CognitiveConsolidator:
             self._save_state(state)
             return {'ok': True, 'candidate': dict(target)}
 
+    def list_pending_cognition(self, *, status='pending', limit=60):
+        with self.mutex:
+            state = self._load_state()
+            rows = list(state.get('pending_cognition_updates') or [])
+        out = []
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            if status and row.get('status') != status:
+                continue
+            out.append(dict(row))
+            if len(out) >= max(1, min(MAX_PENDING_COGNITION, int(limit or 60))):
+                break
+        return out
+
+    def decide_pending_cognition(self, pending_id, action, note=''):
+        """Lan decision for held facts/growth candidates that lacked S3 semantic confirmation."""
+        action = str(action or '').strip()
+        if action not in ('approve', 'reject'):
+            return {'ok': False, 'error': 'unknown_action', 'status_code': 400}
+        pid = str(pending_id or '').strip()
+        if not pid:
+            return {'ok': False, 'error': 'missing_id', 'status_code': 400}
+        with self.mutex:
+            state = self._load_state()
+            rows = state.get('pending_cognition_updates') or []
+            target = next((r for r in rows if isinstance(r, dict) and r.get('id') == pid), None)
+            if target is None:
+                return {'ok': False, 'error': 'pending_cognition_not_found', 'status_code': 404}
+            if target.get('status') != 'pending':
+                return {'ok': False, 'error': 'already_decided', 'status_code': 409}
+            now_stamp = self._now()
+            if action == 'reject':
+                target['status'] = 'rejected'
+                target['decided_by'] = 'lan'
+                target['decided_at'] = now_stamp
+                target['updated_at'] = now_stamp
+                if note:
+                    target['note'] = _clip(note, 200)
+                vetoed_ledger = state.setdefault('vetoed_experiences', [])
+                txt = str(target.get('text') or '').strip()
+                if txt and not any(_matches_governed_claim(txt, v) for v in vetoed_ledger if isinstance(v, str)):
+                    vetoed_ledger.append(txt)
+                self._save_state(state)
+                return {'ok': True, 'item': dict(target)}
+
+            # action == 'approve': submit through S3 LearnedContext.submit_candidate()!
+            if self.profile is None or not hasattr(self.profile, 'submit_candidate'):
+                return {'ok': False, 'error': 'profile_unavailable', 'status_code': 503}
+            idem_key = f"cons:approved:{target.get('content_key') or pid}"
+            msg, st_label, _ = self.profile.submit_candidate(
+                target['section'],
+                target['text'],
+                status='uncertain',
+                sources=list(target.get('s3_sources') or []),
+                replace_old_text=target.get('replace_old_text') or None,
+                origin='consolidation_lan_approved',
+                idempotency_key=idem_key,
+            )
+            if st_label != '成功':
+                return {'ok': False, 'error': str(msg or 'submit_rejected'), 'status_code': 409}
+            target['status'] = 'approved'
+            target['decided_by'] = 'lan'
+            target['decided_at'] = now_stamp
+            target['updated_at'] = now_stamp
+            if note:
+                target['note'] = _clip(note, 200)
+            if target.get('kind') == 'revision':
+                state['totals']['cognition_revised'] += 1
+            else:
+                state['totals']['cognition_written'] += 1
+            self._save_state(state)
+            return {'ok': True, 'item': dict(target), 'message': str(msg or '')}
+
     # ------------------------------------------------------------------ status projection
     def status(self, *, runs_limit=12):
         values = self.settings()
@@ -2437,6 +2848,7 @@ class CognitiveConsolidator:
                 'last_reason': state.get('last_reason') or '',
                 'consecutive_failures': int(state.get('consecutive_failures') or 0),
                 'cooldown_until': state.get('cooldown_until') or '',
+                'has_pending_commit': isinstance(state.get('pending_commit'), dict),
             },
             'budget': budget_info,
             'totals': dict(state.get('totals') or {}),
@@ -2444,14 +2856,16 @@ class CognitiveConsolidator:
                 **self.experience_interface_contract(),
                 'counts': exp_counts,
             },
+            'pending_cognition_updates': self.list_pending_cognition(status='pending'),
             'experience_candidates': self.list_experience_candidates(limit=MAX_EXPERIENCE_CANDIDATES),
             'recent_runs': shown_runs,
             'guards': {
                 'default_disabled': True,
                 'reuses_s3_governance': True,
+                'reuses_s3_semantic_verify': True,
                 'reuses_s6_1_weights': True,
                 'filters_unclean_and_unaudited_autonomy': True,
                 'respects_lan_locks_and_vetoes': True,
-                'content_grounded_facts_and_growth': True,
+                'durable_pending_commit_resume': True,
             },
         }

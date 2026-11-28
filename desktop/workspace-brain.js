@@ -1886,10 +1886,12 @@
         effective_confirmed: '已生效（已确认）',
         queued_semantic_verify: '已写入（待 S3 语义核验）',
         effective_uncertain: '已写入（未确认）',
-        effective_learned: '已生效（已进入习得认知）',
+        effective_learned: '已生效（已通过 S3 语义核验）',
+        pending_review: '待审（未写入有效上下文）',
         blocked_sovereignty: '已拦截（尊重锁定/纠正/否决）',
         rejected_budget: '未写入（分区预算已满）',
-        rejected_ungrounded_content: '未写入（内容与证据不匹配）',
+        rejected_ungrounded_content: '未写入（初筛未通过）',
+        rejected_semantic_contradicted: '未写入（S3 语义核验冲突）',
         rejected: '未写入（治理拒绝）',
       };
       const runs = Array.isArray(consData.recent_runs) ? consData.recent_runs : [];
@@ -1928,6 +1930,43 @@
           }
           consCard.append(box);
         }
+      }
+
+      const pendingCogs = Array.isArray(consData.pending_cognition_updates) ? consData.pending_cognition_updates : [];
+      if (pendingCogs.length) {
+        const pendBox = el('div', 'veil-subpanel');
+        pendBox.append(el('strong', '', `待审认知候选（${pendingCogs.length} 条 · 未经 S3 语义核验通过前不会进入对话上下文）`));
+        for (const item of pendingCogs) {
+          const row = el('div', 'layer-item');
+          row.append(
+            el('strong', '', `[${item.kind === 'revision' ? '修订' : '新增'} · ${item.section}] ${item.verify_reason || '待人工确认'}`),
+            el('div', 'reader-prose', item.replace_old_text ? `旧：${item.replace_old_text}\n新：${item.text}` : (item.text || '')),
+            el('small', 'muted', `原因：${item.reason || '无'} · 证据：${(item.evidence_refs || []).join('、') || '无'}`),
+          );
+          const act = el('div', 'workspace-links');
+          const okBtn = btn('批准写入', 'sm primary');
+          okBtn.addEventListener('click', async () => {
+            okBtn.disabled = true;
+            await reqJson(req, '/api/brain/consolidation/cognition', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: item.id, action: 'approve' }),
+            });
+            renderCognitionWorkspace(host, req);
+          });
+          const rejBtn = btn('拒绝', 'sm');
+          rejBtn.addEventListener('click', async () => {
+            rejBtn.disabled = true;
+            await reqJson(req, '/api/brain/consolidation/cognition', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: item.id, action: 'reject' }),
+            });
+            renderCognitionWorkspace(host, req);
+          });
+          act.append(okBtn, rejBtn);
+          row.append(act);
+          pendBox.append(row);
+        }
+        consCard.append(pendBox);
       }
 
       const p7Items = Array.isArray(consData.experience_candidates) ? consData.experience_candidates : [];

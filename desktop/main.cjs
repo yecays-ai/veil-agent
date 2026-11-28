@@ -571,7 +571,7 @@ function allowedChatRequest(pathname, method) {
     '/api/typing', '/api/request-reply', '/api/mcp', '/api/workbench', '/api/windows-apps', '/api/life', '/api/stickers', '/api/stickers/upload',
     '/api/brain/health/scan', '/api/brain/health/settings', '/api/brain/layer-toggle',
     '/api/brain/memory-weights', '/api/brain/memory-proposal', '/api/brain/memory-reevaluate',
-    '/api/brain/consolidation/settings', '/api/brain/consolidation/run', '/api/brain/consolidation/experience',
+    '/api/brain/consolidation/settings', '/api/brain/consolidation/run', '/api/brain/consolidation/experience', '/api/brain/consolidation/cognition',
     '/api/voice-style', '/api/peter-page', '/api/pending-approvals', '/api/instructions'].includes(pathname);
 }
 ipcMain.handle('chat:request', async (event, pathname, body, timeoutMs) => {

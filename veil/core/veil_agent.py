@@ -2399,6 +2399,7 @@ class Chat:
         # Tickets 098/102: channel name -> callable(text), set by the desktop service for configured channels.
         self.away_channels = {}
         self.relationship_semantic_scheduler = None
+        self.relationship_semantic_verifier = None
         semantic_settings = getattr(getattr(cfg, 'models', None), 'semantic_verification', None)
         if (callable(getattr(self.profile, 'pending_relationship_semantics', None))
                 and callable(semantic_settings) and background_model is not None):
@@ -2411,6 +2412,7 @@ class Chat:
                 background_cfg(cfg), budget, request,
                 semantic_settings, profile=self.profile,
             )
+            self.relationship_semantic_verifier = verifier
             self.relationship_semantic_scheduler = PeriodicBackgroundTick(
                 f'{cfg.id}-relationship-semantic', TICK_SECONDS, verifier.tick)
         notes_config = getattr(cfg, 'short_term_notes', None) or {}
@@ -2438,6 +2440,7 @@ class Chat:
             self.consolidation = CognitiveConsolidator(
                 cons_cfg, store, budget, cons_request,
                 memory=self.memory, profile=self.profile,
+                semantic_verifier=self.relationship_semantic_verifier,
             )
 
     def start_short_term_notes_scheduler(self):

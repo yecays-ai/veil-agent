@@ -242,3 +242,115 @@ class RelationshipSemanticWorker:
         except (ValueError, RecursionError):
             return finish('failed', 'invalid_response')
         return finish(verdict)
+
+    def verify_claim(self, payload, *, stopped=lambda: False):
+        """Reuse S3 metered semantic verification for background cognition candidates (facts/growth).
+
+        Returns `{'ok': bool, 'verdict': 'supported'|'insufficient'|'contradicted'|'budget'|'unavailable'|'failed', 'reason': str}`.
+        Fail-closed: any unavailable setting, budget cap, timeout or parse failure never returns `supported`.
+        """
+        from veil.core.model_settings import SettingsError
+        from veil.core.veil_agent import RequestNotSent, request_byte_size
+
+        if stopped() or self.model is None or self.cfg.provider.get('missing'):
+            return {'ok': False, 'verdict': 'unavailable', 'reason': 'model_unavailable'}
+        try:
+            settings = self.settings()
+            cap = Decimal(settings['daily_cap_cny'])
+            timeout = settings['timeout_seconds']
+        except (SettingsError, KeyError, TypeError, ArithmeticError):
+            return {'ok': False, 'verdict': 'unavailable', 'reason': 'settings_unavailable'}
+        if not cap.is_finite() or cap <= 0 or type(timeout) is not int or not 1 <= timeout <= 60:
+            return {'ok': False, 'verdict': 'unavailable', 'reason': 'invalid_settings'}
+
+        try:
+            candidate = payload['candidate']
+            if (not isinstance(candidate, dict) or not isinstance(candidate.get('text'), str)
+                    or not candidate['text'].strip()):
+                raise ValueError('missing candidate text')
+            evidence_ids, counter_ids = _ids(payload['evidence']), _ids(payload['counterevidence'])
+            if not evidence_ids:
+                raise ValueError('missing evidence')
+            system = prompts.text('memory.relationship.semantic_verify')
+            if _contains_secret(payload, system):
+                return {'ok': False, 'verdict': 'failed', 'reason': 'sensitive_payload'}
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+            messages = [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': body},
+            ]
+            input_bytes = request_byte_size(messages)
+        except (ValueError, TypeError, KeyError, RecursionError):
+            return {'ok': False, 'verdict': 'failed', 'reason': 'invalid_payload'}
+
+        provider = dict(self.cfg.provider)
+        if input_bytes > min(provider['max_input_tokens'], MAX_INPUT_TOKENS):
+            return {'ok': False, 'verdict': 'failed', 'reason': 'payload_too_large'}
+        provider['max_input_tokens'] = input_bytes
+        request_cfg = replace(
+            self.cfg, provider=provider,
+            max_output_tokens=min(self.cfg.max_output_tokens, MAX_OUTPUT_TOKENS),
+        )
+        if stopped():
+            return {'ok': False, 'verdict': 'unavailable', 'reason': 'stopped'}
+        try:
+            reservation = self.budget.reserve(
+                request_cfg, category=COST_CATEGORY,
+                accounting=COST_CATEGORY, category_daily=cap,
+            )
+        except BudgetExceeded:
+            return {'ok': False, 'verdict': 'budget', 'reason': 'budget_exhausted'}
+        except UserError:
+            return {'ok': False, 'verdict': 'unavailable', 'reason': 'ledger_unavailable'}
+
+        request_id, _ = reservation
+        marked = False
+        try:
+            if stopped():
+                return {'ok': False, 'verdict': 'unavailable', 'reason': 'stopped'}
+            self.budget.mark_dispatched(request_id)
+            marked = True
+        finally:
+            if not marked:
+                self.budget.release_not_sent(request_id)
+
+        def retain_upper(reason):
+            try:
+                self.budget.settle_estimate(reservation, accounting=COST_CATEGORY + '-unknown-usage')
+            except Exception:
+                pass
+            return {'ok': False, 'verdict': 'failed', 'reason': reason}
+
+        start = time.monotonic()
+        try:
+            output, prompt, completion, cached, stop_reason = self.model(
+                messages, json_output=True, max_tokens=request_cfg.max_output_tokens,
+                thinking='disabled', detail=True, request_timeout=timeout,
+            )
+        except RequestNotSent:
+            self.budget.release_not_sent(request_id)
+            return {'ok': False, 'verdict': 'failed', 'reason': 'request_not_sent'}
+        except (TimeoutError, APITimeoutError):
+            return retain_upper('timeout')
+        except Exception:
+            return retain_upper('provider_error')
+
+        late = time.monotonic() - start > timeout
+        try:
+            settled_ok = self.budget.settle(
+                request_id, request_cfg, prompt, completion, cached,
+                input_bytes=input_bytes, category=COST_CATEGORY, accounting=COST_CATEGORY,
+            )
+            if settled_ok is False:
+                return {'ok': False, 'verdict': 'failed', 'reason': 'settlement_conflict'}
+        except UserError:
+            return retain_upper('invalid_usage')
+        if late or stopped():
+            return {'ok': False, 'verdict': 'failed', 'reason': 'timeout' if late else 'stopped'}
+        if stop_reason != 'stop':
+            return {'ok': False, 'verdict': 'failed', 'reason': 'invalid_response'}
+        try:
+            verdict = _verdict(output, evidence_ids, counter_ids)
+        except (ValueError, RecursionError):
+            return {'ok': False, 'verdict': 'failed', 'reason': 'invalid_response'}
+        return {'ok': True, 'verdict': verdict, 'reason': ''}

@@ -63,6 +63,11 @@ const sampleConsolidation = {
   budget: { day: '2026-11-28', daily_cap_cny: '0.05', spent_cny: '0.012', pending_cny: '0', remaining_cny: '0.038' },
   totals: { cognition_written: 2, cognition_revised: 1, cognition_blocked: 1, importance_proposed: 1 },
   p7_interface: { schema_version: 'p7.experience.v1', counts: { total: 1, confirmed: 0, uncertain: 1 } },
+  pending_cognition_updates: [{
+    id: 'cog-pend-1', kind: 'new', section: 'growth', status: 'pending',
+    text: '待审核的成长观察结论', reason: '语义核验暂不可用', verify_reason: 'semantic_verifier_unavailable',
+    evidence_refs: ['memory:m1'],
+  }],
   experience_candidates: [{
     id: 'exp-abc123', kind: 'communication_pattern', status: 'uncertain',
     trigger_condition: '深夜疲惫表达低落时', guidance: '先安静陪伴，不急着长篇说教',
@@ -225,6 +230,8 @@ test('Brain Cognition displays consolidation results, evidence sources, cognitiv
   assert.match(out, /旧：周末十点前别发消息/);
   assert.match(out, /新：周末九点后就可以发消息/);
   assert.match(out, /memory:m1、chat:u2/);
+  assert.match(out, /待审认知候选/);
+  assert.match(out, /待审核的成长观察结论/);
   assert.match(out, /预留 P7 情境经验候选/);
   assert.match(out, /先安静陪伴，不急着长篇说教/);
 });
@@ -289,6 +296,7 @@ test('Electron main.cjs allows all P6-S6-3 consolidation and S6-1 memory-weights
   assert.equal(allowed('/api/brain/consolidation/settings', 'POST'), true);
   assert.equal(allowed('/api/brain/consolidation/run', 'POST'), true);
   assert.equal(allowed('/api/brain/consolidation/experience', 'POST'), true);
+  assert.equal(allowed('/api/brain/consolidation/cognition', 'POST'), true);
   assert.equal(allowed('/api/brain/memory-weights', 'GET'), true);
   assert.equal(allowed('/api/brain/memory-weights', 'POST'), true);
 });

@@ -262,6 +262,16 @@ def decide_consolidation_experience(hub, candidate_id, action, note=''):
         return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
 
 
+def decide_consolidation_cognition(hub, pending_id, action, note=''):
+    cons = _consolidator_for(hub)
+    if cons is None:
+        return {'ok': False, 'error': '认知巩固模块未就绪', 'status_code': 503}
+    try:
+        return cons.decide_pending_cognition(pending_id, action, note=note)
+    except Exception as exc:
+        return {'ok': False, 'error': type(exc).__name__, 'status_code': 500}
+
+
 def compute_line_diff(old_text, new_text):
     old_lines = (old_text or '').splitlines()
     new_lines = (new_text or '').splitlines()

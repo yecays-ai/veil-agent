@@ -3993,6 +3993,16 @@ def make_handler(hub, token):
                 )
                 code = 200 if res.get('ok') else int(res.get('status_code') or 400)
                 self._send(code, res)
+            elif url.path == '/api/brain/consolidation/cognition':
+                if not self._guard(self.headers.get('X-Token')):
+                    return
+                from veil.brain.brain_p4_api import decide_consolidation_cognition
+                res = decide_consolidation_cognition(
+                    hub, str(body.get('id') or body.get('pending_id') or ''),
+                    str(body.get('action') or ''), note=str(body.get('note') or ''),
+                )
+                code = 200 if res.get('ok') else int(res.get('status_code') or 400)
+                self._send(code, res)
             elif url.path == '/api/pending-approvals':
                 try:
                     self._send(200, {'ok': True, 'item': hub.decide_pending(body)})
