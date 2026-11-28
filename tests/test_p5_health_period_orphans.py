@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from veil.brain import brain_health
 
@@ -205,7 +206,8 @@ class HealthPeriodOrphanTests(unittest.TestCase):
         rows = [
             {'time': '2026-11-28T09:00:00+08:00', 'request_id': 'r1',
              'kind': 'tool_step_context', 'sent': True, 'actual_input_tokens': 1000,
-             'cached_tokens': 700, 'empty_memory_notices_omitted': 0},
+             'cached_tokens': 700, 'empty_memory_notices_omitted': 0,
+             'p7_experience_hints': {'status': 'injected'}},
             {'time': '2026-11-28T09:00:01+08:00', 'request_id': 'r1',
              'kind': 'tool_step_context', 'sent': True, 'actual_input_tokens': 1100,
              'cached_tokens': 800, 'empty_memory_notices_omitted': 1},
@@ -221,6 +223,42 @@ class HealthPeriodOrphanTests(unittest.TestCase):
         self.assertIn('缓存用量已报告 2 次（1500/2100 tokens）', impact)
         self.assertIn('省略空记忆提示 1 块', impact)
         self.assertIn('P7 槽位注入 1 次', impact)
+
+    def test_health_range_reads_context_records_beyond_the_latest_600(self):
+        rows = [{'time': '2026-11-10T10:00:00+08:00', 'request_id': 'old',
+                 'kind': 'chat', 'sent': True, 'actual_input_tokens': 1000,
+                 'cached_tokens': 700,
+                 'p7_experience_hints': {'status': 'injected'}}]
+        for index in range(610):
+            rows.append({'time': '2026-11-27T10:00:00+08:00', 'request_id': 'new-%d' % index,
+                         'kind': 'chat', 'sent': True, 'actual_input_tokens': 10,
+                         'cached_tokens': 5})
+        (self.role / 'context-log.jsonl').write_text(
+            ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+
+        impact = self.check(self.run_scan(from_date='2026-11-10', to_date='2026-11-11'), 'H-8')['impact']
+
+        self.assertIn('实际发送 1 次', impact)
+        self.assertIn('缓存用量已报告 1 次（700/1000 tokens）', impact)
+        self.assertIn('P7 槽位注入 1 次', impact)
+
+    def test_health_probe_marks_h8_unavailable_when_context_log_cannot_be_read(self):
+        (self.role / 'context-log.jsonl').write_text('', encoding='utf-8')
+        real_open = Path.open
+
+        def failing_open(inner_self, *args, **kwargs):
+            if inner_self.name == 'context-log.jsonl':
+                raise OSError('fictional permission failure')
+            return real_open(inner_self, *args, **kwargs)
+
+        with mock.patch.object(Path, 'open', failing_open):
+            report = self.run_scan()
+
+        check = self.check(report, 'H-8')
+        self.assertEqual(check['severity'], 'warn')
+        self.assertIn('不可用', check['status_label'])
+        self.assertIn('context-log.jsonl', check['impact'])
+        self.assertNotIn('实际发送 0 次', check['impact'])
 
     def test_period_uses_existing_snapshots_and_marks_coverage(self):
         self.add_memory('m1', '2026-11-10T10:00:00+08:00', '记忆正文。')

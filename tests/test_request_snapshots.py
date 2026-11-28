@@ -1,4 +1,5 @@
 """Ticket 403: each model request is recorded, with tools, redaction and honest truncation flags."""
+import hashlib
 import json
 import tempfile
 import unittest
@@ -34,10 +35,14 @@ class SnapshotBuildTests(unittest.TestCase):
         self.assertEqual(record['tools'][0]['name'], 'lookup')
         self.assertTrue(record['complete'])
         self.assertEqual(record['cache_prefix'], 1)
-        self.assertGreater(record['cache_prefix_bytes'], 0)
-        self.assertEqual(len(record['cache_prefix_sha256']), 64)
+        prefix_data = json.dumps(messages[:1], ensure_ascii=False, separators=(',', ':'), default=str)
+        tools_data = json.dumps([tool('lookup')], ensure_ascii=False, separators=(',', ':'), default=str)
+        self.assertEqual(record['cache_prefix_bytes'], len(prefix_data.encode('utf-8')))
+        self.assertEqual(record['cache_prefix_sha256'],
+                         hashlib.sha256(prefix_data.encode('utf-8')).hexdigest())
         self.assertEqual(record['module_chars']['identity.persona'], len('persona text'))
-        self.assertEqual(len(record['tool_schema_sha256']), 64)
+        self.assertEqual(record['tool_schema_sha256'],
+                         hashlib.sha256(tools_data.encode('utf-8')).hexdigest())
 
     def test_truncation_is_recorded(self):
         record = request_snapshots.build([{'role': 'system', 'content': 'x' * 20000}], ['history'],

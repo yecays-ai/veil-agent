@@ -129,12 +129,14 @@ def _read_jsonl(path, limit=2000):
     return rows
 
 
-def _read_jsonl_scan(path, limit=None, predicate=None):
+def _read_jsonl_scan(path, limit=None, predicate=None, deadline=None):
     """Read a jsonl file in order.
 
     ``limit`` keeps only the newest rows and reports truncation. ``predicate`` scans the whole
     file and keeps every match, so an old date range is not dropped just because newer rows
-    filled a tail window.
+    filled a tail window. ``deadline`` uses the caller's existing scan budget; whatever was read
+    is returned with True so the caller can say the file was incomplete instead of reporting
+    partial counts as totals.
     """
     p = Path(path)
     if not p.is_file():
@@ -144,6 +146,9 @@ def _read_jsonl_scan(path, limit=None, predicate=None):
     try:
         with p.open(encoding='utf-8', errors='replace') as fh:
             for line in fh:
+                if deadline is not None and _deadline_reached(deadline):
+                    return ([row for row in rows if predicate(row)] if predicate is not None
+                            else rows), True
                 line = line.strip()
                 if not line:
                     continue
@@ -1119,57 +1124,91 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
         # budget is gone they stay unexecuted and the report says so explicitly.
         rdir = _role_dir(root, role_id)
         if not timed_out:
-            recall_rows = [row for row in _read_jsonl(rdir / 'recall-diagnostics.jsonl', 600)
-                           if _in_range(row.get('time'), dt_from, dt_to)]
-            context_rows = [row for row in _read_jsonl(rdir / 'context-log.jsonl', 600)
-                            if _in_range(row.get('time'), dt_from, dt_to)]
-            sent_context = [row for row in context_rows if row.get('sent') is True]
-            cache_rows = [row for row in sent_context if type(row.get('cached_tokens')) is int]
-            actual_input = sum(int(row.get('actual_input_tokens') or 0) for row in cache_rows)
-            cached_input = sum(int(row.get('cached_tokens') or 0) for row in cache_rows)
-            p7_injected = sum(1 for row in context_rows
-                              if (row.get('p7_experience_hints') or {}).get('status') == 'injected')
-            omitted_by_request = {}
-            for row in sent_context:
-                rid = str(row.get('request_id') or '')
-                omitted_by_request[rid] = max(omitted_by_request.get(rid, 0),
-                                              int(row.get('empty_memory_notices_omitted') or 0))
-            empty_notices_omitted = sum(omitted_by_request.values())
-            degraded_count = 0
-            judge_fail_count = 0
-            budget_drop_count = 0
-            for row in recall_rows:
-                if row.get('failure') or 'keyword' in str(row.get('retrieval_mode', '')):
-                    degraded_count += 1
-                j = row.get('judge')
-                if isinstance(j, dict) and j.get('status') == 'failed':
-                    judge_fail_count += 1
-                if row.get('budget_dropped'):
-                    budget_drop_count += 1
+            failed_logs = []
 
-            exp_fail_rows = [row for row in _read_jsonl(rdir / 'experience-memory-failures.jsonl', 200)
-                             if _in_range(row.get('time'), dt_from, dt_to)]
-            page_err_rows = [row for row in _read_jsonl(rdir / 'peter-page-errors.jsonl', 200)
-                             if _in_range(row.get('time'), dt_from, dt_to)]
+            def read_log(path, limit):
+                # A selected date range must scan the whole file (not a newest-N tail); without a
+                # range keep the previous bounded tail. Both paths share the scan deadline.
+                if range_requested:
+                    rows, failed = _read_jsonl_scan(
+                        path, predicate=lambda row: _in_range(row.get('time'), dt_from, dt_to),
+                        deadline=deadline)
+                else:
+                    rows, failed = _read_jsonl_scan(path, deadline=deadline)
+                    rows = rows[-limit:]
+                if failed:
+                    failed_logs.append(Path(path).name)
+                return rows
 
-            runtime_warns = degraded_count + judge_fail_count + len(exp_fail_rows) + len(page_err_rows)
-            checks.append({
-                'id': 'H-8',
-                'title': '运行期召回、整理与注入异常统计',
-                'severity': 'warn' if runtime_warns else 'good',
-                'status_label': f"{runtime_warns} 次运行降级/异常" if runtime_warns else '运行平稳',
-                'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"
-                           f"实际发送 {len(sent_context)} 次；缓存用量已报告 {len(cache_rows)} 次"
-                           + (f"（{cached_input}/{actual_input} tokens）" if actual_input else '')
-                           + f"；后续工具请求省略空记忆提示 {empty_notices_omitted} 块；P7 槽位注入 {p7_injected} 次。"),
-                'object': 'recall-diagnostics.jsonl / context-log.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
-                'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
-                'source': 'role runtime jsonl',
-                'confidence': '高可信（真实日志计数）',
-                'evidences': [],
-                'scope': 'range' if range_requested else 'range (all logs)',
-                'period': {'from_date': from_date, 'to_date': to_date} if range_requested else None,
-            })
+            recall_rows = read_log(rdir / 'recall-diagnostics.jsonl', 600)
+            context_rows = read_log(rdir / 'context-log.jsonl', 600)
+            exp_fail_rows = read_log(rdir / 'experience-memory-failures.jsonl', 200)
+            page_err_rows = read_log(rdir / 'peter-page-errors.jsonl', 200)
+            if failed_logs:
+                if _deadline_reached(deadline):
+                    timed_out = True
+                checks.append({
+                    'id': 'H-8',
+                    'title': '运行期召回、整理与注入异常统计',
+                    'severity': 'warn',
+                    'status_label': '诊断日志读取失败，H-8 不可用',
+                    'impact': ('无法完整读取 ' + '、'.join(failed_logs) + '；本次不汇报请求、缓存与 P7 '
+                               '注入数量，避免把读取失败当成零活动。请检查文件权限、占用或稍后重试。'
+                               + ('（日志扫描已到执行时限）' if timed_out else '')),
+                    'object': 'recall-diagnostics.jsonl / context-log.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
+                    'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
+                    'source': 'role runtime jsonl',
+                    'confidence': '不可用（日志读取失败，未汇总为零）',
+                    'evidences': [],
+                    'scope': 'range' if range_requested else 'range (all logs)',
+                    'period': {'from_date': from_date, 'to_date': to_date} if range_requested else None,
+                    'complete': False,
+                })
+            else:
+                sent_context = [row for row in context_rows if row.get('sent') is True]
+                cache_rows = [row for row in sent_context if type(row.get('cached_tokens')) is int]
+                actual_input = sum(int(row.get('actual_input_tokens') or 0) for row in cache_rows)
+                cached_input = sum(int(row.get('cached_tokens') or 0) for row in cache_rows)
+                # Only records that were actually sent to the model count as P7 injections; a
+                # preflight row can carry the slot while the request is trimmed before dispatch.
+                p7_injected = sum(1 for row in sent_context
+                                  if (row.get('p7_experience_hints') or {}).get('status') == 'injected')
+                omitted_by_request = {}
+                for row in sent_context:
+                    rid = str(row.get('request_id') or '')
+                    omitted_by_request[rid] = max(omitted_by_request.get(rid, 0),
+                                                  int(row.get('empty_memory_notices_omitted') or 0))
+                empty_notices_omitted = sum(omitted_by_request.values())
+                degraded_count = 0
+                judge_fail_count = 0
+                budget_drop_count = 0
+                for row in recall_rows:
+                    if row.get('failure') or 'keyword' in str(row.get('retrieval_mode', '')):
+                        degraded_count += 1
+                    j = row.get('judge')
+                    if isinstance(j, dict) and j.get('status') == 'failed':
+                        judge_fail_count += 1
+                    if row.get('budget_dropped'):
+                        budget_drop_count += 1
+
+                runtime_warns = degraded_count + judge_fail_count + len(exp_fail_rows) + len(page_err_rows)
+                checks.append({
+                    'id': 'H-8',
+                    'title': '运行期召回、整理与注入异常统计',
+                    'severity': 'warn' if runtime_warns else 'good',
+                    'status_label': f"{runtime_warns} 次运行降级/异常" if runtime_warns else '运行平稳',
+                    'impact': (f"窗口内检索样本 {len(recall_rows)} 轮：检索降级 {degraded_count} 次，判官超时/失败 {judge_fail_count} 次，预算裁剪 {budget_drop_count} 次，经历整理失败 {len(exp_fail_rows)} 次，认知页写入错误 {len(page_err_rows)} 次。"
+                               f"实际发送 {len(sent_context)} 次；缓存用量已报告 {len(cache_rows)} 次"
+                               + (f"（{cached_input}/{actual_input} tokens）" if actual_input else '')
+                               + f"；后续工具请求省略空记忆提示 {empty_notices_omitted} 块；P7 槽位注入 {p7_injected} 次。"),
+                    'object': 'recall-diagnostics.jsonl / context-log.jsonl / experience-memory-failures.jsonl / peter-page-errors.jsonl',
+                    'basis': f"时间窗 [{from_date or '全部'}, {to_date or '今天'}] 日志统计",
+                    'source': 'role runtime jsonl',
+                    'confidence': '高可信（真实日志计数）',
+                    'evidences': [],
+                    'scope': 'range' if range_requested else 'range (all logs)',
+                    'period': {'from_date': from_date, 'to_date': to_date} if range_requested else None,
+                })
 
         # H-9: Background maintenance & freeze status
         if not timed_out:

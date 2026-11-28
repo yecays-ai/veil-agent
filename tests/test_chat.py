@@ -191,8 +191,11 @@ output_cny_per_million = "8"
         memory.budgets_recall = False
         memory.last_context_refs = []
         memory.last_context_kinds = {}
-        memory.context.return_value = [{'role': 'system', 'content':
-            prompts.text('memory.recall.head') + '\n' + prompts.text('memory.recall.empty')}]
+        memory.context.return_value = [
+            {'role': 'system', 'content':
+             prompts.text('memory.recall.head') + '\n' + prompts.text('memory.recall.empty')},
+            {'role': 'system', 'content':
+             'REAL RECALL: the fictional export failed on the second page and Lan fixed it by hand.'}]
         seen = []
         replies = iter([(first, 100, 20, 0), (final, 120, 5, 0)])
         def respond(messages, **_kwargs):
@@ -207,6 +210,7 @@ output_cny_per_million = "8"
         empty = prompts.text('memory.recall.empty')
         self.assertTrue(any(empty in str(row.get('content')) for row in seen[0]))
         self.assertFalse(any(empty in str(row.get('content')) for row in seen[1]))
+        self.assertTrue(any('REAL RECALL' in str(row.get('content')) for row in seen[1]))
         rows = [row for row in self.store.read('test/context-log.jsonl')
                 if row.get('kind') == 'tool_step_context']
         self.assertEqual(rows[-1]['empty_memory_notices_omitted'], 1)
@@ -218,7 +222,7 @@ output_cny_per_million = "8"
             {'status': 'confirmed', 'trigger_condition': 'when a fictional export fails',
              'guidance': 'read the local error before retrying'},
             *[{'status': 'confirmed', 'trigger_condition': f'case {index}',
-               'guidance': 'whole guidance ' + ('x' * 700)} for index in range(8)],
+               'guidance': 'short guidance ' + ('x' * 20)} for index in range(8)],
         ]
 
         chat.send('A fictional export failed.')
@@ -229,13 +233,99 @@ output_cny_per_million = "8"
         self.assertGreater(index, 1)
         self.assertLess(index, len(sent) - 1)
         self.assertNotIn('do not inject', sent[index]['content'])
-        debug = chat.p7_experience_hints_debug
+        self.assertEqual(sent[index]['content'].count('- When:'), 4)
+        context = self.store.read('test/context-log.jsonl')[-1]
+        debug = context['p7_experience_hints']
         self.assertEqual(debug['slot'], 'p7.experience_hints')
         self.assertLessEqual(debug['used_tokens'], 600)
-        self.assertLessEqual(debug['selected'], 4)
-        context = self.store.read('test/context-log.jsonl')[-1]
-        self.assertEqual(context['p7_experience_hints']['status'], 'injected')
+        self.assertEqual(debug['selected'], 4)
+        self.assertEqual(debug['status'], 'injected')
         self.assertIn('p7.experience_hints', [row['label'] for row in context['context_modules']])
+
+    def test_p7_slot_sits_between_short_notes_and_recall_candidates(self):
+        now = datetime.now(timezone.utc).isoformat()
+        self.store.append('test/chat.jsonl', {'role': 'user', 'content': 'Earlier fictional question.',
+                                             'time': now, 'message_id': 'earlier-user'})
+        self.store.append('test/chat.jsonl', {'role': 'assistant', 'content': 'Earlier fictional answer.',
+                                             'time': now, 'message_id': 'earlier-assistant'})
+        model = Mock(return_value=(SimpleNamespace(content='A fictional reply.', tool_calls=[]),
+                                   100, 20, 0))
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 2}),
+                    self.store, self.budget, model)
+        chat.short_term_notes = Mock()
+        chat.short_term_notes.context.return_value = (
+            {'role': 'system', 'content': 'SHORT TERM NOTES'},
+            {'count': 1, 'characters': len('SHORT TERM NOTES')})
+        chat.experience_hint_provider = lambda _situation: [
+            {'status': 'confirmed', 'trigger_condition': 'export failure',
+             'guidance': 'read the local error before retrying'}]
+
+        chat.send('A fictional export failed again.')
+
+        context = next(row for row in reversed(self.store.read('test/context-log.jsonl'))
+                       if row.get('context_modules'))
+        labels = [row['label'] for row in context['context_modules']]
+        self.assertIn('memory.short_notes', labels)
+        self.assertIn('p7.experience_hints', labels)
+        self.assertIn('recall_candidates', labels)
+        self.assertLess(labels.index('memory.short_notes'), labels.index('p7.experience_hints'))
+        self.assertLess(labels.index('p7.experience_hints'), labels.index('recall_candidates'))
+        sent_step = next(row for row in reversed(self.store.read('test/context-log.jsonl'))
+                         if row.get('kind') == 'tool_step_context' and row.get('sent'))
+        self.assertEqual(sent_step['p7_experience_hints']['status'], 'injected')
+
+    def test_p7_debug_stays_local_to_each_request(self):
+        chat = Chat(self.cfg, self.store, self.budget, self.model)
+        first_debug = {}
+        chat.experience_hint_provider = lambda _situation: [
+            {'status': 'confirmed', 'trigger_condition': 'first', 'guidance': 'one'}]
+        first = chat.p7_experience_hints_context('first', debug=first_debug)
+        self.assertIsNotNone(first)
+        self.assertEqual(first_debug['selected'], 1)
+
+        second_debug = {}
+        chat.experience_hint_provider = lambda _situation: [
+            {'status': 'confirmed', 'trigger_condition': 'a', 'guidance': 'b'},
+            {'status': 'confirmed', 'trigger_condition': 'c', 'guidance': 'd'}]
+        second = chat.p7_experience_hints_context('second', debug=second_debug)
+        self.assertIsNotNone(second)
+        self.assertEqual(second_debug['selected'], 2)
+        self.assertEqual(first_debug['selected'], 1)
+        self.assertFalse(hasattr(chat, 'p7_experience_hints_debug'))
+
+    def test_capability_state_keeps_tool_names_and_permissions(self):
+        schemas = [
+            {'type': 'function', 'function': {
+                'name': 'read_text_file', 'description': 'Read', 'parameters': {}}},
+            {'type': 'function', 'function': {
+                'name': 'write_file', 'description': 'Write', 'parameters': {}}},
+        ]
+        snapshot = self.chat.current_capability_snapshot(schemas)
+        approval = next(line for line in snapshot.splitlines() if 'write_file' in line)
+        direct = next(line for line in snapshot.splitlines() if 'read_text_file' in line)
+        self.assertIn("Needs Lan's approval", approval)
+        self.assertIn('Direct use', direct)
+        self.assertIn('2 callable tools', snapshot)
+        fallback = self.chat.current_capability_snapshot(schemas, include_names=False)
+        self.assertIn('2 callable tools', fallback)
+        self.assertNotIn('read_text_file', fallback)
+        self.assertIn('- Direct use: 1 tools.', fallback)
+
+    def test_tools_enabled_without_runtime_manager_is_explained(self):
+        model = Mock(return_value=(SimpleNamespace(content='A fictional reply.', tool_calls=[]),
+                                   100, 20, 0))
+        chat = Chat(replace(self.cfg, tools={'enabled': True, 'max_steps': 1}),
+                    self.store, self.budget, model)
+
+        chat.send('A fictional message.')
+
+        sent = model.call_args.args[0]
+        capability = next(row['content'] for row in sent
+                          if str(row.get('content')).startswith('CURRENT CAPABILITIES'))
+        facts = next(row['content'] for row in sent
+                     if str(row.get('content')).startswith('SYSTEM FACTS'))
+        self.assertIn('no tool manager', capability)
+        self.assertIn('tool runtime is not available', facts)
 
     def test_saved_raw_text_and_reopened_context(self):
         self.chat.send('虚构的中文消息')

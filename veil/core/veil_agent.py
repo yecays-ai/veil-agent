@@ -1947,9 +1947,12 @@ def self_facts(cfg, budget, memory=False, capabilities=None, voice=False, channe
                    if memory else 'You have no long-term memory; after restart you know only restored recent rounds. ')
     # The live inventory belongs in the per-request tail. Keeping it here made every
     # expand/collapse rewrite the otherwise stable system prefix.
+    tools_enabled = bool(cfg.tools and cfg.tools.get('enabled', True))
     tools_line = ('Current tool availability is described by the runtime capability block. '
-                  if capabilities or cfg.tools and cfg.tools.get('enabled', True) else
-                  'You have no tools (cannot open files/folders or run scripts). ')
+                  if capabilities else
+                  ('Tools are enabled for this role, but the tool runtime is not available in this request; '
+                   'no tools can be called. ' if tools_enabled else
+                   'You have no tools (cannot open files/folders or run scripts). '))
     voice_line = ('You can speak in voice messages with send_message voice: true. '
                   if voice and capabilities else 'You have no voice. ')
     capability_line = ('Your callable tools are the ones defined for this request; capability_history has the dated '
@@ -2684,8 +2687,14 @@ class Chat:
             return self.tool_schemas()
         return []
 
-    def current_capability_snapshot(self, schemas=None):
-        """Describe only abilities the program will actually offer on this request."""
+    def current_capability_snapshot(self, schemas=None, *, include_names=True):
+        """Describe only abilities the program will actually offer on this request.
+
+        ``include_names=False`` is the request-budget fallback: it keeps the
+        permission groups and counts but drops the name list, which is already
+        carried by the attached tool definitions. The web panel always asks for
+        names so its inventory stays complete.
+        """
         from veil.tools.tools_agent import tool_policy
         if schemas is None:
             schemas = (self._active_capability_schemas if self._capability_request_active
@@ -2721,10 +2730,17 @@ class Chat:
                 label = "Deletion needs Lan's approval"
             else:
                 label = 'Available'
-            groups[label] = groups.get(label, 0) + 1
+            if include_names:
+                groups.setdefault(label, []).append(name)
+            else:
+                groups[label] = groups.get(label, 0) + 1
         fingerprint = hashlib.sha256('\n'.join(sorted(offered_names)).encode('utf-8')).hexdigest()[:12]
-        rows = [f'- Current attached tool definitions: {sum(groups.values())} callable tools (set {fingerprint}).']
-        rows.extend(f'- {label}: {count} tools.' for label, count in groups.items())
+        count = (sum(len(names) for names in groups.values()) if include_names else sum(groups.values()))
+        rows = [f'- Current attached tool definitions: {count} callable tools (set {fingerprint}).']
+        if include_names:
+            rows.extend(f'- {label}: {", ".join(names)}.' for label, names in groups.items())
+        else:
+            rows.extend(f'- {label}: {count} tools.' for label, count in groups.items())
         files = getattr(self.tools, 'files', None) if self.tools else None
         if not isinstance(getattr(files, 'tools', None), (list, tuple)):
             files = self.tools
@@ -2735,6 +2751,9 @@ class Chat:
                 rows.append('- File tools: currently unavailable because the filesystem service is not running.')
             elif self.tools and getattr(files, 'enabled', True) is False:
                 rows.append('- File tools: disabled by this role configuration.')
+            elif isinstance(self.cfg.tools, dict) and self.cfg.tools.get('enabled', True) and self.tools is None:
+                rows.append('- Tools are enabled for this role, but this request has no tool manager or tool '
+                            'definitions; no tools can be called.')
             else:
                 rows.append('- No callable tools are currently offered to the model.')
         file_tools = getattr(files, 'tools', [])
@@ -2752,23 +2771,25 @@ class Chat:
         rows.append('- VEIL enforces permissions; this list grants none.')
         return 'CURRENT CAPABILITIES (live runtime):\n' + '\n'.join(rows)
 
-    def p7_experience_hints_context(self, situation):
+    def p7_experience_hints_context(self, situation, *, debug=None):
         """Render P7-owned confirmed hints into its reserved AUXILIARY slot.
 
         S7 owns placement, limits and diagnostics only. P7 may install
         ``experience_hint_provider`` later; without it the slot costs zero tokens.
+        Diagnostics go into the caller's per-request ``debug`` dict, never into shared
+        instance state, so overlapping requests cannot read each other's P7 counts.
         """
-        debug = {'slot': 'p7.experience_hints', 'budget_tokens': P7_EXPERIENCE_HINTS_MAX_TOKENS,
-                 'selected': 0, 'dropped': 0, 'used_tokens': 0, 'status': 'empty'}
+        if debug is None:
+            debug = {}
+        debug.update({'slot': 'p7.experience_hints', 'budget_tokens': P7_EXPERIENCE_HINTS_MAX_TOKENS,
+                      'selected': 0, 'dropped': 0, 'used_tokens': 0, 'status': 'empty'})
         provider = getattr(self, 'experience_hint_provider', None)
         if not callable(provider):
-            self.p7_experience_hints_debug = debug
             return None
         try:
             rows = provider(situation)
         except Exception:
             debug['status'] = 'provider_failed'
-            self.p7_experience_hints_debug = debug
             return None
         rows = rows if isinstance(rows, list) else []
         header = prompts.text('memory.experience.hints')
@@ -2791,10 +2812,8 @@ class Chat:
             kept.append(candidate)
             debug['used_tokens'] = used
         if not kept:
-            self.p7_experience_hints_debug = debug
             return None
         debug.update(selected=len(kept), status='injected')
-        self.p7_experience_hints_debug = debug
         return {'role': 'system', 'content': header + '\n' + '\n'.join(kept)}
 
     @property
@@ -2853,9 +2872,10 @@ class Chat:
             raise
         return True
 
-    def _refresh_request_capabilities(self, messages, schemas):
+    def _refresh_request_capabilities(self, messages, schemas, *, include_names=True):
         self._active_capability_schemas = schemas or []
-        snapshot = self.current_capability_snapshot(self._active_capability_schemas)
+        snapshot = self.current_capability_snapshot(self._active_capability_schemas,
+                                                    include_names=include_names)
         for message in messages:
             if message.get('role') == 'system' and message.get('content', '').startswith('CURRENT CAPABILITIES'):
                 message['content'] = snapshot
@@ -4507,7 +4527,8 @@ class Chat:
         short_term_message, short_term_details = (self.short_term_notes.context()
                                                   if self.short_term_notes and not autonomy
                                                   else (None, {'count': 0, 'characters': 0}))
-        p7_experience_hints = self.p7_experience_hints_context(background_current)
+        p7_debug = {}
+        p7_experience_hints = self.p7_experience_hints_context(background_current, debug=p7_debug)
         recalled_memories = list(recalled)
         recall_context_msg = {'role': 'system', 'content': self.recall_context()} if (self.current_request_tool_schemas() and self.recall_context()) else None
         card_context_msg = {'role': 'system', 'content': self.virtual_card_context()} if (self.current_request_tool_schemas() and self.virtual_card_context()) else None
@@ -4562,8 +4583,11 @@ class Chat:
             labels[id(message)] = label
             auxiliary_context.append(message)
 
+        capability_state = None
+        capability_compact = False
         runtime_required = []
-        if tool_schema or self.tools is not None:
+        tools_enabled = isinstance(self.cfg.tools, dict) and self.cfg.tools.get('enabled', True)
+        if tool_schema or self.tools is not None or tools_enabled:
             capability_state = {'role': 'system', 'content': self.current_capability_snapshot(tool_schema)}
             runtime_required.append(capability_state)
             labels[id(capability_state)] = 'capability_state'
@@ -4602,6 +4626,12 @@ class Chat:
         observed_ratio = self.budget.input_token_ratio(self.cfg)
         calibration = conservative_token_ratio(observed_ratio)
         limit = self.cfg.provider['max_input_tokens']
+        # Decide before the relationship base yields: a named inventory must never cost a
+        # relationship entry when the permission-group fallback would keep both.
+        if (capability_state is not None and not capability_compact
+                and estimate_request_tokens([*head, *runtime_required, user], tool_schema, calibration) > limit):
+            capability_state['content'] = self.current_capability_snapshot(tool_schema, include_names=False)
+            capability_compact = True
         relationship_preselected_ids = [
             item.get('id') for item in relationship.get('items', [])
             if isinstance(item, dict) and item.get('id')
@@ -4653,6 +4683,13 @@ class Chat:
                 elif isinstance(content, list):
                     history[index]['content'] = [{'type': 'text', 'text': separator}, *content]
         collapse_all_history_photos(history)
+
+        # The named inventory is the normal form. If it would push an otherwise usable request
+        # over the input limit, keep the permission groups/counts and drop only the name list;
+        # the attached tool definitions still carry every name and parameter.
+        if capability_state is not None and not capability_compact and bound() > limit:
+            capability_state['content'] = self.current_capability_snapshot(tool_schema, include_names=False)
+            capability_compact = True
 
         # Ticket 419: one whole-round memory budget. Required blocks and the conversation are
         # measured first; ``finish_recall`` splits the rest between history and memories, selects
@@ -4809,11 +4846,9 @@ class Chat:
                     'state': 'pending', 'at': now()})
                 self.last_send_persisted = True
         self.refresh_tool_inventory()
-        p7_debug = dict(getattr(self, 'p7_experience_hints_debug', {}) or {})
         if (p7_experience_hints is not None and p7_experience_hints not in auxiliary_context
                 and p7_debug.get('status') == 'injected'):
             p7_debug['status'] = 'trimmed_by_request_budget'
-            self.p7_experience_hints_debug = p7_debug
         context_modules = [{'label': labels.get(id(message), ''),
                             'chars': context_chars([message])}
                            for message in [*auxiliary_context, *runtime_required]]
@@ -4919,6 +4954,8 @@ class Chat:
                     reply, tool_summaries = self._tool_chat(messages, request_id, len(history), len(head),
                                                             snapshot=tool_snapshot,
                                                             autonomy=autonomy,
+                                                            p7_experience_hints=p7_debug,
+                                                            capability_compact=capability_compact,
                                                             checkpoint_goal=self.investigation.goal_for(text),
                                                             checkpoint_resuming=bool(resume_context))
                 finally:
@@ -5604,7 +5641,8 @@ class Chat:
         log_tool(name, execution.summary, execution.state, **verified, **delivery)
 
     def _tool_chat(self, messages, request_id, history_count, history_start=None, autonomy=False,
-                   checkpoint_goal='', checkpoint_resuming=False, snapshot=None):
+                   checkpoint_goal='', checkpoint_resuming=False, snapshot=None,
+                   p7_experience_hints=None, capability_compact=False):
         from veil.tools.tools_agent import MAX_THOUGHT_CHARS, display_call
         from veil.windows.windows_interaction import WINDOWS_DESKTOP_TOOL_NAMES
         from veil.windows.windows_observer import observation_image_message
@@ -5718,6 +5756,7 @@ class Chat:
                 'completion_tokens': completion_tokens, 'cached_tokens': cached_tokens,
                 'finish_reason': finish_reason or '', 'latency_seconds': latency_seconds,
                 'empty_memory_notices_omitted': empty_memory_notices_omitted,
+                'p7_experience_hints': dict(p7_experience_hints or {}),
                 'model': self.cfg.provider['model'],
                 'model_input_limit': self.cfg.provider['max_input_tokens'],
                 'estimated_input_tokens': estimated_tokens,
@@ -5998,7 +6037,8 @@ class Chat:
                 break
             offered = (None if step == max_steps - 1 or autonomy_limit_reached or continuation_prefix
                        else self.tool_schemas())
-            self._refresh_request_capabilities(loop_messages, offered)
+            self._refresh_request_capabilities(loop_messages, offered,
+                                               include_names=not capability_compact)
             step_cfg = replace(self.cfg, max_output_tokens=self.cfg.tools.get('max_output_tokens', self.cfg.max_output_tokens)) if offered is not None else self.cfg
             fit_old_tool_results(offered)
             fit_history(offered)
