@@ -1522,6 +1522,20 @@ class AutonomyController:
                 self.hub.autonomy_interrupted.clear()
             if not self.rows or self.rows[-1].get('started_at') != started_at:
                 self._append(record)
+            fb_ledger = getattr(self.chat, 'experience_feedback', None)
+            if fb_ledger is not None:
+                try:
+                    snap_p7 = run_snap if 'run_snap' in locals() and isinstance(run_snap, dict) else {}
+                    fb_ledger.record_autonomy_outcome(
+                        request_id=str(snap_p7.get('request_id') or ''),
+                        autonomy_run_id=started_at,
+                        clean=bool((record.get('output_audit') or {}).get('clean')),
+                        result=str(record.get('result') or ''),
+                        tools=record.get('tools') or (),
+                        injected_exp_ids=snap_p7.get('p7_injected_ids') or (),
+                    )
+                except Exception:
+                    pass
             self.active_path.unlink(missing_ok=True)
 
     def _append(self, record):

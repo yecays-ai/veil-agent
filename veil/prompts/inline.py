@@ -18,6 +18,7 @@ PROMPT_MODULES = (
     'veil/persona/background.py',
     'veil/life/calendar_agreements.py',
     'veil/autonomy/delegate_agent.py',
+    'veil/brain/experience_feedback.py',
     'veil/brain/experience_memory.py',
     'veil/brain/learned_context.py',
     'veil/life/life_state.py',

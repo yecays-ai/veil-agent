@@ -2449,6 +2449,12 @@ class Chat:
         # P6-S6-3: background cognitive consolidation (default disabled for gray-scale rollout).
         self.consolidation = None
         self.experience_hint_provider = None
+        self.experience_feedback = None
+        self._turn_p7_injected = []
+        self._turn_p7_trial = None
+        self._turn_p7_entry_mode = 'chat'
+        self._turn_p7_request_id = ''
+        self._turn_p7_session_key = ''
         if store is not None and budget is not None:
             from veil.brain.cognitive_consolidation import CognitiveConsolidator
             from veil.brain.experience_provider import ExperienceHintProvider
@@ -2467,6 +2473,7 @@ class Chat:
                 semantic_gate=self.consolidation.review_experience_matches,
                 budget=budget,
             )
+            self.experience_feedback = self.consolidation.feedback_ledger
 
     def start_short_term_notes_scheduler(self):
         if self.relationship_semantic_scheduler:
@@ -2544,12 +2551,22 @@ class Chat:
                 profile = [PROFILE_APPEND, PROFILE_REPLACE]
         from veil.autonomy.thoughts import THOUGHT_TOOL
         from veil.life.life_records import LIFE_TOOL
+        from veil.brain.experience_feedback import EXPERIENCE_REFLECT_TOOL
         thought = [THOUGHT_TOOL] if history else []
+        p7_enabled = False
+        if self.experience_hint_provider is not None:
+            try:
+                p7_enabled = bool(self.experience_hint_provider.settings().get('enabled'))
+            except Exception:
+                p7_enabled = False
+        reflect = [EXPERIENCE_REFLECT_TOOL] if (
+            self.consolidation is not None and history and (inventory or full or p7_enabled)
+        ) else []
         mcp_tools = self.mcp_services.schemas() if (self.cfg.tools or {}).get('enabled', True) else []
         if mcp_tools or (self.cfg.tools or {}).get('enabled', True) and self.mcp_services.has_stateful_services() is True:
             from veil.integrations.mcp_services import STATUS_TOOL_SCHEMA
             mcp_tools = [*mcp_tools, STATUS_TOOL_SCHEMA]
-        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
+        schemas = [*existing_tools, *task_tools, *messaging, *history, *wake_tools, *profile, *thought, *reflect, *([{'type': 'function', 'function': {'name': LIFE_TOOL.name, 'description': LIFE_TOOL.description, 'parameters': LIFE_TOOL.inputSchema}}] if self.cfg.id == 'peter' and self.task_tools_enabled and (self.cfg.tools or {}).get('enabled', True) else []),
                    *mcp_tools]
         models = getattr(self.cfg, 'models', None)
         delegate_choice = None
@@ -2603,7 +2620,7 @@ class Chat:
             'send_message', 'recall_message', 'card_action', 'stay_silent', 'reply_later', 'screen_pop',
             'capability_history', 'autonomy_history', 'search_chat_history', 'profile_append', 'profile_replace',
             'thought', 'life_record', 'long_task_status', 'long_task_update', 'set_next_wake', 'set_wake_rhythm',
-            'expand_capability', 'stickers', 'maintenance', 'mcp_status',
+            'expand_capability', 'experience_reflect', 'stickers', 'maintenance', 'mcp_status',
             'delegate',
         })
         schemas, self.active_tool_aliases = alias_tool_schemas(
@@ -2672,6 +2689,41 @@ class Chat:
                  if effective_group(self.canonical_tool_name(schema['function']['name']), self.tool_groups) in opened]
         return (f'Opened: {", ".join(opened)}. Available from your next step: {", ".join(names) or "none"}.',
                 '成功', 'expand_capability')
+
+    def experience_reflect(self, arguments, *, request_id='', tool_call_id=''):
+        if self.consolidation is None:
+            return 'Experience reflection is unavailable for this role.', '被拒绝', 'experience_reflect'
+        try:
+            args = self.tool_arguments(arguments)
+        except Exception:
+            return 'experience_reflect needs a JSON object with experience_id, stance, and basis.', '被拒绝', 'experience_reflect'
+        allowed_keys = {'experience_id', 'stance', 'basis', 'suggested_exception', 'suggested_guidance', 'evidence_refs'}
+        if not isinstance(args, dict) or not set(args) <= allowed_keys:
+            return 'experience_reflect received invalid arguments.', '被拒绝', 'experience_reflect'
+        try:
+            session_key = self._conversation_key()
+        except Exception:
+            session_key = ''
+        op_id = f'{request_id}:{tool_call_id}' if (request_id and tool_call_id) else ''
+        res = self.consolidation.record_experience_reflection(
+            experience_id=args.get('experience_id'),
+            stance=args.get('stance'),
+            basis=args.get('basis'),
+            suggested_exception=args.get('suggested_exception') or '',
+            suggested_guidance=args.get('suggested_guidance') or '',
+            evidence_refs=args.get('evidence_refs') or (),
+            request_id=str(request_id or ''),
+            session_key=session_key,
+            operation_id=op_id,
+        )
+        if not res.get('ok'):
+            return str(res.get('error') or 'Reflection rejected.'), '被拒绝', 'experience_reflect'
+        draft_note = f' Draft revision {res["revision_draft_id"]} saved as uncertain for review.' if res.get('revision_draft_id') else ''
+        return (
+            f'Recorded {res["stance"]} reflection for {res["experience_id"]}. '
+            f'Confirmed experience text and tool permissions are unchanged.{draft_note}',
+            '成功', 'experience_reflect',
+        )
 
     def _tick_expanded_groups(self, autonomy):
         """Called once at the start of each request: an autonomous wake starts closed, chat groups age out."""
@@ -2831,8 +2883,12 @@ class Chat:
         except Exception:
             debug['status'] = 'provider_failed'
             return None
-        rows = [row for row in rows if isinstance(row, dict) and row.get('status') == 'confirmed'] \
-            if isinstance(rows, list) else []
+        rows = [
+            row for row in rows
+            if isinstance(row, dict)
+            and row.get('status') == 'confirmed'
+            and row.get('experience_type') != 'unverified_improvement'
+        ] if isinstance(rows, list) else []
         confirm = getattr(provider, 'confirm', None)
         if rows and callable(confirm):
             ids = [str(row.get('id') or '') for row in rows]
@@ -2846,13 +2902,26 @@ class Chat:
         header = prompts.text('memory.experience.hints')
         opening = header + '\n' + EXPERIENCE_DATA_START
         kept = []
+        injected_items = []
         for row in rows:
             trigger = clean_experience_text(row.get('trigger_condition'))
             guidance = clean_experience_text(row.get('guidance'))
             if not trigger or not guidance or len(kept) >= max_items:
                 debug['dropped'] += 1
                 continue
-            candidate = f'- When: {trigger}\n  Guidance: {guidance}'
+            exp_id = clean_experience_text(row.get('id') or '', limit=64)
+            exp_type = clean_experience_text(row.get('experience_type') or '', limit=32)
+            meta = f' [{exp_id} | {exp_type}]' if (exp_id and exp_type) else (f' [{exp_id}]' if exp_id else '')
+            parts = [f'- When:{meta} {trigger}', f'  Guidance: {guidance}']
+            reason = clean_experience_text(row.get('reason') or '', limit=160)
+            if reason:
+                parts.append(f'  Why: {reason}')
+            raw_exc = row.get('exceptions') if isinstance(row.get('exceptions'), list) else []
+            clean_exc = [clean_experience_text(item, limit=120) for item in raw_exc[:4] if item]
+            clean_exc = [item for item in clean_exc if item]
+            if clean_exc:
+                parts.append(f'  Except: {"; ".join(clean_exc)}')
+            candidate = '\n'.join(parts)
             message = {'role': 'system',
                        'content': opening + '\n' + '\n'.join([*kept, candidate]) + '\n' + EXPERIENCE_DATA_END}
             used = estimate_message_tokens([message], 0.5)
@@ -2860,12 +2929,46 @@ class Chat:
                 debug['dropped'] += 1
                 continue
             kept.append(candidate)
+            injected_items.append({
+                'id': str(row.get('id') or ''),
+                'domain': str(row.get('domain') or ''),
+                'experience_type': str(row.get('experience_type') or ''),
+                'match_score': row.get('match_score'),
+            })
             debug['used_tokens'] = used
-        if not kept:
+        # Independent single low-risk trial slot for unverified_improvement (never counted as confirmed).
+        trial_rendered = None
+        select_trial = getattr(provider, 'select_trial', None)
+        if callable(select_trial) and len(kept) < max_items:
+            try:
+                trial = select_trial(situation, injected_ids=[item['id'] for item in injected_items if item['id']])
+            except Exception:
+                trial = None
+            if isinstance(trial, dict) and trial.get('trial_id') and trial.get('experience_id'):
+                t_trigger = clean_experience_text(trial.get('trigger_condition'))
+                t_guidance = clean_experience_text(trial.get('guidance'))
+                if t_trigger and t_guidance:
+                    trial_block = (
+                        f"- Trial [{clean_experience_text(trial['trial_id'], limit=64)} | unverified_improvement | "
+                        f"exp={clean_experience_text(trial['experience_id'], limit=64)}]\n"
+                        f"  When: {t_trigger}\n"
+                        f"  Try (single low-risk trial, not confirmed): {t_guidance}"
+                    )
+                    message = {'role': 'system',
+                               'content': opening + '\n' + '\n'.join([*kept, trial_block]) + '\n' + EXPERIENCE_DATA_END}
+                    used = estimate_message_tokens([message], 0.5)
+                    if used <= budget_tokens:
+                        kept_with_trial = [*kept, trial_block]
+                        debug['used_tokens'] = used
+                        debug['trial'] = dict(trial)
+                        trial_rendered = kept_with_trial
+        debug['injected_items'] = injected_items
+        rendered = trial_rendered if trial_rendered is not None else kept
+        if not rendered:
             return None
-        debug.update(selected=len(kept), status='injected')
+        debug.update(selected=len(kept), status='injected' if kept else 'trial_only')
         return {'role': 'system',
-                'content': opening + '\n' + '\n'.join(kept) + '\n' + EXPERIENCE_DATA_END}
+                'content': opening + '\n' + '\n'.join(rendered) + '\n' + EXPERIENCE_DATA_END}
 
     @property
     def capability_history_record(self):
@@ -4207,6 +4310,36 @@ class Chat:
                   or getattr(self.memory, 'last_association_marks', None)
                   or getattr(self.memory, '_has_association_rollback', False)):
                 self._rollback_undelivered_recall(req_id)
+        # P7-S3: finalize pending experience delivery / trial & attach objective tool outcomes.
+        fb = getattr(self, 'experience_feedback', None)
+        p7_req = getattr(self, '_turn_p7_request_id', '') or req_id
+        p7_injected = list(getattr(self, '_turn_p7_injected', ()) or ())
+        p7_trial = getattr(self, '_turn_p7_trial', None)
+        p7_entry = getattr(self, '_turn_p7_entry_mode', 'autonomy' if autonomy else 'chat')
+        p7_session = getattr(self, '_turn_p7_session_key', '') or ''
+        tool_summaries = getattr(self, 'last_tool_summaries', None) or ()
+        if fb is not None and p7_req and (p7_injected or p7_trial or (delivered and tool_summaries)):
+            try:
+                if delivered:
+                    fb.confirm_delivery(
+                        request_id=p7_req,
+                        session_key=p7_session,
+                        entry_mode=p7_entry,
+                        injected=p7_injected,
+                        trial=p7_trial,
+                        tool_summaries=tool_summaries,
+                        autonomy_run_id=str(getattr(self, 'autonomy_run_id', '') or ''),
+                    )
+                    if self.consolidation is not None:
+                        self.consolidation.sync_feedback_stats(reconcile=False)
+                else:
+                    fb.cancel_delivery(
+                        request_id=p7_req,
+                        injected=p7_injected,
+                        trial=p7_trial,
+                    )
+            except Exception:
+                pass
 
     def _rollback_undelivered_recall(self, req_id):
         """Roll back this turn's recall. Check the signature first so an internal TypeError is not retried."""
@@ -4258,6 +4391,9 @@ class Chat:
             'tools': [dict(item) for item in (getattr(self, 'last_tool_summaries', None) or ())
                       if isinstance(item, dict)],
             'leisure_association': la_copy,
+            'p7_injected_ids': [str(item.get('id')) for item in (getattr(self, '_turn_p7_injected', ()) or ())
+                                if isinstance(item, dict) and item.get('id')],
+            'request_id': str(getattr(self, '_turn_p7_request_id', '') or ''),
         }
         while len(snaps) > 8:
             snaps.pop(next(iter(snaps)))
@@ -4279,6 +4415,11 @@ class Chat:
         if models is not None:
             with models.env_lock, models.lock:
                 self._turn_recall_request_id = ''
+                self._turn_p7_injected = []
+                self._turn_p7_trial = None
+                self._turn_p7_entry_mode = 'autonomy' if autonomy else 'chat'
+                self._turn_p7_request_id = ''
+                self._turn_p7_session_key = ''
                 if self.memory is not None:
                     self.memory.last_recall_marks = None
                     self.memory.last_association_marks = None
@@ -4294,6 +4435,11 @@ class Chat:
                     if autonomy:
                         self._capture_autonomy_snapshot()
         self._turn_recall_request_id = ''
+        self._turn_p7_injected = []
+        self._turn_p7_trial = None
+        self._turn_p7_entry_mode = 'autonomy' if autonomy else 'chat'
+        self._turn_p7_request_id = ''
+        self._turn_p7_session_key = ''
         if self.memory is not None:
             self.memory.last_recall_marks = None
             self.memory.last_association_marks = None
@@ -4924,8 +5070,27 @@ class Chat:
                 self.last_send_persisted = True
         self.refresh_tool_inventory()
         if (p7_experience_hints is not None and p7_experience_hints not in auxiliary_context
-                and p7_debug.get('status') == 'injected'):
+                and p7_debug.get('status') in ('injected', 'trial_only')):
             p7_debug['status'] = 'trimmed_by_request_budget'
+        p7_surviving = p7_experience_hints is not None and p7_experience_hints in auxiliary_context
+        self._turn_p7_request_id = str(request_id or '')
+        self._turn_p7_session_key = self._conversation_key()
+        self._turn_p7_entry_mode = entry_mode
+        self._turn_p7_injected = list(p7_debug.get('injected_items') or []) if p7_surviving else []
+        self._turn_p7_trial = (dict(p7_debug['trial'])
+                               if (p7_surviving and isinstance(p7_debug.get('trial'), dict)) else None)
+        if self.experience_feedback is not None and (self._turn_p7_injected or self._turn_p7_trial):
+            try:
+                self.experience_feedback.record_pending_delivery(
+                    request_id=self._turn_p7_request_id,
+                    session_key=self._turn_p7_session_key,
+                    entry_mode=entry_mode,
+                    injected=self._turn_p7_injected,
+                    trial=self._turn_p7_trial,
+                    autonomy_run_id=str(getattr(self, 'autonomy_run_id', '') or ''),
+                )
+            except Exception:
+                pass
         context_modules = [{'label': labels.get(id(message), ''),
                             'chars': context_chars([message])}
                            for message in [*auxiliary_context, *runtime_required]]
@@ -5211,6 +5376,9 @@ class Chat:
                 summary = 'recall_message'
             elif call.function.name == 'expand_capability':
                 result, state, summary = self.expand_capability(call.function.arguments)
+            elif call.function.name == 'experience_reflect':
+                result, state, summary = self.experience_reflect(
+                    call.function.arguments, request_id=request_id, tool_call_id=tool_call_id)
             elif call.function.name == 'mcp_status':
                 result, state, summary = self.mcp_services.status_tool(call.function.arguments)
             elif call.function.name == 'capability_history':
@@ -5237,6 +5405,27 @@ class Chat:
                     result, state, summary = self.profile.invoke(
                         call.function.name, args,
                         operation_id=f'{request_id}:{tool_call_id}' if tool_call_id else None)
+                    if (call.function.name == 'ongoing_update' and state == '成功'
+                            and self.experience_feedback is not None
+                            and args.get('action') in ('complete', 'reopen')):
+                        try:
+                            comm_exps = [
+                                item['id'] for item in (getattr(self, '_turn_p7_injected', ()) or ())
+                                if isinstance(item, dict) and item.get('domain') == 'commitment_accountability'
+                                and item.get('id')
+                            ]
+                            self.experience_feedback.record_commitment_outcome(
+                                request_id=str(request_id or ''),
+                                exp_ids=comm_exps,
+                                item_id=str(args.get('id') or tool_call_id or 'ongoing'),
+                                status=str(args.get('action') or ''),
+                                text=str(args.get('text') or result or '')[:200],
+                                outcome='positive' if args.get('action') == 'complete' else 'negative',
+                                session_key=self._conversation_key(),
+                                result_suffix=str(tool_call_id or ''),
+                            )
+                        except Exception:
+                            pass
             elif call.function.name == 'autonomy_history':
                 from veil.autonomy.autonomy import AUTONOMY_HISTORY_LIMIT, activity_history
                 args = json.loads(call.function.arguments or '{}')
@@ -6864,6 +7053,22 @@ class Chat:
                         p7_state['used_tokens'] = int(p7_state.get('used_tokens') or 0) + int(tool_debug.get('used_tokens') or 0)
                         p7_state['status'] = 'injected'
                         p7_state['tool_step_rechecks'] = int(p7_state.get('tool_step_rechecks') or 0) + 1
+                        new_items = list(tool_debug.get('injected_items') or [])
+                        if new_items:
+                            seen_ids = {item.get('id') for item in self._turn_p7_injected if isinstance(item, dict)}
+                            added = [item for item in new_items if item.get('id') not in seen_ids]
+                            self._turn_p7_injected.extend(added)
+                            if self.experience_feedback is not None and added:
+                                try:
+                                    self.experience_feedback.record_pending_delivery(
+                                        request_id=str(request_id or ''),
+                                        session_key=self._conversation_key(),
+                                        entry_mode='tool_step',
+                                        injected=added,
+                                        autonomy_run_id=str(getattr(self, 'autonomy_run_id', '') or ''),
+                                    )
+                                except Exception:
+                                    pass
                 if batch_new_info:
                     no_progress_batches = 0
                 else:
