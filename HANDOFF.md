@@ -1,6 +1,6 @@
 # HANDOFF
 
-> 更新：2026-11-28 12:22 +08:00 · 基线 `main = a5db802`（工单 465 / PR #466 · P6-S7 已合并）· 当前分支 `ticket/466-p2-p6-delivery-audit` / worktree `worktrees/466-p2-p6-delivery-audit` / 工单 466 / PR #467（专项只读审计；待 CI 与 Lan 审阅，未部署）
+> 更新：2026-11-28 12:22 +08:00 · 基线 `main = a5db802`（工单 465 / PR #466 · P6-S7 已合并）· 当前分支 `ticket/466-p2-p6-delivery-audit` / worktree `worktrees/466-p2-p6-delivery-audit` / 工单 466 / PR #467（专项只读审计；`857e927` CI 全通过、7 条审查线程已解决，待 Lan 审阅，未部署）
 
 ## 当前停点
 
@@ -26,8 +26,8 @@
 
 ## 下一个窗口第一步
 
-1. 查看工单 466 / PR #467 的 CI；只处理文档事实、链接、编号和状态一致性问题。
-2. PR 打开并有 CI 结果后暂停；不自行合并、部署或启动 P7。
+1. 工单 466 / PR #467 的 CI 与审查已通过；等待 Lan 审阅。
+2. 保持暂停；不自行合并、部署或启动 P7。
 3. 合并/部署缺失阶段后，Lan 按 `docs/ACCEPTANCE.md` 的“P2–P6 基础体验验收”一次性体验。
 4. P7 如获授权，从 `main a5db802` 另开工单，首项接通角色隔离 provider；不得直接读候选 JSON 绕过主权过滤。
 
