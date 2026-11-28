@@ -2464,6 +2464,8 @@ class Chat:
             self.experience_hint_provider = ExperienceHintProvider(
                 cfg, store, consolidator=self.consolidation,
                 memory=self.memory, profile=self.profile,
+                semantic_gate=self.consolidation.review_experience_matches,
+                budget=budget,
             )
 
     def start_short_term_notes_scheduler(self):
@@ -2807,6 +2809,11 @@ class Chat:
             return None
         try:
             rows = provider(situation)
+            diagnostics = getattr(provider, 'diagnostics', None)
+            if callable(diagnostics):
+                provider_debug = diagnostics()
+                if isinstance(provider_debug, dict):
+                    debug.update(provider_debug)
         except Exception:
             debug['status'] = 'provider_failed'
             return None
@@ -4563,12 +4570,28 @@ class Chat:
         query_vector = getattr(self.memory, '_turn_query_vector', None) if self.memory else None
         entry_mode = ('glance' if self.glance_mode else 'codex_watch' if self.codex_watch_mode
                       else 'autonomy' if autonomy else 'chat')
+        head_claims = []
+        if isinstance(profile_context, str):
+            head_claims.extend(line.strip('- ').strip() for line in profile_context.splitlines()
+                               if line.strip() and not line.lstrip().startswith('#'))
+        head_claims.extend(str(item.get('line') or item.get('text') or '')
+                           for item in (relationship.get('items') or ()) if isinstance(item, dict))
+        recalled_texts = []
+        for item in recalled:
+            if isinstance(item, str):
+                recalled_texts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get('content'), str):
+                recalled_texts.append(item['content'])
         p7_situation = SituationEnvelope(
             text=background_current,
             entry_mode=entry_mode,
             query_vector=tuple(query_vector) if isinstance(query_vector, (list, tuple)) else (),
             context_signal=dict(context_signal) if isinstance(context_signal, dict) else {},
             wake_context=dict(wake_context) if isinstance(wake_context, dict) else {},
+            head_covered=frozenset(item for item in head_claims if item),
+            recalled_texts=tuple(recalled_texts),
+            session_key=self._conversation_key(),
+            turn_index=sum(item.get('role') == 'user' for item in self.history) + 1,
         )
         p7_debug = {}
         p7_experience_hints = self.p7_experience_hints_context(p7_situation, debug=p7_debug)
@@ -6632,6 +6655,8 @@ class Chat:
                     raise RequestFailed(refusal)
                 batch_new_info = False
                 sent_in_this_step = False
+                batch_summary_start = len(summaries)
+                groups_before_batch = set(self.expanded_groups)
                 for call_index, call in enumerate(message.tool_calls):
                     if autonomy and autonomy_tool_steps >= autonomy_tool_limit:
                         self.autonomy_step_limited = True
@@ -6783,6 +6808,41 @@ class Chat:
                         self.budget.settle(next_reservation, next_cfg, 0, 0, 0)
                         final = 'Autonomous activity yielded after this step to let chat or a control action proceed.'
                         break
+                batch_rows = summaries[batch_summary_start:]
+                expanded_now = sorted(set(self.expanded_groups) - groups_before_batch)
+                failures = [item for item in batch_rows if item.get('state') != '成功']
+                p7_state = p7_experience_hints if isinstance(p7_experience_hints, dict) else {}
+                remaining_items = max(0, P7_EXPERIENCE_HINTS_MAX_ITEMS - int(p7_state.get('selected') or 0))
+                remaining_tokens = max(0, P7_EXPERIENCE_HINTS_MAX_TOKENS - int(p7_state.get('used_tokens') or 0))
+                if remaining_items and remaining_tokens and (failures or expanded_now or not batch_new_info):
+                    from veil.brain.experience_provider import SituationEnvelope
+                    tool_lines = [checkpoint_goal]
+                    tool_lines.extend(
+                        f"{item.get('tool', '')} {item.get('state', '')} {item.get('path', '')}"
+                        for item in batch_rows)
+                    tool_signal = {
+                        'error': bool(failures), 'error_code': '|'.join(
+                            str(item.get('state') or '') for item in failures),
+                        'expanded_groups': expanded_now, 'no_progress': not batch_new_info,
+                        'remaining_items': remaining_items,
+                    }
+                    query_vector = getattr(self.memory, '_turn_query_vector', None) if self.memory else None
+                    tool_debug = {}
+                    tool_hint = self.p7_experience_hints_context(SituationEnvelope(
+                        text='\n'.join(item for item in tool_lines if item),
+                        entry_mode='tool_step',
+                        query_vector=tuple(query_vector) if isinstance(query_vector, (list, tuple)) else (),
+                        context_signal={'is_work_task': True},
+                        tool_context=tool_signal,
+                        session_key=self._conversation_key(),
+                        turn_index=sum(item.get('role') == 'user' for item in self.history) + step + 2,
+                    ), debug=tool_debug)
+                    if tool_hint and int(tool_debug.get('used_tokens') or 0) <= remaining_tokens:
+                        loop_messages.append(tool_hint)
+                        p7_state['selected'] = int(p7_state.get('selected') or 0) + int(tool_debug.get('selected') or 0)
+                        p7_state['used_tokens'] = int(p7_state.get('used_tokens') or 0) + int(tool_debug.get('used_tokens') or 0)
+                        p7_state['status'] = 'injected'
+                        p7_state['tool_step_rechecks'] = int(p7_state.get('tool_step_rechecks') or 0) + 1
                 if batch_new_info:
                     no_progress_batches = 0
                 else:

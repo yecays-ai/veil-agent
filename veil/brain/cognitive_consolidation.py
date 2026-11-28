@@ -44,6 +44,8 @@ from veil.core.agent_types import BudgetExceeded, UserError
 
 COST_CATEGORY = 'cognitive_consolidation'
 COST_ACCOUNTING = 'cognitive_consolidation'
+P7_GATE_COST_CATEGORY = 'p7_experience_gate'
+P7_GATE_COST_ACCOUNTING = 'p7_experience_gate'
 POLICY_VERSION = 's6-3.v1'
 EXPERIENCE_SCHEMA_VERSION = 'p7.experience.v1'
 PROMPT_ID = 'memory.consolidation.prompt'
@@ -482,6 +484,37 @@ def _resolve_governance_winner(row, disk_row):
         _adopt_governance(row, disk_row)
 
 
+def _embedding_generation(cache):
+    generation = cache.get('generation') if isinstance(cache, dict) else None
+    return generation if type(generation) is int and generation >= 0 else 0
+
+
+def _merge_candidate_embedding(row, disk_row):
+    """Preserve the latest locked cache write, independently of wall-clock time."""
+    text = f"{row.get('trigger_condition', '')} | {row.get('domain', '')} | {row.get('experience_type', '')}"
+    fingerprint = hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
+    current = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
+    disk = disk_row.get('trigger_embedding') if isinstance(disk_row.get('trigger_embedding'), dict) else {}
+    current_valid = (current.get('fingerprint') == fingerprint
+                     and type(current.get('dimension')) is int
+                     and isinstance(current.get('vector'), list)
+                     and len(current['vector']) == current['dimension'])
+    disk_valid = (disk.get('fingerprint') == fingerprint
+                  and type(disk.get('dimension')) is int
+                  and isinstance(disk.get('vector'), list)
+                  and len(disk['vector']) == disk['dimension'])
+    # Generations are allocated only by cache_experience_embedding under write_lock.
+    # Equal generations (including legacy caches at 0) keep the committed disk value.
+    disk_is_newer = (disk_valid and (
+        not current_valid
+        or _embedding_generation(disk) >= _embedding_generation(current)
+    ))
+    if disk_is_newer:
+        row['trigger_embedding'] = dict(disk)
+    elif not current_valid:
+        row.pop('trigger_embedding', None)
+
+
 def _merge_governance_state(state, disk):
     """Merge an older in-memory snapshot with the state currently on disk.
 
@@ -502,6 +535,7 @@ def _merge_governance_state(state, disk):
         disk_row = disk_rows.get(row.get('id'))
         if disk_row is not None and disk_row is not row:
             _resolve_governance_winner(row, disk_row)
+            _merge_candidate_embedding(row, disk_row)
     state['experience_candidates'] = rows
     ledger = []
     for source in (disk.get('vetoed_experiences'), state.get('vetoed_experiences')):
@@ -2893,8 +2927,99 @@ class CognitiveConsolidator:
                 score += float(overlap)
             scored.append((score, str(row.get('updated_at') or ''), projected))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        cap = 200 if semantic_pool else 20
-        return [item[2] for item in scored[:max(1, min(cap, int(limit or 5)))]]
+        if semantic_pool:
+            # P7-S2/P7-MATCH-02: semantic scoring happens in the provider. Returning
+            # only the newest 200 rows here can hide an older relevant experience.
+            return [item[2] for item in scored]
+        return [item[2] for item in scored[:max(1, min(20, int(limit or 5)))]]
+
+    def cache_experience_embedding(self, candidate_id, *, fingerprint, model, vector):
+        """Persist a lazy P7 trigger vector without weakening governance state."""
+        candidate_id = str(candidate_id or '')
+        values = [float(item) for item in (vector or ())]
+        if not candidate_id or not fingerprint or not model or not values:
+            return False
+        with self.mutex, write_lock(self.store, self.cfg.id):
+            state = self._load_state()
+            row = next((item for item in (state.get('experience_candidates') or [])
+                        if isinstance(item, dict) and item.get('id') == candidate_id), None)
+            if row is None or row.get('status') != 'confirmed':
+                return False
+            generation = _embedding_generation(row.get('trigger_embedding')) + 1
+            row['trigger_embedding'] = {
+                'fingerprint': str(fingerprint), 'model': str(model),
+                'dimension': len(values), 'vector': values, 'cached_at': self._now(),
+                'generation': generation,
+            }
+            self._save_state(state, lock=False)
+        return True
+
+    def review_experience_matches(self, envelope, candidates, *, timeout=2.0, daily_cap=0.02):
+        """Optional fail-closed gray-zone review under its own hard daily budget."""
+        from veil.core.veil_agent import RequestNotSent
+
+        if self.model is None or self.budget is None or not candidates:
+            return [], 0.0
+        allowed = {str(row.get('id') or '') for row in candidates if row.get('id')}
+        payload = {
+            'situation': str(getattr(envelope, 'text', '') or '')[:1200],
+            'entry_mode': str(getattr(envelope, 'entry_mode', '') or ''),
+            'candidates': [{
+                'id': row.get('id'), 'trigger': row.get('trigger_condition'),
+                'guidance': row.get('guidance'), 'exceptions': row.get('exceptions') or [],
+            } for row in candidates[:3]],
+        }
+        messages = [
+            {'role': 'system', 'content': (
+                'Return strict JSON {"applicable_ids": [...]} using only candidate IDs. '
+                'Select a candidate only when it clearly applies now and no exception applies.')},
+            {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
+        ]
+        provider = dict(self.cfg.provider)
+        provider['max_input_tokens'] = min(provider.get('max_input_tokens', 4096), 4096)
+        request_cfg = replace(self.cfg, provider=provider, max_output_tokens=256)
+        cap = max(Decimal('0'), min(Decimal('1.0'), Decimal(str(daily_cap))))
+        try:
+            reservation = self.budget.reserve(
+                request_cfg, category=P7_GATE_COST_CATEGORY,
+                accounting=P7_GATE_COST_ACCOUNTING, category_daily=cap)
+        except (BudgetExceeded, UserError):
+            return [], 0.0
+        request_id, reserved_amount = reservation
+        try:
+            self.budget.mark_dispatched(request_id)
+            output, prompt_tok, completion_tok, cached_tok, _stop = self.model(
+                messages, json_output=True, max_tokens=256, thinking='disabled',
+                detail=True, request_timeout=min(2.0, max(0.1, float(timeout))),
+            )
+        except RequestNotSent:
+            self.budget.release_not_sent(request_id)
+            return [], 0.0
+        except Exception:
+            try:
+                self.budget.settle_estimate(reservation, accounting=P7_GATE_COST_ACCOUNTING + '-unknown-usage')
+            except Exception:
+                pass
+            return [], float(reserved_amount)
+        try:
+            settled = self.budget.settle(
+                request_id, request_cfg, prompt_tok, completion_tok, cached_tok,
+                input_bytes=len(json.dumps(messages, ensure_ascii=False).encode('utf-8')),
+                category=P7_GATE_COST_CATEGORY, accounting=P7_GATE_COST_ACCOUNTING,
+            )
+            if settled is False:
+                return [], float(reserved_amount)
+            parsed = json.loads(output) if isinstance(output, str) else output
+            ids = parsed.get('applicable_ids') if isinstance(parsed, dict) else None
+            accepted = [str(item) for item in ids if str(item) in allowed] if isinstance(ids, list) else []
+            cached = cached_tok if type(cached_tok) is int else 0
+            rates = request_cfg.provider
+            cost = (Decimal(max(0, prompt_tok - cached)) * Decimal(str(rates.get('input_cny_per_million', 0)))
+                    + Decimal(cached) * Decimal(str(rates.get('cached_input_cny_per_million', 0)))
+                    + Decimal(completion_tok) * Decimal(str(rates.get('output_cny_per_million', 0)))) / Decimal(1_000_000)
+            return accepted, float(cost)
+        except Exception:
+            return [], float(reserved_amount)
 
     def _existing_memory_ids(self):
         db = self._db_path()
@@ -2972,7 +3097,15 @@ class CognitiveConsolidator:
                     old_row['superseded_by'] = cid
                     old_row['updated_at'] = now_stamp
             self._save_state(state, lock=False)
-            return {'ok': True, 'candidate': dict(target)}
+            result = {'ok': True, 'candidate': dict(target)}
+        if action in ('confirm', 'restore'):
+            callback = getattr(self, 'experience_confirmed_callback', None)
+            if callable(callback):
+                try:
+                    callback([cid])
+                except Exception:
+                    pass
+        return result
 
     def list_pending_cognition(self, *, status='pending', limit=60):
         with self.mutex:

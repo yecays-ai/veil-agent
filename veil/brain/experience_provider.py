@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -156,6 +158,9 @@ class SituationEnvelope:
     wake_context: dict = field(default_factory=dict)
     tool_context: dict = field(default_factory=dict)
     head_covered: frozenset[str] = frozenset()
+    recalled_texts: tuple[str, ...] = ()
+    session_key: str = ''
+    turn_index: int = 0
 
     @classmethod
     def from_value(cls, value):
@@ -506,16 +511,33 @@ class EvidenceValidator:
 
 
 class ExperienceHintProvider:
-    """Role-isolated production provider; matching remains deliberately lexical until P7-S2."""
+    """Role-isolated P7 provider with deterministic local hybrid matching."""
 
-    def __init__(self, cfg, store, *, consolidator, memory=None, profile=None):
+    _SHORT_ACKS = frozenset({'嗯', '嗯嗯', '好', '好的', '好呀', '行', '可以', 'ok', 'okay', '收到', '知道了'})
+    _KIND_DOMAINS = {
+        'tool_lesson': 'work_method', 'communication_pattern': 'relationship_consensus',
+        'autonomy_lesson': 'autonomous_practice', 'commitment_lesson': 'commitment_accountability',
+    }
+
+    def __init__(self, cfg, store, *, consolidator, memory=None, profile=None,
+                 semantic_gate=None, budget=None):
         if str(getattr(consolidator.cfg, 'id', '')) != str(cfg.id):
             raise ValueError('experience provider role mismatch')
         self.cfg = cfg
         self.store = store
         self.consolidator = consolidator
+        self.memory = memory
+        self.profile = profile
+        self.semantic_gate = semantic_gate
+        self.budget = budget
         self.validator = EvidenceValidator(cfg, store, memory=memory, profile=profile)
         self.mutex = threading.RLock()
+        self._cooldown = {}
+        self._turns = {}
+        self._local = threading.local()
+        self._gate_day = ''
+        self._gate_spent = 0.0
+        self.consolidator.experience_confirmed_callback = self.warm_embeddings
 
     def settings_path(self):
         return f'{self.cfg.id}/experience-injection.json'
@@ -538,6 +560,7 @@ class ExperienceHintProvider:
                 rejected[key] = 'invalid'
             else:
                 updates[key] = checked
+        became_enabled = False
         with self.mutex, write_lock(self.store, self.cfg.id):
             raw = load_persisted(self.store, self.cfg.id)
             current = raw.get('_revision')
@@ -545,17 +568,21 @@ class ExperienceHintProvider:
             if expected_revision is not None and expected_revision != current:
                 return {'ok': False, 'status_code': 409, 'settings_revision': current,
                         'error': '配置已在其他窗口被更新，请刷新后再保存。'}
+            became_enabled = updates.get('enabled') is True and settings_from(raw)['enabled'] is False
             revision = current + 1 if updates else current
             self.store.replace(self.settings_path(), {**settings_from(raw), **updates, '_revision': revision})
+        if became_enabled:
+            self.warm_embeddings()
         return {'ok': True, 'settings': self.settings(), 'settings_revision': revision,
                 'updated': updates, 'rejected': rejected, 'persistence_path': self.settings_path()}
 
-    def confirm(self, candidate_ids):
-        """Synchronized final veto recheck used immediately before rendering hints.
+    def diagnostics(self):
+        return dict(getattr(self._local, 'debug', {}) or {})
 
-        Runs in the same mutex/lock boundary as ``decide_experience_candidate()`` so a
-        veto is either visible here or is committed after this turn's decision point.
-        """
+    def _set_debug(self, status, **values):
+        self._local.debug = {'status': status, **values}
+
+    def confirm(self, candidate_ids):
         ids = [str(item) for item in (candidate_ids or ()) if item]
         if not ids:
             return []
@@ -564,32 +591,314 @@ class ExperienceHintProvider:
         except Exception:
             return []
 
+    @staticmethod
+    def _cosine(left, right):
+        if not left or not right or len(left) != len(right):
+            return None
+        dot = sum(float(a) * float(b) for a, b in zip(left, right))
+        lnorm = math.sqrt(sum(float(item) ** 2 for item in left))
+        rnorm = math.sqrt(sum(float(item) ** 2 for item in right))
+        return dot / (lnorm * rnorm) if lnorm and rnorm else None
+
+    def _domain(self, row):
+        return str(row.get('domain') or self._KIND_DOMAINS.get(str(row.get('kind') or ''), ''))
+
+    def _allowed_domain(self, row, envelope):
+        domain = self._domain(row)
+        if envelope.entry_mode == 'tool_step':
+            return domain == 'work_method'
+        if envelope.entry_mode == 'autonomy':
+            wake = envelope.wake_context or {}
+            working = any(wake.get(key) for key in (
+                'has_active_long_task', 'has_pending_action', 'has_work_checkpoint',
+                'has_investigation_checkpoint', 'previous_unconfirmed_tools'))
+            allowed = {'work_method', 'commitment_accountability'} if working else {'autonomous_practice'}
+            return domain in allowed
+        return envelope.entry_mode in ('chat', 'mobile', 'voice')
+
+    def _signal_score(self, row, envelope):
+        domain = self._domain(row)
+        signal = envelope.context_signal or {}
+        wake = envelope.wake_context or {}
+        tool = envelope.tool_context or {}
+        work = bool(signal.get('is_work_task') or signal.get('mode') == 'technical_task'
+                    or tool.get('error') or tool.get('no_progress') or tool.get('expanded_groups'))
+        emotion = bool(signal.get('has_emotion_signal') or signal.get('recent_emotion_signal'))
+        commitment = bool(signal.get('has_commitment_signal') or signal.get('active_ongoing'))
+        if domain == 'work_method':
+            return 1.0 if work else 0.0
+        if domain == 'relationship_consensus':
+            return 1.0 if emotion and not work else 0.0
+        if domain == 'commitment_accountability':
+            return 1.0 if commitment or wake.get('has_pending_action') else 0.0
+        if domain == 'autonomous_practice':
+            return 1.0 if envelope.entry_mode == 'autonomy' and not any(
+                wake.get(key) for key in ('has_active_long_task', 'has_work_checkpoint', 'has_investigation_checkpoint')) else 0.0
+        return 0.0
+
+    @staticmethod
+    def _trigger_text(row):
+        return f"{row.get('trigger_condition', '')} | {row.get('domain', '')} | {row.get('experience_type', '')}"
+
+    def _cached_candidate_vector(self, row, query_vector):
+        if not query_vector:
+            return None
+        fingerprint = _sha(self._trigger_text(row))
+        model = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown')
+        cached = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
+        vector = cached.get('vector')
+        if (cached.get('fingerprint') == fingerprint and cached.get('model') == model
+                and cached.get('dimension') == len(query_vector) and isinstance(vector, list)):
+            return tuple(float(item) for item in vector)
+        return None
+
+    def warm_embeddings(self, candidate_ids=None):
+        """Build missing candidate vectors only at explicit enable/confirm boundaries."""
+        if not self.settings()['enabled']:
+            return 0
+        wanted = {str(item) for item in (candidate_ids or ()) if item}
+        if isinstance(candidate_ids, str):
+            wanted = {candidate_ids}
+        embedder_factory = getattr(self.memory, 'embedder', None)
+        if not callable(embedder_factory):
+            return 0
+        try:
+            rows = self.consolidator.query_experience_candidates(
+                situation='', statuses=('confirmed',), semantic_pool=True)
+            embedder = embedder_factory()
+        except Exception:
+            return 0
+        model = str((getattr(self.cfg, 'memory', None) or {}).get('model') or 'unknown')
+        built = 0
+        for row in rows:
+            if wanted and str(row.get('id') or '') not in wanted:
+                continue
+            text = self._trigger_text(row)
+            fingerprint = _sha(text)
+            cached = row.get('trigger_embedding') if isinstance(row.get('trigger_embedding'), dict) else {}
+            if cached.get('fingerprint') == fingerprint and cached.get('model') == model:
+                continue
+            reservation = None
+            try:
+                tokens = max(512, len(text.encode('utf-8')))
+                rate = Decimal(str((getattr(self.cfg, 'memory', None) or {}).get(
+                    'input_cny_per_million', 0) or 0))
+                if self.budget is not None:
+                    reservation = self.budget.estimate(self.cfg.id, model, tokens, rate)
+                method = getattr(embedder, 'embed', None)
+                vector = method(text) if callable(method) else embedder(text)
+                if reservation is not None:
+                    reported = getattr(embedder, 'usage_tokens', None)
+                    amount = (Decimal(reported) * rate / Decimal(1_000_000)
+                              if type(reported) is int and reported > 0 else reservation[1])
+                    if amount > reservation[1]:
+                        amount = reservation[1]
+                    self.budget.settle_estimate(
+                        reservation, accounting='p7-candidate-embedding',
+                        settled_amount=amount,
+                        usage_tokens=reported if type(reported) is int and reported > 0 else None)
+                if self.consolidator.cache_experience_embedding(
+                        row.get('id'), fingerprint=fingerprint, model=model, vector=vector):
+                    built += 1
+            except Exception:
+                if reservation is not None:
+                    try:
+                        self.budget.settle_estimate(
+                            reservation, accounting='p7-candidate-embedding-unknown-usage')
+                    except Exception:
+                        pass
+                continue
+        return built
+
+    @staticmethod
+    def _exception_matches(row, text_tokens, text):
+        lowered = text.casefold()
+        for exception in row.get('exceptions') or ():
+            phrase = str(exception or '').strip()
+            if not phrase:
+                continue
+            tokens = _lexical_tokens(phrase)
+            overlap = len(text_tokens & tokens)
+            if phrase.casefold() in lowered or (overlap >= 2 and overlap / max(1, len(tokens)) >= 0.6):
+                return True
+        return False
+
+    @staticmethod
+    def _covered_by_head(row, claims):
+        if not claims:
+            return False
+        from veil.brain.learned_context import _matches_governed_claim
+        guidance = str(row.get('guidance') or '')
+        return any(_matches_governed_claim(guidance, str(claim)) for claim in claims if claim)
+
+    @staticmethod
+    def _recall_penalty(row, recalled):
+        guidance = _lexical_tokens(str(row.get('guidance') or ''))
+        return 0.15 if guidance and any(
+            len(guidance & _lexical_tokens(text)) / max(1, len(guidance)) >= 0.8 for text in recalled) else 0.0
+
+    @staticmethod
+    def _conflicts(left, right):
+        left_id, right_id = str(left.get('id') or ''), str(right.get('id') or '')
+        links = {str(left.get('supersedes_id') or ''), str(left.get('superseded_by') or '')}
+        reverse = {str(right.get('supersedes_id') or ''), str(right.get('superseded_by') or '')}
+        explicit = set(left.get('conflicts_with') or ()) | set(right.get('conflicts_with') or ())
+        if right_id in links or left_id in reverse or left_id in explicit or right_id in explicit:
+            return True
+        if str(left.get('domain') or '') != str(right.get('domain') or ''):
+            return False
+        lt = _lexical_tokens(str(left.get('trigger_condition') or ''))
+        rt = _lexical_tokens(str(right.get('trigger_condition') or ''))
+        if not lt or len(lt & rt) / max(1, min(len(lt), len(rt))) < 0.6:
+            return False
+        neg = re.compile(r"\b(?:not|never|avoid|don't|do not)\b|不要|避免|绝不", re.I)
+        return bool(neg.search(str(left.get('guidance') or ''))) != bool(neg.search(str(right.get('guidance') or '')))
+
+    @staticmethod
+    def _priority(item):
+        score, row = item
+        lan = int(row.get('locked') is True or row.get('decision') == 'confirm'
+                  or row.get('promoted_by') in ('lan', 'lan_confirmed', 'manual'))
+        tier = {'L1_user_feedback': 3, 'L2_objective_action': 2,
+                'L3_autonomy_reflection': 1, 'L4_self_eval': 0}.get(row.get('origin_evidence_tier'), 0)
+        verified = str((row.get('verification') or {}).get('last_verified_at') or row.get('last_verified_at') or '')
+        return lan, tier, verified, score, str(row.get('updated_at') or ''), str(row.get('id') or '')
+
+    def _resolve_conflicts(self, scored):
+        kept = []
+        for item in sorted(scored, key=self._priority, reverse=True):
+            if any(self._conflicts(item[1], other[1]) for other in kept):
+                continue
+            kept.append(item)
+        return kept
+
+    def _cooldown_allows(self, row, envelope, settings):
+        if not envelope.session_key or settings['session_cooldown_turns'] <= 0:
+            return True
+        turn = envelope.turn_index or self._turns.get(envelope.session_key, 0) + 1
+        self._turns[envelope.session_key] = max(turn, self._turns.get(envelope.session_key, 0))
+        previous = self._cooldown.get((envelope.session_key, str(row.get('id') or '')))
+        changed = str((envelope.tool_context or {}).get('error_code') or '')
+        return previous is None or turn - previous[0] > settings['session_cooldown_turns'] or (changed and changed != previous[1])
+
+    def _record_cooldown(self, rows, envelope):
+        if not envelope.session_key:
+            return
+        turn = envelope.turn_index or self._turns.get(envelope.session_key, 1)
+        error = str((envelope.tool_context or {}).get('error_code') or '')
+        for row in rows:
+            self._cooldown[(envelope.session_key, str(row.get('id') or ''))] = (turn, error)
+
+    def _gray_gate(self, scored, envelope, settings):
+        gray = [item for item in scored if 0.34 <= item[0] < 0.48][:3]
+        if not gray or not settings['semantic_gate_enabled'] or not callable(self.semantic_gate):
+            return []
+        day = time.strftime('%Y-%m-%d')
+        if day != self._gate_day:
+            self._gate_day, self._gate_spent = day, 0.0
+        cap = float(settings['semantic_gate_daily_budget_cny'])
+        if self._gate_spent >= cap:
+            return []
+        try:
+            result = self.semantic_gate(
+                envelope, [row for _score, row in gray], timeout=2.0, daily_cap=cap)
+            accepted, cost = result if isinstance(result, tuple) else (result, 0.0)
+            cost = max(0.0, float(cost or 0.0))
+            if self._gate_spent + cost > cap:
+                return []
+            self._gate_spent += cost
+            accepted = set(accepted or ())
+            return [item for item in gray if item[1].get('id') in accepted]
+        except Exception:
+            return []
+
     def __call__(self, situation):
         envelope = SituationEnvelope.from_value(situation)
         values = self.settings()
-        if not values['enabled'] or envelope.entry_mode in ('glance', 'codex_watch'):
+        self._set_debug('empty', selected=0, dropped=[])
+        if not values['enabled']:
+            self._set_debug('disabled', selected=0, dropped=[])
+            return []
+        if envelope.entry_mode in ('glance', 'codex_watch'):
+            self._set_debug('skipped_entry_mode', selected=0, dropped=[])
             return []
         if envelope.entry_mode == 'autonomy' and not values['allow_in_autonomy']:
+            self._set_debug('skipped_entry_mode', selected=0, dropped=[])
+            return []
+        if envelope.entry_mode == 'tool_step' and not values['allow_tool_step_recheck']:
+            self._set_debug('skipped_entry_mode', selected=0, dropped=[])
+            return []
+        normalized = ' '.join(str(envelope.text or '').casefold().split())
+        if envelope.entry_mode in ('chat', 'mobile', 'voice') and (
+                not normalized or normalized in self._SHORT_ACKS or not _lexical_tokens(normalized)):
+            self._set_debug('no_match', selected=0, dropped=['short_ack'])
             return []
         tokens = _lexical_tokens(envelope.text)
-        if not tokens:
-            return []
         evidence_deadline = _Deadline(EVIDENCE_BUDGET_MS)
         pool = self.consolidator.query_experience_candidates(
-            situation='', statuses=('confirmed',), limit=200, semantic_pool=True,
-            evidence_validator=self.validator, evidence_deadline=evidence_deadline,
+            situation='', statuses=('confirmed',), semantic_pool=True,
         )
-        scored = []
+        scored, gray, dropped = [], [], []
         for row in pool:
+            if not self._allowed_domain(row, envelope):
+                dropped.append((row.get('id'), 'domain'))
+                continue
+            if self._exception_matches(row, tokens, envelope.text):
+                dropped.append((row.get('id'), 'matched_exception'))
+                continue
+            if self._covered_by_head(row, envelope.head_covered):
+                dropped.append((row.get('id'), 'covered_by_head'))
+                continue
+            if not self._cooldown_allows(row, envelope, values):
+                dropped.append((row.get('id'), 'cooldown'))
+                continue
             candidate_tokens = _lexical_tokens(
-                f"{row.get('trigger_condition', '')} {row.get('guidance', '')}"
-            )
+                f"{row.get('trigger_condition', '')} {row.get('guidance', '')}")
             overlap = len(tokens & candidate_tokens)
-            if overlap:
-                scored.append((overlap, str(row.get('updated_at') or ''), row))
-        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        selected = [row for _, _, row in scored[:values['max_items']]]
+            lexical = min(1.0, overlap / 2.0)
+            signal = self._signal_score(row, envelope)
+            vector = self._cached_candidate_vector(row, envelope.query_vector)
+            semantic = self._cosine(envelope.query_vector, vector)
+            recall_penalty = self._recall_penalty(row, envelope.recalled_texts)
+            if semantic is None:
+                if overlap < 2:
+                    dropped.append((row.get('id'), 'threshold'))
+                    continue
+                total = 0.25 * signal + 0.20 * lexical - recall_penalty
+            else:
+                total = 0.55 * semantic + 0.25 * signal + 0.20 * lexical - recall_penalty
+                strong_tool = envelope.entry_mode == 'tool_step' and overlap >= 2
+                if values['semantic_gate_enabled'] and 0.34 <= total < 0.48:
+                    gray.append((total, row))
+                    continue
+                if not strong_tool and (semantic < 0.36 or total < 0.42):
+                    dropped.append((row.get('id'), 'threshold'))
+                    continue
+            row = dict(row)
+            row['match_score'] = round(total, 6)
+            row['match_channels'] = {'semantic': semantic, 'signal': signal, 'lexical': lexical}
+            scored.append((total, row))
+        scored.extend(self._gray_gate(gray, envelope, values))
+        resolved = self._resolve_conflicts(scored)
+        resolved.sort(key=self._priority, reverse=True)
+        remaining = (envelope.tool_context or {}).get('remaining_items')
+        item_limit = min(values['max_items'], remaining) if type(remaining) is int and remaining >= 0 else values['max_items']
+        selected = []
+        for _score, row in resolved:
+            if len(selected) >= item_limit or evidence_deadline.expired():
+                break
+            evidence_state = self.validator.validate(row, deadline=evidence_deadline)
+            if evidence_state not in ('valid', 'partial_stale'):
+                dropped.append((row.get('id'), 'evidence_' + evidence_state))
+                continue
+            row['evidence_state'] = evidence_state
+            selected.append(row)
         if not selected:
+            self._set_debug('no_match', selected=0, dropped=dropped)
             return []
         allowed = set(self.confirm([row.get('id') for row in selected]))
-        return [row for row in selected if row.get('id') in allowed]
+        selected = [row for row in selected if row.get('id') in allowed]
+        self._record_cooldown(selected, envelope)
+        self._set_debug('matched' if selected else 'no_match', selected=len(selected), dropped=dropped,
+                        ids=[row.get('id') for row in selected])
+        return selected
