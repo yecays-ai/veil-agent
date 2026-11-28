@@ -952,9 +952,13 @@ def run_health_scan(root, role_id, db_path, *, from_date='', to_date='',
                                            'note': f"向量字节数 {vr['bytes']} 与记录维度 {dim} 不符",
                                            'basis': 'length(vector) vs vectors.dim × 4'})
                     if vr['content_hash'] and r['body_sha256'] and vr['content_hash'] != r['body_sha256']:
-                        vec_issues.append({'memId': mid, 'label': _safe_title(r['title'], mid),
-                                           'note': '正文修改后向量 content_hash 未同步',
-                                           'basis': 'vectors.content_hash vs memories.body_sha256'})
+                        is_legacy_hash = not stored_embedding_model
+                        vec_issues.append({
+                            'memId': mid, 'label': _safe_title(r['title'], mid),
+                            'note': ('历史迁移向量哈希口径与当前 body_sha256 不同（不代表向量损坏，是否重建需确认）'
+                                     if is_legacy_hash else '正文修改后向量 content_hash 未同步'),
+                            'basis': 'vectors.content_hash vs memories.body_sha256',
+                        })
             residual_tomb_vecs = [vr['memory_id'] for vr in vector_rows if vr['memory_id'] not in live_ids]
             for tid in residual_tomb_vecs[:10]:
                 vec_issues.append({'label': f"残留向量 {tid}", 'note': '对应记忆已删除或成为墓碑',

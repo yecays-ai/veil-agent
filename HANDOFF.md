@@ -1,39 +1,40 @@
 # HANDOFF
 
-> 更新：2026-11-28 13:39 +08:00 · 基线 `main = d7fe9ec`（工单 466 / PR #467 · P2–P6 阶段交付总结与 P7 前置验收已合并，2026-11-28 05:24:46 UTC，Actions/Sourcery 全通过）· 当前分支 `ticket/467-p7-0-experience-injection-plan` / worktree `worktrees/467-p7-0-experience-injection-plan` / **工单 467 · PR #468**（P7-0 专项只读设计；PR #468 已创建，待 CI 完成并暂停等待 Lan 确认施工方案）
+> 更新：2026-11-28 14:50 +08:00 · 最新 `main = a7615ab`（PR #469 已合并；正式桌面仍为 `d7fe9ec`）· 当前分支 `ticket/467-p7-0-experience-injection-plan` / **工单 467 · PR #468**（P7-0 施工规划已吸收审查意见并合入最新 main，待最终 CI 后合并）
 
 ## 当前停点
 
-- **工单 467 · P7-0 情境触发式经验注入与自主判断力完整施工规划**已完成只读设计与文档落盘。
-- **完整规划报告**：[`docs/reports/p7-0-experience-injection-construction-plan-20261128.md`](docs/reports/p7-0-experience-injection-construction-plan-20261128.md)
-- **工单文档**：[`docs/tickets/467-p7-0-experience-injection-plan.md`](docs/tickets/467-p7-0-experience-injection-plan.md)
-- **核心设计要点**：
-  - 零平行系统：复用 `brain.db` / `EventMemory`、`LearnedContext`（S3 语义核验与主权）、`CognitiveConsolidator`（`p7.experience.v1` 向后兼容扩展）与 `Chat.p7_experience_hints_context()`（AUXILIARY 4 条 / 600 tokens / 仅 `confirmed`）；经验内容按不可信数据处理，工具权限仍由程序独立控制。
-  - 证据与主权防线：建立 L1（用户原话反馈）/ L2（客观工具与任务结果）/ L3（洁净自主自述）/ L4（模型自评）四级证据体系；`relationship_consensus` 严守 L1+S3 或 Lan 确认；`work_method` / `autonomous_practice` 仅在二级开关 `auto_promote_objective=True`（默认关）且满足跨次 L2 客观实证 + S3 核验 + 无否决时允许程序晋升，并保留 Lan 一键否决与负反馈自动降级；`unverified_improvement` 验证前永不注入。
-  - Nocturne `Mirror / Door` 适用边界：沿用 `p6-0-memory-audit-20261126.md` §3 核实结论（公开仓库无独立源码模块，只借设计思路），将 Door 映射为情境/例外阈值门控，将 Mirror 映射为自主判断姿态（采用/调整/反驳/悬置/提修订，经 `memory_admin` 组 `experience_reflect` 留痕，不越权覆盖 Lan 主权）。
-  - 五阶段施工拆分：`P7-S1`（角色隔离 provider + 证据新鲜度 + 一致备份/否决保护）→ `P7-S2`（上下文语义匹配 + 冲突裁决 + 多入口契约）→ `P7-S3`（分域晋升 + 可发现的自主反思工具 + 原子反馈闭环）→ `P7-S4`（Brain 主动体检、数据一致性与诊断 UI）→ `P7-S5`（VEIL Lab 10 项自动场景验收与 `ON/OFF` 回放）；P8 不设多日人工观察期，长期趋势由软件持续自检。
-- 本单只改 Markdown；未修改运行代码、配置或正式数据，未启停正式 Peter，未新增付费实验，未启动 P7 施工。
+- **PR #469 已合并**（`a7615ab`）：B-01（召回与注入页合并索引 + `sent=False` 过滤）、B-02/B-03（事件阶段正文 `text` / 来源证据 / 状态中文语义）、B-05/B-07（关系底座可注入统计对齐 `build_prompt` + 确认/否决/恢复/查看证据治理闭环）、B-06（认知版本历史解析与行级 diff 展开）、C-01（7 日增长统计同口径）、C-02/C-03（健康期间与四区卡片布局）、A-01（H-7 历史哈希口径区分）。
+- **三项授权正式数据维护已完成**（备份目录 `data/peter/backups/pre-469-maint-20261128-140438/`）：
+  - A-01：238 条历史向量已用 `BAAI/bge-m3` 重建并写入 `meta.embedding_model`，H-7 复验 `severity=good`（226 活跃记忆 / 242 向量 1024 维全一致）。
+  - A-02：57 处悬空引用（46 `relations` + 11 `sidecar_state.links_json`）先隔离验证再正式清理，H-3 复验 `dangling=0`（2 条无关联记忆保留）。
+  - A-05：16 条历史失败日志核查均为 `out_len=0` 无正文草稿，无需写入，零重复/覆盖风险。
+- **剩余工程验收已完成**：正式部署版本 `d7fe9ec`、真实检索/判官（最新轮 `judge.status=chosen`、检索降级 0 次）、缓存与费用记录、`health-settings.json` 持久化、`runtime-status.json` 均已核验正常。
+- **P7 阻塞核查**：不存在阻塞 P7 开工的实际故障；非阻塞遗留（P3-REM-01/02、P6-S5-01、P6-RERANK-01、P6-LONG-01）统一纳入 P8。
+- **PR #468 规划已修订**：保留 P7-S1~S5；补齐否决/恢复、协同备份、原子反馈、权限隔离、待验证方案第一次低风险实践机会；取消 19–28 天人工观察，改为自动测试、Brain 主动体检、数据检查和 10 场景回放。
 
 ## 状态入口
 
-当前进度、PR、部署与阶段结论只看 [STATUS.md](STATUS.md)；Lan 验收状态只看 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)；P2–P6 交付审计见 [P2–P6 总结报告](docs/reports/p2-p6-delivery-summary-p7-readiness-20261128.md)；P7 施工规划见 [P7-0 完整施工规划](docs/reports/p7-0-experience-injection-construction-plan-20261128.md)。
+当前进度、PR、部署与阶段结论只看 [STATUS.md](STATUS.md)；Lan 验收状态只看 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)；证据矩阵、遗留编号与 P7 接入条件见 [专项审计报告](docs/reports/p2-p6-delivery-summary-p7-readiness-20261128.md)。本文件不重复维护状态表。
 
-## 遗留与前置边界
+## 遗留边界
 
-- `P7-WIRE-01` / `P7-EVIDENCE-01` / `P7-SIGNAL-01` / `P7-BACKUP-01`（本次新识别：`brain_backup.py` `COMPANION_FILES` 尚未收录巩固与 P7 状态文件）：归 `P7-S1` 首要关闭。
-- `P7-MATCH-01` / `P7-BEHAVIOR-01`：归 `P7-S2` 与 `P7-S3`。
-- `P6-S5-01`（隐式工作 `trap` + 同轮判官联合门控）：仍未关闭，建议独立小单与 `P7-S1` 并行关闭。
-- `P4-DEP-01` / `P5-DEP-01` / `P2-ACC-01` 的当前部署与验收状态只看 [STATUS.md](STATUS.md) 与 [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)，HANDOFF 不重复维护第二份状态；它们不阻塞 P7 隔离开发，但对应自动门禁未通过前阻塞正式启用 P7。
-- `P3-REM-01` / `P3-REM-02` / `P6-RERANK-01` / `P6-LONG-01` / `P6-S7-01` / `GOV-01`：维持既定归属（长期效果统一归 P8）。
+- P3-REM-01：`web_agent.py` 仍有 Ombre 用户文案/兼容诊断。
+- P3-REM-02：历史 `_agent/state.jsonl` 的 `hidden` 仍可影响读取。
+- P6-S5-01：隐式工作 `trap` + 同轮判官联合门控未关闭。
+- P6-RERANK-01：Qwen3 Reranker 仅实验/契约，未上线。
+- P6-LONG-01：动态评价、保护性衰减、自主联想、认知巩固的多日真实效果待 P8。
+- P7-WIRE/EVIDENCE/MATCH/SIGNAL/BEHAVIOR：provider、全类型证据新鲜度、语义匹配、触发信号、冲突/回退/行为诊断待 P7 实现。
+- 正式恢复和 Embedding 重建仍必须先 dry-run，经 Lan 明确授权后执行。
 
 ## 下一个窗口第一步
 
-1. 跟踪工单 467（P7-0）PR 的 CI 结果；**保持暂停，不自行合并、不部署、不启动 P7 施工**。
-2. 等待 Lan 确认修订后的施工结论：保留五阶段但取消人工观察期；自主/工具与承诺自动晋升分别授权；`P6-S5-01` 与 P7-S1 并行关闭。
-3. 方案获批并合并后，按批准范围从最新 `main` 开独立工单与 worktree 启动 `P7-S1`（同时按仓库规则清理已合并的 `worktrees/467-p7-0-experience-injection-plan`）。
+1. 推送 PR #468 的规划修订与最新 main 合流提交，等待最终 CI 后合并。
+2. #468 合并后从最新 main 开独立工单/worktree 启动 P7-S1：接通角色隔离的 `experience_hint_provider`（不得直接读候选 JSON 绕过主权过滤）。
+3. 非阻塞遗留（P3-REM-01/02、P6-S5-01、P6-RERANK-01、P6-LONG-01）不延迟 P7 开工。
 
 ## 红线
 
 - 不启停正式 Peter、不向正式 Peter 发测试消息、不写正式 `data/peter`。
 - 不追加付费实验；不提交真实聊天、记忆、人设、密钥、本机绝对路径或日志。
-- 本单不改运行代码、配置或正式数据，不部署，不合并，不启动 P7。
+- 本单只修改 P7 规划文档并合入 #469 的既有代码；不启停或更新正式 Peter，不写正式数据。
