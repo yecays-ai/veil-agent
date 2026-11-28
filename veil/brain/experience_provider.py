@@ -332,7 +332,7 @@ class EvidenceValidator:
             if status != 'ok' or not isinstance(row, dict):
                 return 'unavailable', ''
             return 'valid', _digest({
-                'role': row.get('role'), 'content': row.get('content') or row.get('text'),
+                'speaker': row.get('role'), 'content': row.get('content') or row.get('text'),
                 'time': row.get('time'), 'message_id': row.get('message_id') or row.get('id'),
             })
         rows, _fingerprint = self._jsonl_rows('chat.jsonl', deadline)
@@ -343,7 +343,7 @@ class EvidenceValidator:
             return 'invalid', ''
         row = matches[0]
         return 'valid', _digest({
-            'role': row.get('role'), 'content': row.get('content') or row.get('text'),
+            'speaker': row.get('role'), 'content': row.get('content') or row.get('text'),
             'time': row.get('time'), 'message_id': row.get('message_id') or row.get('id'),
         })
 
